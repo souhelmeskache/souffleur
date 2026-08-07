@@ -15,6 +15,9 @@ characters.json
 library.json
 config.yaml
 
+# --- runtime turn scratch: holds the assembled play context (campaign material) ---
+.turn/
+
 # --- build outputs (PyInstaller) ---
 build/
 dist/

@@ -1069,6 +1069,24 @@ class MemoryStore:
         path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n"
                                 for r in kept), encoding="utf-8")
 
+    # --- fold log (forensics; separate file ON PURPOSE) ---
+    def append_fold_log(self, record: dict) -> None:
+        """Append one JSONL record to memory/fold-log.jsonl — what each fold saw
+        before it truncated, and what it rewrote.
+
+        Its own file, not events.jsonl: that log is REPLAYED by save_branch (it
+        rebuilds state from it) and pruned by truncate_event_log, so a foreign
+        record shape there is a correctness risk for branching. This one is
+        write-only forensics — nothing reads it to rebuild anything.
+
+        Not a snapshot either: snapshot() copies *.md + the two json state files
+        and keeps only `snapshot_keep` of them, so the evidence would age out
+        after a handful of folds. This file lives in the save and only grows."""
+        path = self.dir / "memory" / "fold-log.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
     # --- RPG module state (Phase 4; lives in state.json under "rpg") ---
     def rpg_state(self) -> dict:
         rpg = self.world_state().get("rpg")

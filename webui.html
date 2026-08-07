@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Table de jeu</title>
+<style>
+  :root {
+    --bg: #14110f;
+    --bg-panel: #1b1714;
+    --line: #2e2721;
+    --ink: #e6ddd0;
+    --ink-dim: #9c9084;
+    --ink-faint: #6b6058;
+    --accent: #c9a227;
+    --player: #7fa8c9;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%; margin: 0;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* ── barre d'état ── */
+  header {
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    padding: .6rem 1.2rem;
+    display: flex; align-items: baseline; gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  header .titre {
+    font-size: .95rem; font-weight: 600; letter-spacing: .02em;
+    color: var(--accent);
+  }
+  header .panel {
+    font-size: .82rem; color: var(--ink-dim);
+    white-space: pre-wrap;
+  }
+  header .lien {
+    margin-left: auto; font-size: .72rem; color: var(--ink-faint);
+  }
+
+  /* ── jauge de contexte ── */
+  .jauge {
+    display: none; align-items: center; gap: .5rem;
+    font-size: .72rem; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .jauge.on { display: flex; }
+  .jauge .rail {
+    width: 72px; height: 5px; border-radius: 3px;
+    background: #2a231d; overflow: hidden;
+  }
+  .jauge .plein {
+    height: 100%; width: 0; border-radius: 3px;
+    background: #6f8f5f; transition: width .4s ease, background .4s ease;
+  }
+  .jauge.attention .plein { background: #c9a227; }
+  .jauge.attention { color: #c9a227; }
+  .jauge.alerte .plein { background: #b4564b; }
+  .jauge.alerte { color: #d4655a; }
+
+  #banniere {
+    display: none;
+    position: sticky; top: -1.5rem; z-index: 5;
+    max-width: 46rem; margin: -1rem auto 1.8rem;
+    border: 1px solid #6d3a34; border-left-width: 3px;
+    border-radius: 4px; background: #241715;
+    padding: .7rem .9rem;
+    font-size: .85rem; line-height: 1.5; color: #e3b5ae;
+  }
+  #banniere.on { display: block; }
+  #banniere b { color: #f0cfc9; }
+
+  /* ── transcript ── */
+  main {
+    flex: 1 1 auto; overflow-y: auto;
+    padding: 2rem 1.2rem 1rem;
+    scroll-behavior: smooth;
+  }
+  .flux { max-width: 46rem; margin: 0 auto; }
+
+  .msg { margin: 0 0 1.8rem; }
+
+  .msg.mj {
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+    font-size: 1.075rem; line-height: 1.75;
+    color: var(--ink);
+  }
+  .msg.mj p { margin: 0 0 1.1em; }
+  .msg.mj p:last-child { margin-bottom: 0; }
+  .msg.mj em { color: #d8cbb6; }
+  .msg.mj strong { color: #f2e9da; font-weight: 600; }
+  .msg.mj blockquote {
+    margin: 1.2em 0; padding-left: 1em;
+    border-left: 2px solid var(--line); color: var(--ink-dim);
+  }
+  .msg.mj hr {
+    border: 0; border-top: 1px solid var(--line); margin: 1.6em 0;
+  }
+
+  .msg.joueur {
+    display: flex; justify-content: flex-end;
+  }
+  .msg.joueur .bulle {
+    max-width: 80%;
+    border-left: 2px solid var(--player);
+    padding: .35rem 0 .35rem .8rem;
+    font-size: .95rem; line-height: 1.55;
+    color: var(--player);
+    white-space: pre-wrap;
+  }
+
+  .msg.systeme {
+    font-size: .8rem; color: var(--ink-faint);
+    text-align: center; font-style: italic;
+    white-space: pre-wrap;
+  }
+
+  /* ── indicateur ── */
+  #indic {
+    max-width: 46rem; margin: 0 auto 1.5rem;
+    font-size: .85rem; color: var(--ink-faint); font-style: italic;
+    display: none;
+  }
+  #indic.on { display: block; }
+  #indic .pt { animation: clign 1.4s infinite; }
+  #indic .pt:nth-child(2) { animation-delay: .2s; }
+  #indic .pt:nth-child(3) { animation-delay: .4s; }
+  @keyframes clign { 0%, 60%, 100% { opacity: .25 } 30% { opacity: 1 } }
+
+  /* ── saisie ── */
+  footer {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--line);
+    background: var(--bg-panel);
+    padding: .9rem 1.2rem 1.1rem;
+  }
+  .zone { max-width: 46rem; margin: 0 auto; position: relative; }
+  textarea {
+    width: 100%; resize: none;
+    background: #0f0d0b; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: .75rem 3.2rem .75rem .9rem;
+    font-family: inherit; font-size: 1rem; line-height: 1.5;
+    min-height: 3rem; max-height: 12rem;
+    outline: none;
+  }
+  textarea:focus { border-color: #4a3f34; }
+  textarea::placeholder { color: var(--ink-faint); }
+  textarea:disabled { opacity: .45; }
+  .envoi {
+    position: absolute; right: .55rem; bottom: .6rem;
+    background: none; border: 0; cursor: pointer;
+    color: var(--accent); font-size: 1.15rem; line-height: 1;
+    padding: .35rem;
+  }
+  .envoi:disabled { color: var(--ink-faint); cursor: default; }
+  .aide {
+    margin: .45rem auto 0; max-width: 46rem;
+    font-size: .72rem; color: var(--ink-faint);
+    display: flex; justify-content: space-between; gap: 1rem;
+  }
+  #etat-lien { font-variant-numeric: tabular-nums; }
+  #etat-lien.ko { color: #b4564b; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="titre" id="titre">Table de jeu</span>
+  <span class="panel" id="panel"></span>
+  <span class="jauge" id="jauge" title="Contexte de la conversation Claude Code">
+    <span class="rail"><span class="plein" id="jauge-plein"></span></span>
+    <span id="jauge-txt"></span>
+  </span>
+  <span class="lien" id="etat-lien">·</span>
+</header>
+
+<main id="scroll">
+  <div id="banniere"></div>
+  <div class="flux" id="flux"></div>
+  <div id="indic"><span class="pt">·</span><span class="pt">·</span><span class="pt">·</span> le maître de jeu écrit</div>
+</main>
+
+<footer>
+  <div class="zone">
+    <textarea id="saisie" rows="1" placeholder="Que fais-tu ?"></textarea>
+    <button class="envoi" id="envoi" title="Envoyer (Entrée)">➤</button>
+  </div>
+  <div class="aide">
+    <span>Entrée pour envoyer · Maj+Entrée pour un retour à la ligne</span>
+    <span id="etat-mot"></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  const flux   = document.getElementById('flux');
+  const scroll = document.getElementById('scroll');
+  const saisie = document.getElementById('saisie');
+  const envoi  = document.getElementById('envoi');
+  const indic  = document.getElementById('indic');
+  const panel  = document.getElementById('panel');
+  const titre  = document.getElementById('titre');
+  const lien   = document.getElementById('etat-lien');
+  const mot    = document.getElementById('etat-mot');
+  const jauge  = document.getElementById('jauge');
+  const jPlein = document.getElementById('jauge-plein');
+  const jTxt   = document.getElementById('jauge-txt');
+  const bann   = document.getElementById('banniere');
+
+  let seq = 0;
+  let colle = true;   // l'utilisateur suit le bas du flux
+
+  scroll.addEventListener('scroll', () => {
+    colle = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+  });
+
+  function echappe(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Rendu minimal : gras, italique, citation, filet, paragraphes.
+  function rendre(txt) {
+    const blocs = echappe(txt).split(/\n{2,}/);
+    return blocs.map(b => {
+      const t = b.trim();
+      if (/^(---+|\*\*\*+)$/.test(t)) return '<hr>';
+      const cite = t.startsWith('&gt;');
+      const corps = cite ? t.replace(/^&gt;\s?/gm, '') : t;
+      const inline = corps
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+        .replace(/_([^_\n]+)_/g, '<em>$1</em>')
+        .replace(/\n/g, '<br>');
+      return cite ? `<blockquote>${inline}</blockquote>` : `<p>${inline}</p>`;
+    }).join('');
+  }
+
+  function ajoute(m) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + m.role;
+    if (m.role === 'mj') {
+      div.innerHTML = rendre(m.text);
+    } else if (m.role === 'joueur') {
+      const b = document.createElement('div');
+      b.className = 'bulle';
+      b.textContent = m.text;
+      div.appendChild(b);
+    } else {
+      div.textContent = m.text;
+    }
+    flux.appendChild(div);
+  }
+
+  function auBas() {
+    if (colle) scroll.scrollTop = scroll.scrollHeight;
+  }
+
+  function majJauge(g) {
+    if (!g || typeof g.pct !== 'number') { jauge.classList.remove('on'); return; }
+    const [attention, alerte] = g.seuils || [50, 60];
+    jauge.classList.add('on');
+    jPlein.style.width = Math.min(100, g.pct) + '%';
+    jauge.classList.toggle('attention', g.pct >= attention && g.pct < alerte);
+    jauge.classList.toggle('alerte', g.pct >= alerte);
+    jTxt.textContent = 'contexte ' + Math.round(g.pct) + ' %';
+
+    const rouge = g.pct >= alerte;
+    bann.classList.toggle('on', rouge);
+    if (rouge) {
+      bann.innerHTML = '<b>Contexte à ' + Math.round(g.pct) + ' %.</b> ' +
+        'Termine la scène en cours, puis relance une conversation fraîche : ' +
+        'la partie est écrite dans la sauvegarde à chaque tour, tu ne perds rien ' +
+        'de la fiction. Au-delà, la compaction finit par se déclencher toute ' +
+        'seule — autant que ce soit toi qui choisisses le moment.';
+    }
+  }
+
+  async function sonde() {
+    try {
+      const r = await fetch('/poll?since=' + seq);
+      const d = await r.json();
+      lien.textContent = '·';
+      lien.classList.remove('ko');
+      if (d.messages.length) {
+        d.messages.forEach(ajoute);
+        seq = d.seq;
+        auBas();
+      }
+      panel.textContent = d.panel || '';
+      titre.textContent = d.title || 'Table de jeu';
+      majJauge(d.gauge);
+      indic.classList.toggle('on', d.status === 'thinking');
+      const pret = d.status === 'waiting';
+      saisie.disabled = false;      // on laisse toujours écrire : l'entrée est mise en file
+      envoi.disabled  = false;
+      mot.textContent = d.status === 'thinking' ? '' :
+                        pret ? 'à toi' : '';
+      if (d.status === 'thinking') auBas();
+    } catch (e) {
+      lien.textContent = 'moteur injoignable';
+      lien.classList.add('ko');
+    }
+  }
+
+  async function envoyer() {
+    const txt = saisie.value.trim();
+    if (!txt) return;
+    saisie.value = '';
+    ajuste();
+    colle = true;
+    try {
+      await fetch('/say', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: txt })
+      });
+    } catch (e) {
+      lien.textContent = 'envoi impossible';
+      lien.classList.add('ko');
+    }
+    sonde();
+  }
+
+  function ajuste() {
+    saisie.style.height = 'auto';
+    saisie.style.height = Math.min(saisie.scrollHeight, 192) + 'px';
+  }
+
+  saisie.addEventListener('input', ajuste);
+  saisie.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); envoyer(); }
+  });
+  envoi.addEventListener('click', envoyer);
+
+  sonde();
+  setInterval(sonde, 700);
+  saisie.focus();
+})();
+</script>
+</body>
+</html>

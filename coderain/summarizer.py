@@ -65,6 +65,13 @@ Return ONLY a JSON object: {"arc": "<the updated synopsis>"}
 """
 
 
+# How many existing entries _existing_context shows the model. The list is NOT
+# ranked by importance before the cut, so past this count an entry can be
+# rewritten by a model that was never shown it. The number is unchanged; it is
+# named here so the instrumentation and the truncation can never drift apart.
+EXISTING_ENTITIES_CAP = 12
+
+
 def _as_day(v) -> int:
     """Current day as an int for the monotonic guard; anything unusable = 0."""
     if isinstance(v, bool) or not isinstance(v, int):
@@ -96,8 +103,16 @@ class Summarizer:
         # Snapshot retention bounds how far back a clean branch can reach
         # (SPEC-V2 §4.2) — each pre-fold snapshot is a branch restore point.
         self.snapshot_keep = max(1, int(m.get("snapshot_keep", 5)))
-        self.long_after = int(m.get("long_fold_after", 8))
+        # Clamp >=0 for the same infinite-loop reason as the sizes: now that the
+        # arc counter advances by len(chunk), a negative "after" would make the
+        # due-condition true with an empty chunk and never advance.
+        self.long_after = max(0, int(m.get("long_fold_after", 8)))
         self.long_size = max(1, int(m.get("long_fold_size", 4)))
+        # Forensic side channels, written by _existing_context/_apply_promotions
+        # and read by _fold_scene. They never feed a prompt.
+        self._last_triggered: list[str] = []
+        self._last_cut: list[str] = []
+        self._last_rewritten: list[str] = []
 
     # --- LLM call: thinking ON, JSON out, one retry ---
     def _emit_json(self, instruction: str, payload: str) -> dict | None:
@@ -107,6 +122,7 @@ class Summarizer:
     # --- apply validated promotions ---
     def _apply_promotions(self, obj: dict) -> list[str]:
         events: list[str] = []
+        self._last_rewritten = []
         for p in obj.get("promotions", []) or []:
             if not isinstance(p, dict):
                 continue
@@ -142,6 +158,9 @@ class Summarizer:
             # rewrite=True: the model was shown the current entry and returns the
             # full rewritten body, so replace (not append) it.
             self.store.merge_entry(rel, entry, rewrite=True)
+            # rewrite=True is the destructive half of the truncation risk: this
+            # is the set to intersect with what the cut dropped.
+            self._last_rewritten.append(slug)
             events.append(f"memory: promoted [[{kind}:{slug}]]")
 
         for t in obj.get("new_threads", []) or []:
@@ -204,17 +223,25 @@ class Summarizer:
         """Show the model the current entries for entities mentioned in the turns,
         so it can rewrite (not append) them."""
         text = _turns_text(turns).lower()
-        hits = [e.render() for _, e in self.store.index().entries.values()
-                if any(trigger_hit(tok, text) for tok in e.triggers())]
+        matched = [e for _, e in self.store.index().entries.values()
+                   if any(trigger_hit(tok, text) for tok in e.triggers())]
+        hits = [e.render() for e in matched]
+        # Forensics only — the two lines below read the same list in the same
+        # order and change nothing the model sees.
+        self._last_triggered = [e.slug for e in matched]
+        self._last_cut = [e.slug for e in matched[EXISTING_ENTITIES_CAP:]]
         if not hits:
             return "EXISTING ENTITIES: (none relevant)"
         return ("EXISTING ENTITIES (rewrite in full if they change):\n\n"
-                + "\n\n".join(hits[:12]))
+                + "\n\n".join(hits[:EXISTING_ENTITIES_CAP]))
 
     # --- the folds ---
     def _fold_scene(self, turns: list[dict], scene_no: int,
                     start_turn: int) -> list[str]:
         events = [f"memory: folded scene {scene_no}"]
+        # A failed emission skips _apply_promotions, so clear the side channels
+        # here or this fold would inherit the previous fold's rewrite set.
+        self._last_triggered, self._last_cut, self._last_rewritten = [], [], []
         payload = self._existing_context(turns) + "\n\nTURNS:\n" + _turns_text(turns)
         obj = self._emit_json(SCENE_INSTRUCTION, payload)
         summary = ""
@@ -259,7 +286,35 @@ class Summarizer:
                       attrs=attrs, body=summary)
         self.store.upsert_entry("memory/scenes.md", entry)
         self._append_timeline(start_turn, end_turn, when, shorthand or summary)
+        self._log_fold(scene_no, start_turn, end_turn)
         return events
+
+    def _log_fold(self, scene_no: int, start_turn: int, end_turn: int) -> None:
+        """One forensic line per scene fold. `bit` is the whole point: an entry
+        the cut hid from the model AND that the same pass rewrote — the only
+        shape in which the truncation actually destroys something. Counts are
+        carried alongside the slugs so the file can be answered from without
+        reading the identities.
+
+        Never raises: a fold must not fail because a log line could not."""
+        try:
+            cut, rewritten = list(self._last_cut), list(self._last_rewritten)
+            bit = sorted(set(cut) & set(rewritten))
+            self.store.append_fold_log({
+                "kind": "scene_fold",
+                "scene": scene_no,
+                "turns": f"{start_turn}-{end_turn}",
+                "triggered": len(self._last_triggered),
+                "cap": EXISTING_ENTITIES_CAP,
+                "cut": len(cut),
+                "rewritten": len(rewritten),
+                "bit": len(bit),
+                "cut_slugs": cut,
+                "rewritten_slugs": rewritten,
+                "bit_slugs": bit,
+            })
+        except Exception:  # noqa: BLE001 — forensics never break a fold
+            pass
 
     def _append_timeline(self, start: int, end: int, when: str, text: str) -> None:
         """Append one fold-aligned shorthand line, tagged with its source-turn range
@@ -314,7 +369,10 @@ class Summarizer:
                 snapped = True
             chunk = scenes[folded_sc:folded_sc + self.long_size]
             events += self._fold_arc(chunk)
-            folded_sc += self.long_size
+            # Same rule as the turn loop above: advance by the ACTUAL chunk
+            # length, never the configured size, or a size > after silently
+            # drops the scenes in between.
+            folded_sc += len(chunk)
             state["folded_scenes"] = folded_sc
             self.store.write_state(state)
 
