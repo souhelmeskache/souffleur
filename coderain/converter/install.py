@@ -79,6 +79,13 @@ def install(partition_dir: Path, root_dir: Path) -> dict:
            "titre": manifest["titre"],
            "hash_source": manifest.get("hash_source")}
     kit_path.write_text(json.dumps(kit, indent=1), encoding="utf-8")
+
+    # D-179: derive the engine-native view into the save (regenerable,
+    # never hand-edited); pointer seeded at the first node (D-180)
+    from .projection import derive
+    counts = derive(partition_dir, root_dir, save_slug, partition_dir)
+    kit["projection"] = counts
+    kit_path.write_text(json.dumps(kit, indent=1), encoding="utf-8")
     return {**kit, "save_dir": str(sdir)}
 
 

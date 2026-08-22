@@ -133,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("doctor")
     d.add_argument("partition")
     d.add_argument("--root", default=str(ROOT))
+    pj = sub.add_parser("project",
+                        help="dérive la vue moteur dans le save (D-179)")
+    pj.add_argument("partition")
+    pj.add_argument("--root", default=str(ROOT))
     a = ap.parse_args(argv)
 
     if a.cmd in ("convert", "all"):
@@ -148,10 +152,26 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         a.partition = res["out"]
 
-    if a.cmd == "install" or a.cmd == "all":
-        from .install import install as do_install
-        res = do_install(Path(a.partition), ROOT)
-        print(json.dumps(res, ensure_ascii=False, indent=1))
+    if a.cmd in ("install", "project", "all") or a.cmd == "project":
+        if a.cmd in ("install", "all"):
+            from .install import install as do_install
+            res = do_install(Path(a.partition), ROOT)
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+        if a.cmd == "project" or (a.cmd == "all"):
+            from .install import doctor as _d  # kit.json -> save slug
+            from .projection import derive
+            pdir = Path(a.partition)
+            kit_p = pdir / "kit.json"
+            if not kit_p.exists():
+                print("pas de kit.json — lance 'install' d'abord")
+                return 1
+            kit = json.loads(kit_p.read_text(encoding="utf-8"))
+            counts = derive(pdir, ROOT, kit["save_slug"], None)
+            print(json.dumps({"projection": counts,
+                              "save_slug": kit["save_slug"]},
+                             ensure_ascii=False, indent=1))
+        if a.cmd == "install":
+            return 0
 
     if a.cmd == "doctor" or a.cmd == "all":
         from .install import doctor as do_doctor
