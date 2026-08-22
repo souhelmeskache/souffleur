@@ -44,9 +44,29 @@ def _extract_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def cmd_convert(src: Path, out_dir: Path, titre: str | None = None) -> dict:
+# Structure detection: numbered-branching modules (S1 pur) are the MINORITY
+# case for this tool (D-152: choice-enumerated material is the exception).
+# Most ingested material is free-form — its route is the LLM pipeline
+# (SPEC-P4 §3), which requires an approved model route (MRPG-D-176).
+def _segment(text: str, mode: str, llm=None):
+    has_markers = len(s1_local.MARKER.findall(text)) >= 3
+    if mode == "s1" or (mode == "auto" and has_markers):
+        return s1_local.segment_s1(text), None
+    if llm is None:
+        raise SystemExit(
+            "matériau libre détecté (pas de marqueurs #N en nombre): la "
+            "segmentation exige la pipeline LLM (SPEC-P4 §3) — fournir un "
+            "modèle approuvé (feu vert MRPG-D-176) ou --segmenter s1")
+    from . import segmentation
+    return segmentation.segment_chunked(llm, text)
+
+
+def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
+                mode: str = "auto", llm=None) -> dict:
     text = _extract_text(src)
-    units = s1_local.segment_s1(text)
+    units, seg_errors = _segment(text, mode, llm)
+    if seg_errors:
+        raise SystemExit(f"segmentation: {seg_errors}")
     cov0 = validate_fidelity.coverage_report(units, [], len(text))
     assert not cov0["gaps"] and not cov0["overlaps"], cov0
     manifest = Manifest(
