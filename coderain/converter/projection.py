@@ -49,14 +49,21 @@ def derive(partition_dir: Path, root_dir: Path, save_slug: str,
     counts = {"nodes": 0, "records": 0, "conditions": 0}
 
     # 1) nodes → locations registry, linked by slugs (potential, no triggers)
+    #    D-065: bodies lose their SEQUENCE lines ("If you..., go to N") — the
+    #    structured `liens` already carry the potential; echoed sequences are
+    #    what turned the play session back into a gamebook menu.
+    import re
+    seq_line = re.compile(r"(?i)\bgo to\s+\d{1,3}\.")
     for meta in nodes:
         liens = [str(l["cible_id"]) for l in meta.get("liens", [])]
+        body = "\n".join(line for line in meta["_body"].splitlines()
+                         if not seq_line.search(line))
         store.upsert_entry("locations.md", Entry(
             title=f"{meta.get('titre', meta['id'])}",
             slug=meta["id"],
             attrs={"links": ", ".join(liens),
                    "altitude": str(meta.get("altitude", "scene"))},
-            body=meta["_body"]))
+            body=body.strip()))
         counts["nodes"] += 1
 
     # 2) records → characters registry, transverses in body (D-113/D-119)
@@ -108,17 +115,22 @@ def derive(partition_dir: Path, root_dir: Path, save_slug: str,
         counts["secrets"] += 1
 
     # 5) directing brief → custom instructions of the save (always assembled,
-    #    small and stable); idempotent via markers
+    #    small and stable); the marked block is REPLACED on re-projection so
+    #    an updated brief reaches existing saves
     brief = partition_dir / "directeur.md"
     ci_path = Path(lib.saves.dir(save_slug)) / "custom-instructions.md"
     if brief.exists():
         marker_start = "<!-- P4-BRIEF-START -->"
         marker_end = "<!-- P4-BRIEF-END -->"
+        block = (f"{marker_start}\n{brief.read_text(encoding='utf-8')}\n"
+                 f"{marker_end}\n")
         text = ci_path.read_text(encoding="utf-8")
-        if marker_start not in text:
-            block = (f"\n{marker_start}\n{brief.read_text(encoding='utf-8')}\n"
-                     f"{marker_end}\n")
-            ci_path.write_text(text + block, encoding="utf-8")
+        i, j = text.find(marker_start), text.find(marker_end)
+        if i >= 0 and j > i:
+            text = text[:i] + block + text[j + len(marker_end):]
+        else:
+            text = text + "\n" + block
+        ci_path.write_text(text, encoding="utf-8")
 
     # 6) pointer initialization: position only (D-180), never lived experience
     state_p = Path(lib.saves.dir(save_slug)) / "state.json"

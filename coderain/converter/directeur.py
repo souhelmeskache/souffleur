@@ -24,8 +24,12 @@ fichier ni les nodes brutes.*
 1. **Les nodes sont des notes privées de MJ** — tu t'en sers pour décrire,
    tu ne les recopies jamais. Le texte montré au joueur est une narration
    à la deuxième personne du présent.
-2. **Aucun numéro de paragraphe n'atteint le joueur** — les liens
-   conditionnels deviennent des choix naturels dans la fiction.
+2. **Aucun numéro de paragraphe, AUCUN menu de choix.** Interdit au joueur
+   d'entendre « go to 12 » ou « paragraphe 19 ». Et INTERDIT d'énumérer les
+   options : jamais « Que fais-tu ? » suivi d'une liste à puces. Les issues
+   possibles existent dans la fiction — une porte entrouverte, un couloir qui
+   descend, une pente verglacée. Le joueur dit ce qu'il fait ; tu racontes la
+   conséquence ; tu termines la scène ouverte, sans liste.
 3. **Les dés se jouent au moteur** (d20 + stat vs DC) — jamais improvisés
    ni simulés par la prose. Les créatures viennent des records.
 4. **L'état perçu est intangible** — ce que le joueur a vu ou cru ne se
@@ -45,7 +49,8 @@ fichier ni les nodes brutes.*
 {specifique}"""
 
 SPEC_S1 = """- Aventure à embranchements : chaque node est une scène/situation,
-  les renvois conditionnels sont les sorties possibles.
+  les renvois conditionnels sont des sorties possibles — elles se MONTRENT
+  dans la description (une ouverture, un sentier), jamais en liste.
 - Les objets que le texte fait prendre entrent réellement dans la feuille."""
 
 
