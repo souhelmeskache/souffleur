@@ -22,18 +22,38 @@ CHECK_RE = re.compile(
     r"(strength|dexterity|constitution|intelligence|wisdom|charisma)"
     r"(?: \((\w+)\))? (saving throw|check)", re.I)
 
+# Régimes de jet (MRPG-D-089, actée): SILENCIEUX / OPAQUE / TRANSPARENT.
+# Le choix est SITUATIONNEL (facteurs A-F de D-89) — jamais catégoriel;
+# ce que le convertisseur émet est un régime PROPOSÉ par des facteurs
+# déterministes (posture passive, estimabilité), que le Director peut
+# dévier pour raisons dramaturgiques documentées. Le secret n'est JAMAIS
+# un facteur (non-facteur 12) et le veto tient: enjeu lourd = transparence.
+PASSIF = {"perception", "ecoute", "memoire", "surprise", "reperage"}
+
+
+def _regime(kind: str, ability: str, skill: str | None) -> str:
+    hay = f"{ability} {skill or ''}".lower()
+    if any(k in hay for k in PASSIF):
+        return "SILENCIEUX"          # capacité qui s'exerce seule (facteur A1)
+    if kind == "saving_throw":
+        return "OPAQUE"              # subi: difficulté non estimable (A2)
+    return "OPAQUE"                  # délibéré mais DC rarement estimable
+
 
 def extract_checks(text: str, units) -> dict[str, list[dict]]:
-    """{node_id: [{dc, ability, skill?, kind}]} — facts, verbatim-adjacent."""
+    """{node_id: [{dc, ability, skill?, kind, regime_propose}]} — facts only."""
     out: dict[str, list[dict]] = {}
     for u in units:
         found = []
         for m in CHECK_RE.finditer(text[u.start:u.end]):
+            skill = (m.group(3) or "").lower() or None
+            kind = m.group(4).lower().replace(" ", "_")
             found.append({
                 "dc": int(m.group(1)),
                 "ability": m.group(2).lower(),
-                "skill": (m.group(3) or "").lower() or None,
-                "kind": m.group(4).lower().replace(" ", "_"),
+                "skill": skill,
+                "kind": kind,
+                "regime_propose": _regime(kind, m.group(2).lower(), skill),
             })
         if found:
             out[u.uid] = found

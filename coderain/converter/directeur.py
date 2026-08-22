@@ -31,7 +31,16 @@ fichier ni les nodes brutes.*
    descend, une pente verglacée. Le joueur dit ce qu'il fait ; tu racontes la
    conséquence ; tu termines la scène ouverte, sans liste.
 3. **Les dés se jouent au moteur** (d20 + stat vs DC) — jamais improvisés
-   ni simulés par la prose. Les créatures viennent des records.
+   ni simulés par la prose. Les créatures viennent des records. ⭐ **Trois
+   régimes de jet** (`D-89`) : `TRANSPARENT` (difficulté + résultat affichés),
+   `OPAQUE` (le jet se sait, difficulté masquée), `SILENCIEUX` (le joueur
+   ignore qu'un jet a lieu). Le régime proposé est dans
+   `mapping-regles.json` (`regime_propose`) — tu peux dévier pour raisons
+   dramaturgiques DOCUMENTÉES, jamais parce que « c'est lié à un secret »
+   (non-facteur 12) et avec le veto : enjeu lourd = transparence DUE.
+   ⭐ Et dès qu'un résultat est connu (ou en `SILENCIEUX`, dès que la fiction
+   l'absorbe), tu NARRES immédiatement la conséquence AVANT de rendre la
+   main : un tour complet = action → résolution → conséquences narrées.
 4. **L'état perçu est intangible** — ce que le joueur a vu ou cru ne se
    contredit jamais ; tout le dessous se réécrit librement.
 5. **L'écriture en séance passe par patchs** — le Director mute, il ne
