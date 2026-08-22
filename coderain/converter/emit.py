@@ -45,7 +45,9 @@ def write_partition(partition, out_dir: Path) -> Path:
                                                       encoding="utf-8")
     for r in partition.records:
         fm = _front_matter({"id": r.id, "classe": r.classe, "nom": r.nom,
-                            "tags": r.tags, "anchors": r.anchors})
+                            "tags": r.tags, "anchors": r.anchors,
+                            **({"transverse": r.transverse}
+                               if r.transverse else {})})
         body = json.dumps(r.stats_5e, ensure_ascii=False, indent=1)
         (out_dir / "records" / f"{r.id}.md").write_text(fm + body + "\n",
                                                         encoding="utf-8")
@@ -74,6 +76,7 @@ def write_partition(partition, out_dir: Path) -> Path:
         "records": [{"id": r.id, "classe": r.classe} for r in partition.records],
         "tables": [{"id": t.id, "de": t.de} for t in partition.tables],
         "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
+        "aventure": ({"etage": "adventure"} if partition.aventure else None),
     }
     (out_dir / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=1),
                                         encoding="utf-8")

@@ -1722,6 +1722,24 @@ def module_roll_table(table_id: str, die_result: int | None = None) -> dict:
         return {"error": str(e)}
 
 
+@mcp.tool()
+def module_get_aventure() -> dict:
+    """Read the AVENTURE stage of the loaded save's module (D-178): default
+    trajectory + disturbances, world conditions with triggers, exit hinge.
+    Read it BEFORE directing — it is what happens if the player does nothing."""
+    try:
+        from coderain.converter.aval import _split_front
+        raw = (_module_partition() / "aventure.md").read_text(encoding="utf-8")
+        front, body = _split_front(raw)
+        meta = json.loads(front) if front else {}
+        return {**meta, "charniere_md":
+                body.replace("## Charnière de sortie", "").strip()}
+    except FileNotFoundError:
+        return {"error": "cette partition ne porte pas d'étage aventure"}
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
     # Opt-in: set CODERAIN_UI_AUTOSTART to a port in the project's .mcp.json env
     # block and the screen is up before Claude Code says a word — so a launcher

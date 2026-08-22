@@ -79,7 +79,9 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None) -> dict:
                           else idx + len(raw["nom"]))
                 partition.records.append(Record(
                     raw["id"], raw["classe"], raw["nom"],
-                    {**raw["stats"], "nom": raw["nom"]}, [anchor]))
+                    {**raw["stats"], "nom": raw["nom"]}, [anchor],
+                    tags=raw.get("tags"),
+                    transverse=raw.get("transverse")))
             break
 
     checks = extract_checks(text, units)
