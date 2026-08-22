@@ -39,6 +39,7 @@ PORT_FILE = ROOT / ".turn" / "ui_port"
 _lock = threading.Lock()
 _messages: list[dict] = []
 _panel: str = ""
+_sheet: str = ""                # full character sheet (multi-line, right rail)
 _status: str = "idle"          # idle | waiting | thinking
 _title: str = "Table de jeu"
 _gauge: dict = {}              # fed by the status line: context window usage
@@ -71,6 +72,12 @@ def set_panel(text: str) -> None:
     global _panel
     with _lock:
         _panel = text or ""
+
+
+def set_sheet(text: str) -> None:
+    global _sheet
+    with _lock:
+        _sheet = text or ""
 
 
 def set_title(text: str) -> None:
@@ -123,6 +130,7 @@ def snapshot(since: int = 0) -> dict:
             "messages": [m for m in _messages if m["id"] > since],
             "seq": len(_messages),
             "panel": _panel,
+            "sheet": _sheet,
             "status": _status,
             "title": _title,
             "gauge": dict(_gauge),

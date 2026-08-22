@@ -1599,24 +1599,33 @@ def ui_say(text: str, role: str = "mj") -> dict:
 
 
 @mcp.tool()
-def ui_wait(timeout_seconds: int = 300) -> dict:
-    """Wait for the player to type something. Blocks up to timeout_seconds.
+def ui_wait(timeout_seconds: int = 40) -> dict:
+    """Wait for the player to type something. Blocks up to timeout_seconds
+    (capped at 40 s — see below).
 
     Returns {"status": "input", "text": ...} or {"status": "timeout"}.
     On timeout, call it again — the player is thinking, and thinking is free.
     Input typed while nobody was waiting is queued, never lost.
 
     Harness note (measured against the docs, 2026-08-03): this is a stdio server,
-    so there is no 60-second per-request timer; the wall clock is the per-server
-    `timeout` in .mcp.json (set to 30 min) and the stdio idle window is 30 min.
-    The one real limit is that a main-conversation MCP call still running after
-    two minutes is moved to a background task — which is why jeu-planescape sets
-    CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0. Without that setting, keep the timeout
-    under 110 seconds and simply call again."""
+    so there is no 60-second per-request timer in Claude Code; the wall clock is
+    the per-server `timeout` in .mcp.json (set to 30 min) and the stdio idle
+    window is 30 min. The one real limit there is that a main-conversation MCP
+    call still running after two minutes moves to a background task — hence the
+    old advice to stay under 110 s.
+
+    ⭐ opencode note (2026-08-22): opencode kills long tool calls with its own
+    timer, so blocking long here produces an infinite retry-timeout loop.
+    The wait is therefore CAPPED AT 40 s: on timeout you get {"status":
+    "timeout"} and simply call again — cheap, and input is never lost."""
     import webui
     if not webui.is_running():
         return {"error": "écran non ouvert — appeler ui_open d'abord"}
-    return webui.wait(timeout_seconds)
+    try:
+        asked = int(timeout_seconds)
+    except (TypeError, ValueError):
+        asked = 40
+    return webui.wait(max(5, min(asked, 40)))
 
 
 @mcp.tool()
@@ -1635,10 +1644,82 @@ def ui_panel(state_line: str = "", title: str = "") -> dict:
 
 
 @mcp.tool()
+def ui_sheet() -> dict:
+    """Render the player's full character sheet from the loaded save and
+    pin it to the right rail of the player's screen. Call it after load_save
+    and after any mechanical change (HP, gold, inventory)."""
+    import webui
+    if not webui.is_running():
+        return {"error": "écran non ouvert — appeler ui_open d'abord"}
+    try:
+        from coderain.modules import rpg as rpg_mod
+        sheet = rpg_mod.render_sheet_lines(_require_store().rpg_state())
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"feuille non rendue: {e}"}
+    webui.set_sheet(sheet)
+    return {"ok": True, "lines": sheet.count("\n") + 1}
+
+
+@mcp.tool()
 def ui_close() -> dict:
     """Stop the player's screen server."""
     import webui
     return webui.stop()
+
+
+# ── P4 module kit: read the converted Partition (SPEC-P4 §8) ────────────────
+# The current save's module.json points at its partition directory, so a
+# Director playing one module can only ever see THAT module's content —
+# cross-campaign confusion is structurally impossible.
+
+def _module_partition() -> Path:
+    if not _slug:
+        raise ValueError("No save loaded. Call load_save first.")
+    ptr = _saves_root / _slug / "module.json"
+    if not ptr.exists():
+        raise ValueError(f"Save '{_slug}' is not module-backed (no module.json)")
+    return Path(json.loads(ptr.read_text(encoding="utf-8"))["partition"])
+
+
+@mcp.tool()
+def module_list_nodes() -> list[dict]:
+    """List every node of the loaded save's converted module (id/type/altitude)."""
+    try:
+        from coderain.converter.aval import load_partition
+        return load_partition(_module_partition())["nodes"]
+    except Exception as e:  # noqa: BLE001
+        return [{"error": str(e)}]
+
+
+@mcp.tool()
+def module_get_node(node_id: str) -> dict:
+    """Read ONE node of the module: its typed links + verbatim body."""
+    try:
+        from coderain.converter.aval import get_node
+        return get_node(_module_partition(), node_id)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def module_get_record(record_id: str) -> dict:
+    """Read one stat block (creature/pnj/...) of the module, already 5e."""
+    try:
+        from coderain.converter.aval import get_record
+        return get_record(_module_partition(), record_id)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def module_roll_table(table_id: str, die_result: int | None = None) -> dict:
+    """Read a rollable table; pass die_result to fetch the matching row.
+    Rolling the die stays the engine's job — this only resolves the row."""
+    try:
+        from coderain.converter.aval import roll_table
+        return roll_table(_module_partition(), table_id, die_result)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":

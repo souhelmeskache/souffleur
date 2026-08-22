@@ -18,6 +18,9 @@ config.yaml
 # --- runtime turn scratch: holds the assembled play context (campaign material) ---
 .turn/
 
+# --- P4 converter input corpus: extracted module text + measures (campaign material) ---
+corpus-modules/
+
 # --- build outputs (PyInstaller) ---
 build/
 dist/

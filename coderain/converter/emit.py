@@ -1,0 +1,84 @@
+"""Physical output of the Partition (SPEC-P4 §8): one self-contained directory,
+manifest.json + structured markdown, one primitive = one folder. Markdown
+stays the source of truth; no database at v0."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+def _md_table(t) -> str:
+    lines = [f"# table {t.id}", "", f"de: `{t.de}`", ""]
+    for e in t.entrees:
+        lien = f" → [{e['lien_optionnel']}]" if e.get("lien_optionnel") else ""
+        lines.append(f"- {e['plage_debut']}-{e['plage_fin']}: {e['resultat_md']}{lien}")
+    return "\n".join(lines) + "\n"
+
+
+def _front_matter(obj: dict) -> str:
+    y = json.dumps(obj, ensure_ascii=False, indent=1)
+    return f"---\n{y}\n---\n"
+
+
+def write_partition(partition, out_dir: Path) -> Path:
+    out_dir = Path(out_dir)
+    for sub in ("nodes", "records", "tables", "secrets", "patches"):
+        (out_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    (out_dir / "manifest.json").write_text(
+        json.dumps(partition.manifest.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8")
+
+    if partition.aventure is not None:
+        av = partition.aventure
+        fm = _front_matter({"etage": "adventure", "chantier": "D-178",
+                            "trajectoire": av.trajectoire,
+                            "conditions": av.conditions})
+        body = ("## Charnière de sortie\n\n" + av.charniere_md + "\n")
+        (out_dir / "aventure.md").write_text(fm + body, encoding="utf-8")
+
+    for n in partition.nodes:
+        fm = _front_matter({"id": n.id, "type": n.type, "titre": n.titre,
+                            "altitude": n.altitude, "liens": n.liens,
+                            "anchors": n.anchors})
+        (out_dir / "nodes" / f"{n.id}.md").write_text(fm + n.corps_md + "\n",
+                                                      encoding="utf-8")
+    for r in partition.records:
+        fm = _front_matter({"id": r.id, "classe": r.classe, "nom": r.nom,
+                            "tags": r.tags, "anchors": r.anchors})
+        body = json.dumps(r.stats_5e, ensure_ascii=False, indent=1)
+        (out_dir / "records" / f"{r.id}.md").write_text(fm + body + "\n",
+                                                        encoding="utf-8")
+    for t in partition.tables:
+        fm = _front_matter({"id": t.id, "de": t.de, "anchors": t.anchors})
+        (out_dir / "tables" / f"{t.id}.md").write_text(fm + _md_table(t),
+                                                       encoding="utf-8")
+    for s in partition.secrets:
+        fm = _front_matter({"id": s.id, "statut": s.statut,
+                            "porteurs": s.porteurs, "revelation": s.revelation,
+                            "consequence_si_brule": s.consequence_si_brule,
+                            "anchors": s.anchors})
+        (out_dir / "secrets" / f"{s.id}.md").write_text(fm + s.contenu_md + "\n",
+                                                        encoding="utf-8")
+    if partition.patches:
+        rows = [_front_matter({"cible_id": p.cible_id, "operation": p.operation,
+                               "cause": p.cause}) + p.payload + "\n"
+                for p in partition.patches]
+        for i, text in enumerate(rows):
+            (out_dir / "patches" / f"{partition.patches[i].cible_id}-{i}.md"
+             ).write_text(text, encoding="utf-8")
+
+    # machine-readable mirror of everything except prose bodies
+    index = {
+        "nodes": [{"id": n.id, "type": n.type, "altitude": n.altitude} for n in partition.nodes],
+        "records": [{"id": r.id, "classe": r.classe} for r in partition.records],
+        "tables": [{"id": t.id, "de": t.de} for t in partition.tables],
+        "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
+    }
+    (out_dir / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=1),
+                                        encoding="utf-8")
+    return out_dir
+
+
+def read_manifest(partition_dir: Path) -> dict:
+    return json.loads((Path(partition_dir) / "manifest.json").read_text(encoding="utf-8"))

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "coderain-engine": {
+      "type": "local",
+      "command": ["C:\\Users\\souhe\\coderain\\.venv\\Scripts\\python.exe", "C:\\Users\\souhe\\coderain\\mcp_server.py"],
+      "enabled": true
+    }
+  }
+}

@@ -167,6 +167,25 @@
   }
   #etat-lien { font-variant-numeric: tabular-nums; }
   #etat-lien.ko { color: #b4564b; }
+  /* rail feuille de perso — alimenté par ui_sheet (vide = masqué) */
+  #feuille {
+    display: none;
+    position: fixed; top: 3.2rem; right: 0; bottom: 6rem;
+    width: 16rem; overflow-y: auto;
+    background: var(--bg-panel);
+    border-left: 1px solid #2a241f;
+    padding: .9rem 1rem;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: .72rem; line-height: 1.5;
+    white-space: pre-wrap;
+    color: #cfc7bd;
+  }
+  #feuille.on { display: block; }
+  #feuille .titre-feuille {
+    color: var(--accent); letter-spacing: .08em;
+    text-transform: uppercase; font-size: .66rem;
+    margin-bottom: .5rem;
+  }
 </style>
 </head>
 <body>
@@ -186,6 +205,8 @@
   <div class="flux" id="flux"></div>
   <div id="indic"><span class="pt">·</span><span class="pt">·</span><span class="pt">·</span> le maître de jeu écrit</div>
 </main>
+
+<aside id="feuille"><div class="titre-feuille">— Personnage —</div><span id="feuille-txt"></span></aside>
 
 <footer>
   <div class="zone">
@@ -295,6 +316,10 @@
       }
       panel.textContent = d.panel || '';
       titre.textContent = d.title || 'Table de jeu';
+      if (d.sheet) {
+        document.getElementById('feuille-txt').textContent = d.sheet;
+        document.getElementById('feuille').classList.add('on');
+      }
       majJauge(d.gauge);
       indic.classList.toggle('on', d.status === 'thinking');
       const pret = d.status === 'waiting';
