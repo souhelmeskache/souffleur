@@ -15,6 +15,7 @@ Guard-fences from the meta return (2026-08-22):
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from coderain.memory import Library, MemoryStore
@@ -37,6 +38,32 @@ def _load_node_ids(partition_dir: Path) -> list[dict]:
     return out
 
 
+def _strip_sequences(body: str) -> str:
+    """Remove every '… go to N' / 'Go to N!' line from a node body — including
+    PDF-wrapped variants ('Go to \\n17.') and the dangling conditional
+    fragment left on the previous line ('If you decide to explore the cave,').
+    The structured `liens` carry the potential; sequences never survive."""
+    lines = body.splitlines()
+    seq = re.compile(r"(?i)go to\s*\d{1,3}\s*[.!]?")
+    tail = re.compile(r"(?i)\bgo to\s*$")
+    num = re.compile(r"^\s*\d{1,3}\s*[.!]?\s*$")
+    drop = set()
+    for i, line in enumerate(lines):
+        if seq.search(line):
+            drop.add(i)
+        elif tail.search(line) and i + 1 < len(lines) and num.match(lines[i + 1]):
+            drop.add(i)
+            drop.add(i + 1)
+    for i in sorted(drop):
+        j = i - 1
+        while j >= 0 and j not in drop and (
+                re.search(r"[,!]\s*$", lines[j])
+                or re.match(r"\s*(?:or, )?if\b", lines[j], re.I)):
+            drop.add(j)
+            break
+    return "\n".join(l for k, l in enumerate(lines) if k not in drop)
+
+
 def derive(partition_dir: Path, root_dir: Path, save_slug: str,
            corpus_dir: Path) -> dict:
     """Upsert engine-native entries derived from the Partition into the save.
@@ -52,18 +79,15 @@ def derive(partition_dir: Path, root_dir: Path, save_slug: str,
     #    D-065: bodies lose their SEQUENCE lines ("If you..., go to N") — the
     #    structured `liens` already carry the potential; echoed sequences are
     #    what turned the play session back into a gamebook menu.
-    import re
-    seq_line = re.compile(r"(?i)\bgo to\s+\d{1,3}\.")
     for meta in nodes:
         liens = [str(l["cible_id"]) for l in meta.get("liens", [])]
-        body = "\n".join(line for line in meta["_body"].splitlines()
-                         if not seq_line.search(line))
+        body = _strip_sequences(meta["_body"]).strip()
         store.upsert_entry("locations.md", Entry(
             title=f"{meta.get('titre', meta['id'])}",
             slug=meta["id"],
             attrs={"links": ", ".join(liens),
                    "altitude": str(meta.get("altitude", "scene"))},
-            body=body.strip()))
+            body=body))
         counts["nodes"] += 1
 
     # 2) records → characters registry, transverses in body (D-113/D-119)
