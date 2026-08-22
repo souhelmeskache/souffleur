@@ -181,6 +181,16 @@
     color: #cfc7bd;
   }
   #feuille.on { display: block; }
+  /* message en file sans auditeur — le Director a arrêté d'attendre */
+  #orphelin {
+    display: none;
+    position: fixed; top: 3.2rem; left: 50%; transform: translateX(-50%);
+    background: #4a2c12; color: #ffd9a8;
+    border: 1px solid #7a4a1e; border-radius: .4rem;
+    padding: .5rem .9rem; font-size: .78rem; z-index: 5;
+    max-width: 34rem;
+  }
+  #orphelin.on { display: block; }
   #feuille .titre-feuille {
     color: var(--accent); letter-spacing: .08em;
     text-transform: uppercase; font-size: .66rem;
@@ -207,6 +217,7 @@
 </main>
 
 <aside id="feuille"><div class="titre-feuille">— Personnage —</div><span id="feuille-txt"></span></aside>
+<div id="orphelin">Ton message attend dans la file — mais le Director ne t'écoute plus. Écris « continue » dans le terminal pour le réveiller : ton message lui parviendra aussitôt.</div>
 
 <footer>
   <div class="zone">
@@ -316,6 +327,8 @@
       }
       panel.textContent = d.panel || '';
       titre.textContent = d.title || 'Table de jeu';
+      document.getElementById('orphelin').classList.toggle(
+        'on', !!d.pending && d.status !== 'waiting');
       if (d.sheet) {
         document.getElementById('feuille-txt').textContent = d.sheet;
         document.getElementById('feuille').classList.add('on');

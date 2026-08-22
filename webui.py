@@ -44,6 +44,13 @@ _status: str = "idle"          # idle | waiting | thinking
 _title: str = "Table de jeu"
 _gauge: dict = {}              # fed by the status line: context window usage
 _inbox: "queue.Queue[str]" = queue.Queue()
+_pending: int = 0               # messages queued while nobody waits
+
+
+def _pending_inc():
+    global _pending
+    with _lock:
+        _pending += 1
 
 _server: ThreadingHTTPServer | None = None
 _thread: threading.Thread | None = None
@@ -98,7 +105,7 @@ def wait(timeout_seconds: float) -> dict:
     Returns {"status": "input", "text": ...} or {"status": "timeout"}.
     Input typed while nobody was waiting is queued, never lost.
     """
-    global _status
+    global _status, _pending
     with _lock:
         _status = "waiting"
     try:
@@ -106,6 +113,7 @@ def wait(timeout_seconds: float) -> dict:
     except queue.Empty:
         return {"status": "timeout"}
     with _lock:
+        _pending = 0
         _status = "thinking"
     return {"status": "input", "text": text}
 
@@ -132,6 +140,7 @@ def snapshot(since: int = 0) -> dict:
             "panel": _panel,
             "sheet": _sheet,
             "status": _status,
+            "pending": _pending > 0,
             "title": _title,
             "gauge": dict(_gauge),
         }
@@ -217,9 +226,10 @@ class _Handler(BaseHTTPRequestHandler):
         if not text:
             self._json({"error": "empty"}, 400)
             return
-        seq = _append("joueur", text)
-        _inbox.put(text)
-        self._json({"ok": True, "id": seq})
+    seq = _append("joueur", text)
+    _pending_inc()
+    _inbox.put(text)
+    self._json({"ok": True, "id": seq})
 
 
 def start(port: int = 8787) -> dict:
