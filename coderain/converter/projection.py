@@ -75,18 +75,19 @@ def derive(partition_dir: Path, root_dir: Path, save_slug: str,
     nodes = _load_node_ids(partition_dir)
     counts = {"nodes": 0, "records": 0, "conditions": 0}
 
-    # 1) nodes → locations registry, linked by slugs (potential, no triggers)
-    #    D-065: bodies lose their SEQUENCE lines ("If you..., go to N") — the
-    #    structured `liens` already carry the potential; echoed sequences are
-    #    what turned the play session back into a gamebook menu.
+    # 1) nodes → locations registry. ⛔ PAS d'attribut `links`: il ferait
+    #    co-assembler les scènes suivantes avec la scène courante — or le
+    #    corpus non atteint doit être PHYSIQUEMENT INERTIE dans le contexte
+    #    (SPEC-MVP critique 1). Le routage reste dans la partition
+    #    (front-matter des nodes): le Director le lit par outil, à la
+    #    transition, jamais d'avance.
     for meta in nodes:
-        liens = [str(l["cible_id"]) for l in meta.get("liens", [])]
         body = _strip_sequences(meta["_body"]).strip()
         store.upsert_entry("locations.md", Entry(
             title=f"{meta.get('titre', meta['id'])}",
             slug=meta["id"],
-            attrs={"links": ", ".join(liens),
-                   "altitude": str(meta.get("altitude", "scene"))},
+            attrs={"altitude": str(meta.get("altitude", "scene")),
+                   "weight": "light"},
             body=body))
         counts["nodes"] += 1
 
