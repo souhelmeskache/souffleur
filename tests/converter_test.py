@@ -363,4 +363,48 @@ except ValueError:
     pass
 print("   valideur §5 complet: exceptions signalées vs rouges vs mesures")
 
+# 8f — D-187: négation bornée non(<atome>), une seule profondeur
+p8f = _part_scen()
+nf = Node("sc-neg", "section", "SN", "body", "scene", anchors=[(0, 3)])
+nf.attach_scenario("objectif", debouches=[
+    {"id": "d-non-ok", "cible_id": "sc-neg",
+     "prerequis_etat": [{"type": "non",
+                         "atome": {"type": "entite_vivante",
+                                   "id": "sc-neg"}}]},
+    {"id": "d-non-flag", "ouvre_vers_md": "x",
+     "prerequis_etat": [{"type": "non",
+                         "atome": {"type": "flag", "nom": "porte"}}]}])
+p8f.nodes.append(nf)
+rep8f = validate_form.scenario_report(p8f)
+assert rep8f["erreurs"] == [], rep8f["erreurs"]
+assert rep8f["mesures"]["debouches_prerequis_testables"] == 2
+try:   # pas de logique composée: non(non(...)) interdit
+    nf.attach_scenario(debouches=[{"id": "d-non2", "cible_id": "sc-neg",
+                                   "prerequis_etat": [
+                                       {"type": "non",
+                                        "atome": {"type": "non",
+                                                  "atome": {
+                                                      "type": "flag",
+                                                      "nom": "x"}}}]}])
+    raise AssertionError("non(non(...)) doit lever (D-187)")
+except ValueError:
+    pass
+try:   # négation sans atome
+    nf.attach_scenario(debouches=[{"id": "d-non3", "cible_id": "sc-neg",
+                                   "prerequis_etat": [{"type": "non"}]}])
+    raise AssertionError("non() sans atome doit lever")
+except ValueError:
+    pass
+# l'id sous négation reste contrôlé: entite inconnue ⇒ rouge
+ng = Node("sc-neg-bad", "section", "SB", "body", "scene", anchors=[(0, 3)])
+ng.attach_scenario("objectif", debouches=[
+    {"id": "d-non-ghost", "cible_id": "sc-neg-bad",
+     "prerequis_etat": [{"type": "non",
+                         "atome": {"type": "entite_vivante",
+                                   "id": "ghost"}}]}])
+p8f.nodes.append(ng)
+assert any("prerequis id inconnu ghost" in e
+           for e in validate_form.scenario_report(p8f)["erreurs"])
+print("   D-187: négation bornée construite, contrôlée, bornée")
+
 print("\nCONVERTER P4 TESTS PASSED")

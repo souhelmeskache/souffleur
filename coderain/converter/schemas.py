@@ -21,17 +21,32 @@ RECORD_CLASSES = ("creature", "pnj", "objet", "lieu", "faction")
 SECRET_STATUTS = ("public", "suspect", "secret")
 PATCH_OPS = ("append", "prepend", "replace", "delete")
 PREREQUIS_TYPES = ("entite_vivante", "flag", "quete_etat")   # fiche SCÉNARIO §2
+NEGATION_TYPE = "non"   # D-187: non(<atome>), une seule profondeur
 DECLENCHEUR_TYPES = ("delai", "etat", "date")                # D-182
 ISSUES_PERTURBATION = ("transplantee", "abandonnee")         # D-120 §5.1
 
 
-def check_prerequis(raw, owner: str) -> dict:
+def check_prerequis(raw, owner: str, _depth: int = 0) -> dict:
     """prerequis_etat — mêmes primitives que le moteur (fiche SCÉNARIO §2):
-    entite_vivante(id) | flag(nom, valeur?) | quete_etat(id, etat)."""
-    if not isinstance(raw, dict) or raw.get("type") not in PREREQUIS_TYPES:
+    entite_vivante(id) | flag(nom, valeur?) | quete_etat(id, etat).
+    Négation bornée (D-187): non(<atome>) — une seule profondeur, pas de
+    logique composée (la conjonction reste la liste)."""
+    if not isinstance(raw, dict) or raw.get("type") not in PREREQUIS_TYPES \
+            + (NEGATION_TYPE,):
         raise ValueError(f"{owner}: prerequis type {raw.get('type')!r} "
-                         f"not in {PREREQUIS_TYPES}")
+                         f"not in {PREREQUIS_TYPES + (NEGATION_TYPE,)}")
     t = raw["type"]
+    if t == NEGATION_TYPE:
+        if _depth > 0:
+            raise ValueError(f"{owner}: non(non(...)) interdit — la négation "
+                             "porte sur UN atome, une seule profondeur "
+                             "(D-187)")
+        if not isinstance(raw.get("atome"), dict):
+            raise ValueError(f"{owner}: non() exige UN atome "
+                             f"{PREREQUIS_TYPES} (D-187)")
+        return {"type": t,
+                "atome": check_prerequis(raw["atome"], owner,
+                                         _depth + 1)}
     if t == "entite_vivante":
         if not raw.get("id"):
             raise ValueError(f"{owner}: entite_vivante requires id")

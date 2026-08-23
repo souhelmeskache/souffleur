@@ -182,8 +182,10 @@ def scenario_report(partition) -> dict:
             if d["prerequis_etat"]:
                 deb_test += 1
                 for p in d["prerequis_etat"]:
-                    pid = p.get("id")
-                    if p["type"] != "flag" and pid and pid not in ids:
+                    # D-187: la négation est transparente au contrôle d'ids
+                    atome = p["atome"] if p["type"] == "non" else p
+                    pid = atome.get("id")
+                    if atome["type"] != "flag" and pid and pid not in ids:
                         erreurs.append(f"debouche {d['id']}: prerequis id "
                                        f"inconnu {pid} (fiche §5.3)")
             elif d["condition_textuelle"].strip():
