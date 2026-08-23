@@ -231,6 +231,9 @@ $state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-J
 if (-not $state.PSObject.Properties['lanesLancees'])  { $state | Add-Member -NotePropertyName 'lanesLancees'  -NotePropertyValue @() -Force }
 if (-not $state.PSObject.Properties['fichesBannies']) { $state | Add-Member -NotePropertyName 'fichesBannies' -NotePropertyValue @() -Force }
 if (-not $state.PSObject.Properties['echecsParFiche']){ $state | Add-Member -NotePropertyName 'echecsParFiche'-NotePropertyValue ([pscustomobject]@{}) -Force }
+# I-278 : recus provisoires - rapports deja livres dont la stabilite du mtime n'est pas
+# encore confirmee (voir section 1 du tour). Tolerant un state anterieur qui ne le porte pas.
+if (-not $state.PSObject.Properties['rapportsAttente']) { $state | Add-Member -NotePropertyName 'rapportsAttente' -NotePropertyValue ([pscustomobject]@{}) -Force }
 
 function Save-State {
     # I-275 livrable 3 : une fiche que l'appelant VIENT DE RETIRER (echec constate de
@@ -629,6 +632,21 @@ function Invoke-TourCorps {
     $premiereFois = (-not $state.baselineFait)
 
     # ---- 1. Nouveaux rapports (definition declaree : LastWriteTimeUtc different de celui consigne)
+    # I-278 (double reveil differe) - chaque rapport surveille a TROIS etats :
+    #   inconnu          => evenement neuf, candidat au reveil ($nouveaux) ;
+    #   recu PROVISOIRE  => evenement DEJA livre une fois ($state.rapportsAttente) ; tant que
+    #                       son mtime bouge entre deux tours, c'est le MEME depot relu (le
+    #                       depositant finissait d'ecrire) : recu mis a jour, AUCUNE seconde
+    #                       session ; des qu'il tient un tour complet, recu finalise dans
+    #                       $state.rapports ;
+    #   recu FINAL       => $state.rapports, rien a signaler.
+    # Avant I-278, l'accuse de reception etait snapshotte AU MOMENT DU REVEIL : toute ecriture
+    # du depositant posterieure au tour rejouait l'evenement a chacun des tours suivants (cas
+    # reel 18:17 -> 18:33 du 2026-08-23 : rapport deja instruit par H-075, reveille une seconde
+    # fois des que le verrou meta est tombe - une session et une unite de budget perdues).
+    # Le recu differe ferme cette course SANS rien perdre d'un evenement vraiment nouveau
+    # (ecole I-276) : un refus de reveil (verrou meta, budget) ne consigne TOUJOURS rien,
+    # donc l'evenement non livre repart au tour suivant, inchange.
     $rapports = @(Get-ChildItem -LiteralPath $PostRoot -Filter 'rapport-*.md' -File |
                   Sort-Object LastWriteTimeUtc)
     $nouveaux = @()
@@ -636,12 +654,36 @@ function Invoke-TourCorps {
         $cle = $r.Name
         $val = $r.LastWriteTimeUtc.ToString('o')
         $connu = $state.rapports.PSObject.Properties[$cle]
-        if (-not $connu -or $connu.Value -ne $val) { $nouveaux += $r }
+        if ($connu -and $connu.Value -eq $val) { continue }
+        $attente = $state.rapportsAttente.PSObject.Properties[$cle]
+        if (-not $attente) { $nouveaux += $r ; continue }
+        if ($attente.Value -ne $val) {
+            # meme depot relu pendant la fenetre d'attente : recu provisoire mis a jour,
+            # JAMAIS de second reveil (c'est exactement ce rejouement que I-278 supprime).
+            $state.rapportsAttente.PSObject.Properties[$cle].Value = $val
+            if (-not $DryRun) { Save-State }
+            Write-VeilLog ("[I-278] '{0}' relu pendant la fenetre d'attente (deja reveille) - recu mis a jour SANS nouvelle session" -f $cle)
+        } else {
+            # mtime identique d'un tour au suivant : le depositant a fini d'ecrire - recu finalise.
+            $state.rapportsAttente.PSObject.Properties.Remove($cle)
+            $state.rapports | Add-Member -NotePropertyName $cle -NotePropertyValue $val -Force
+            if (-not $DryRun) { Save-State }
+            Write-VeilLog ("[I-278] recu stabilise pour '{0}' (mtime stable un tour complet) - clos sans session" -f $cle)
+        }
+    }
+    # entretien : recus provisoires dont le fichier a disparu (rapport supprime apres livraison)
+    foreach ($p in @($state.rapportsAttente.PSObject.Properties)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PostRoot $p.Name))) {
+            $state.rapportsAttente.PSObject.Properties.Remove($p.Name)
+            if (-not $DryRun) { Save-State }
+            Write-VeilLog ("[I-278] recu provisoire abandonne (rapport disparu) : {0}" -f $p.Name)
+        }
     }
 
     if ($premiereFois) {
         # Premier tour reel : l'etat existant est enregistre comme baseline - AUCUN reveil retroactif.
         foreach ($r in $rapports) { $state.rapports | Add-Member -NotePropertyName $r.Name -NotePropertyValue $r.LastWriteTimeUtc.ToString('o') -Force }
+        $state.rapportsAttente = [pscustomobject]@{}
         $state.baselineFait = $true
         Save-State
         Write-VeilLog ("baseline etablie : {0} rapports existants consignes, aucun reveil retroactif" -f $rapports.Count)
@@ -652,7 +694,9 @@ function Invoke-TourCorps {
             # pour les DEUX issues positives : dans les deux cas l'evenement est consomme.
             $issue = Invoke-EvenementMeta -Motif 'nouveau rapport' -Rapport $r.FullName
             if ($issue -and -not $DryRun) {
-                $state.rapports | Add-Member -NotePropertyName $r.Name -NotePropertyValue $r.LastWriteTimeUtc.ToString('o') -Force
+                # I-278 : recu PROVISOIRE (et non plus direct dans $state.rapports) - voir
+                # l'entete de cette section. Un refus ci-dessus ne consigne toujours rien.
+                $state.rapportsAttente | Add-Member -NotePropertyName $r.Name -NotePropertyValue $r.LastWriteTimeUtc.ToString('o') -Force
                 Save-State
             }
             if (-not $issue) { break }
