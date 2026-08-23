@@ -176,8 +176,16 @@ assert store7.rpg_state()["last_check"]["stat"] == "agility"
 print("7) legacy 'rpg' plan key accepted as the envelope")
 
 # ---- 8) per-stage model/API overrides build distinct clients ----
+# I-270: the 'openrouter' profile used to exist only in machine-local
+# config.yaml (gitignored), so fresh clones hit SystemExit here. The test now
+# declares the profile itself (hermetic, offline) instead of depending on the
+# machine; a real local profile, if present, is left untouched (setdefault).
 cfg2 = load_config()
 cfg2.generation["trinity_brain"] = True
+cfg2.raw["profiles"].setdefault("openrouter", {
+    "base_url": "https://openrouter.example/v1",
+    "model": "openrouter/some-model",
+})
 cfg2.raw["trinity"] = {
     "writer": {"profile": "openrouter", "model": "some/writer-model"},
     "director": {"model": "director-only-model"},   # model-only -> keep active profile
