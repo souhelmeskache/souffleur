@@ -1248,7 +1248,7 @@ def _assemble_text(player_action: str, budget_tokens: int,
                    recent_turns: int | None = None, max_secrets: int = 0,
                    wide_lore: bool = True, event_rules: bool = True,
                    secrets_window: int = SECRETS_WINDOW_TURNS,
-                   secrets: bool = True):
+                   secrets: bool = True, lore_include: set[str] | None = None):
     """Returns (text, info). info carries the guard's verdict — see the tools."""
     t0 = time.perf_counter()
     store = _require_store()
@@ -1266,7 +1266,8 @@ def _assemble_text(player_action: str, budget_tokens: int,
     win = secrets_window
     hist_narrow = history[-win:] if win > 0 else list(history)
     narrow_msgs = store.assemble(hist_narrow, player_action,
-                                 scenes_tail=tail, budget_tokens=budget_tokens)
+                                 scenes_tail=tail, budget_tokens=budget_tokens,
+                                 lore_include=lore_include)
     if not narrow_msgs:
         return "", {"degraded": False, "reason": "empty assemble"}
     narrow = narrow_msgs[0]["content"]
@@ -1320,7 +1321,8 @@ def _assemble_text(player_action: str, budget_tokens: int,
     note, public, degraded, echoes = "narrow-only", "narrow-only", False, []
     if wide_lore:
         wide_msgs = store.assemble(_wide_history(store), player_action,
-                                   scenes_tail=tail, budget_tokens=budget_tokens)
+                                   scenes_tail=tail, budget_tokens=budget_tokens,
+                                   lore_include=lore_include)
         wide = wide_msgs[0]["content"] if wide_msgs else ""
         wide_chars = len(wide)
         if wide:
@@ -1398,7 +1400,9 @@ def _assemble_text(player_action: str, budget_tokens: int,
                   "lore_blocks": served, "secrets": len(allowed),
                   "secrets_suppressed": not secrets,
                   "hidden_total": len(hidden), "echoes": len(echoes),
-                  "secrets_window": win}
+                  "secrets_window": win,
+                  "lore_selected": (len(lore_include)
+                                    if lore_include is not None else None)}
 
 
 
@@ -1407,7 +1411,8 @@ def assemble_context(player_action: str, budget_tokens: int = 120000,
                      recent_turns: int | None = None, max_secrets: int = 0,
                      wide_lore: bool = True, event_rules: bool = True,
                      secrets_window: int = SECRETS_WINDOW_TURNS,
-                     secrets: bool = True) -> str:
+                     secrets: bool = True,
+                     lore_include: list[str] | None = None) -> str:
     """Build the full Writer context from memory + lorebook activation.
 
     This is the PROACTIVE memory system: given the player's action, it activates
@@ -1472,10 +1477,20 @@ def assemble_context(player_action: str, budget_tokens: int = 120000,
     secrets defaults True for the same reason: the reader of this text is also
     the one deciding, and a decider stripped of the campaign's unfired twists
     plans against a world it cannot see. False drops the Secrets section
-    entirely — see assemble_context_to_file, which is where that belongs."""
+    entirely — see assemble_context_to_file, which is where that belongs.
+
+    lore_include is the CAMERA'S TRANCHE (the selection stage): the slugs the
+    Director judged to serve THIS scene. None (default) = no tranche, the
+    activation decides alone — the pre-camera behavior. A list restricts the
+    served lore to those slugs (forced entries — pinned/critical — stay in:
+    that contract is the author's, not the camera's). Call context_candidates
+    first: it reports what the activation WOULD serve, at no LLM cost."""
     text, _info = _assemble_text(player_action, budget_tokens, recent_turns,
                                  max_secrets, wide_lore, event_rules,
-                                 secrets_window, secrets)
+                                 secrets_window, secrets,
+                                 lore_include=(set(lore_include)
+                                               if lore_include is not None
+                                               else None))
     return text
 
 
@@ -1485,7 +1500,8 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
                              max_secrets: int = 0, wide_lore: bool = True,
                              event_rules: bool = False,
                              secrets_window: int = SECRETS_WINDOW_TURNS,
-                             secrets: bool = False) -> dict:
+                             secrets: bool = False,
+                             lore_include: list[str] | None = None) -> dict:
     """Same as assemble_context, but WRITES the context to a file and returns
     only {path, chars, degraded, ...} — the text itself never enters the calling
     agent's context window.
@@ -1541,15 +1557,55 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
     that its value belongs to the author. It still selects which twists WOULD
     have been authorised, so it still governs what the guard lets through.
 
-    The file is overwritten every turn and lives outside any save folder."""
+    The file is overwritten every turn and lives outside any save folder.
+
+    lore_include: the CAMERA'S TRANCHE — see assemble_context. The Director
+    calls context_candidates first (the documentaliste's report), then names
+    here the slugs that serve THIS scene. None keeps the blind montage."""
     text, info = _assemble_text(player_action, budget_tokens, recent_turns,
                                 max_secrets, wide_lore, event_rules,
-                                secrets_window, secrets)
+                                secrets_window, secrets,
+                                lore_include=(set(lore_include)
+                                              if lore_include is not None
+                                              else None))
     out_dir = ROOT / ".turn"
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "context.md"
     out.write_text(text, encoding="utf-8")
     return {"path": str(out), "chars": len(text), **info}
+
+
+@mcp.tool()
+def context_candidates(player_action: str,
+                       budget_tokens: int = 120000) -> dict:
+    """The documentaliste's report for the SELECTION stage: what the lorebook
+    activation WOULD serve for this action, as metadata only — slug, registry,
+    title, size in chars, whether the entry is forced (pinned/critical), plus
+    the hidden entries that activated, flagged `hidden`.
+
+    This is the cheap half of the camera (lookup by function, deterministic,
+    no LLM): it REPORTS candidates. Choosing which ones serve THIS scene is a
+    JUDGMENT, and it belongs to the Director — pass the chosen slugs to
+    assemble_context_to_file as `lore_include`.
+
+    ⛔ This report feeds the DIRECTOR only (it names hidden entries). It must
+    never reach the narrator or the player.
+
+    Selection is RETIRING as much as ADDING (anti-saturation): a briefing that
+    grows under this stage has moved the saturation from one organ to another.
+    None/omitted `lore_include` on the assemble tools keeps the old blind
+    montage — the tranche is opt-in."""
+    store = _require_store()
+    rows = store.lore_candidates(_wide_history(store), player_action,
+                                 budget_tokens=budget_tokens)
+    visible = [r for r in rows if not r.get("hidden")]
+    hidden = [r for r in rows if r.get("hidden")]
+    return {"candidates": rows,
+            "n_visible": len(visible),
+            "n_forced": sum(1 for r in visible if r.get("forced")),
+            "chars_if_all_served": sum(r["chars"] for r in visible),
+            "n_hidden_activated": len(hidden),
+            "hidden_chars": sum(r["chars"] for r in hidden)}
 
 
 # ── SillyTavern card import ──────────────────────────────────────

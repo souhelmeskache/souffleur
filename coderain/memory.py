@@ -1226,9 +1226,125 @@ class MemoryStore:
                 picked_groups.add(g)
         return used_lore
 
+    def _activate_lore(self, haystack: str, player_now: str,
+                       recent_texts: list[str], turn_index: int, seed: int,
+                       retriever, budget_tokens: int,
+                       lore_include: set[str] | None = None):
+        """The lorebook half of assemble(): scan every gated entry against the
+        haystack, collapse inclusion groups, compete for the lore budget, run
+        the one recursion pass. Returns (picked, hidden_hits, matched_slugs,
+        linked_wanted, ordered) — `ordered` is the surviving visible entries in
+        score order, the raw material of a selection report.
+
+        `lore_include` is the CAMERA's tranche (the Director's judgment on which
+        activated entries serve THIS scene): when given, an activated entry that
+        is not named and not forced (pinned/critical) is dropped BEFORE the
+        budget competition. Forced entries stay unfilterable — "always in
+        context" is an authored contract, and a tranche that could silence one
+        would let a selection mistake masquerade as an authoring choice."""
+        matched_slugs = set()
+        candidates: list[tuple[float, str, Entry]] = []   # (score, rel, entry)
+        hidden_hits: list[Entry] = []
+        by_slug: dict[str, tuple[str, Entry]] = {}
+        for rel in self.gated_registries():
+            for e in self.entries(rel):
+                by_slug.setdefault(e.slug, (rel, e))
+                always = e.pinned() or e.weight() == "critical"
+                hit = always or self._entry_activates(
+                    e, haystack, seed, turn_index, recent_texts, player_now)
+                if not hit:
+                    continue
+                if e.hidden():
+                    hidden_hits.append(e)
+                    continue
+                score = e.weight_factor() * e.importance + (100 if always else 0)
+                candidates.append((score, rel, e))
+        # ST-17: semantic-triggered lore. Only when at least one entry opts into
+        # `semantic: true` do we spend an extra retriever pass here — kept separate
+        # from the "Recalled" pass below so the common case stays a single call and
+        # the Recalled top-K isn't diluted by already-activated slugs. Promotion
+        # honors the HARD gates (hidden stays hidden, `triggers_not` suppresses,
+        # `chance:0` never fires, `delay` holds) but not the keyword gate itself —
+        # activating without keywords is the whole point of semantic triggering.
+        if retriever is not None and any(e.semantic()
+                                         for _s, (_r, e) in by_slug.items()):
+            already = {c[2].slug for c in candidates}
+            exclude = {e.slug for e in self.entries("player.md")} | already
+            for e in retriever(haystack, exclude):
+                if not (e.semantic() and not e.hidden() and e.slug in by_slug):
+                    continue
+                if e.slug in already or e.chance() == 0:
+                    continue
+                dly = e.delay()
+                if dly is not None and turn_index < dly:
+                    continue
+                if any(trigger_hit(tok, haystack) for tok in e.triggers_not()):
+                    continue
+                rel = by_slug[e.slug][0]
+                candidates.append((e.weight_factor() * e.importance, rel, e))
+                already.add(e.slug)
+        # ST-12: mutually-exclusive inclusion groups collapse to one winner each
+        # (weighted) before the budget competition.
+        candidates = self._collapse_groups(candidates, seed, turn_index)
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
+        picked: dict[str, list[Entry]] = {}
+        linked_wanted: list[str] = []
+        used_lore = 0
+        ordered: list[tuple[float, str, Entry]] = []
+        for score, rel, e in candidates:
+            if lore_include is not None and e.slug not in lore_include \
+                    and not (e.pinned() or e.weight() == "critical"):
+                continue          # the tranche: not selected for this scene
+            block = len(e.render())
+            if score < 100 and used_lore + block > lore_budget:
+                continue          # budget cutoff hits activated entries, never pinned
+            picked.setdefault(rel, []).append(e)
+            matched_slugs.add(e.slug)
+            used_lore += block
+            linked_wanted += [s for s in e.links() if s in by_slug]
+            ordered.append((score, rel, e))
+        # ST-14: one recursion pass — bodies of `recurse: true` entries can trigger
+        # further entries (hard depth cap of 1; the extras never recurse again).
+        used_lore = self._recursion_pass(
+            picked, matched_slugs, by_slug, seed, turn_index,
+            recent_texts, player_now, used_lore, lore_budget)
+        return picked, hidden_hits, matched_slugs, linked_wanted, ordered
+
+    def lore_candidates(self, history: list[dict], player_input: str,
+                        budget_tokens: int = 8000, retriever=None) -> list[dict]:
+        """The documentaliste's report: WHAT the activation WOULD serve, before
+        anyone judges whether it serves THIS scene. Same scan, same groups, same
+        budget as assemble() — metadata only, no bodies, no assembly. Cheap
+        (CPU only), deterministic, off the latency path.
+
+        Hidden entries that activated are reported too, flagged `hidden: true`:
+        this report feeds the Director, who holds the secrets. It must never be
+        shown to the player or handed to the narrator."""
+        all_turns = self.turns()
+        turn_index = len(all_turns)
+        recent_texts = [t.get("text", "").lower() for t in all_turns]
+        haystack = (" ".join(t["text"] for t in history) + " " + player_input).lower()
+        rpg_block = self.world_state().get("rpg")
+        try:
+            seed = int(rpg_block.get("seed", 0)) if isinstance(rpg_block, dict) else 0
+        except (TypeError, ValueError):
+            seed = 0
+        picked, hidden_hits, _ms, _lw, ordered = self._activate_lore(
+            haystack, player_input.lower(), recent_texts, turn_index, seed,
+            retriever, budget_tokens)
+        rows = [{"slug": e.slug, "registry": rel, "title": e.title,
+                 "chars": len(e.render()),
+                 "forced": bool(e.pinned() or e.weight() == "critical")}
+                for _score, rel, e in ordered]
+        rows += [{"slug": e.slug, "registry": "", "title": e.title,
+                  "chars": len(e.render()), "hidden": True}
+                 for e in hidden_hits]
+        return rows
+
     def assemble(self, history: list[dict], player_input: str,
                  scenes_tail: int = 4, budget_tokens: int = 8000,
-                 retriever=None) -> list[dict]:
+                 retriever=None, lore_include: set[str] | None = None) -> list[dict]:
         idx = self.index()
         writer_rules = self.read("writer-rules.md").strip()
         haystack = (" ".join(t["text"] for t in history) + " " + player_input).lower()
@@ -1316,68 +1432,10 @@ class MemoryStore:
             seed = int(rpg_block.get("seed", 0)) if isinstance(rpg_block, dict) else 0
         except (TypeError, ValueError):
             seed = 0
-        matched_slugs = set()
-        candidates: list[tuple[float, str, Entry]] = []   # (score, rel, entry)
-        hidden_hits: list[Entry] = []
-        by_slug: dict[str, tuple[str, Entry]] = {}
-        for rel in self.gated_registries():
-            for e in self.entries(rel):
-                by_slug.setdefault(e.slug, (rel, e))
-                always = e.pinned() or e.weight() == "critical"
-                hit = always or self._entry_activates(
-                    e, haystack, seed, turn_index, recent_texts, player_now)
-                if not hit:
-                    continue
-                if e.hidden():
-                    hidden_hits.append(e)
-                    continue
-                score = e.weight_factor() * e.importance + (100 if always else 0)
-                candidates.append((score, rel, e))
-        # ST-17: semantic-triggered lore. Only when at least one entry opts into
-        # `semantic: true` do we spend an extra retriever pass here — kept separate
-        # from the "Recalled" pass below so the common case stays a single call and
-        # the Recalled top-K isn't diluted by already-activated slugs. Promotion
-        # honors the HARD gates (hidden stays hidden, `triggers_not` suppresses,
-        # `chance:0` never fires, `delay` holds) but not the keyword gate itself —
-        # activating without keywords is the whole point of semantic triggering.
-        if retriever is not None and any(e.semantic()
-                                         for _s, (_r, e) in by_slug.items()):
-            already = {c[2].slug for c in candidates}
-            exclude = {e.slug for e in player} | already
-            for e in retriever(haystack, exclude):
-                if not (e.semantic() and not e.hidden() and e.slug in by_slug):
-                    continue
-                if e.slug in already or e.chance() == 0:
-                    continue
-                dly = e.delay()
-                if dly is not None and turn_index < dly:
-                    continue
-                if any(trigger_hit(tok, haystack) for tok in e.triggers_not()):
-                    continue
-                rel = by_slug[e.slug][0]
-                candidates.append((e.weight_factor() * e.importance, rel, e))
-                already.add(e.slug)
-        # ST-12: mutually-exclusive inclusion groups collapse to one winner each
-        # (weighted) before the budget competition.
-        candidates = self._collapse_groups(candidates, seed, turn_index)
-        candidates.sort(key=lambda c: c[0], reverse=True)
-        lore_budget = budget_tokens * 4 * 0.45   # chars; lore may use just under half
-        picked: dict[str, list[Entry]] = {}
-        linked_wanted: list[str] = []
-        used_lore = 0
-        for score, rel, e in candidates:
-            block = len(e.render())
-            if score < 100 and used_lore + block > lore_budget:
-                continue          # budget cutoff hits activated entries, never pinned
-            picked.setdefault(rel, []).append(e)
-            matched_slugs.add(e.slug)
-            used_lore += block
-            linked_wanted += [s for s in e.links() if s in by_slug]
-        # ST-14: one recursion pass — bodies of `recurse: true` entries can trigger
-        # further entries (hard depth cap of 1; the extras never recurse again).
-        used_lore = self._recursion_pass(
-            picked, matched_slugs, by_slug, seed, turn_index,
-            recent_texts, player_now, used_lore, lore_budget)
+        picked, hidden_hits, matched_slugs, linked_wanted, _ordered = \
+            self._activate_lore(haystack, player_now, recent_texts, turn_index,
+                                seed, retriever, budget_tokens,
+                                lore_include=lore_include)
         for rel in self.gated_registries():
             if rel in picked:
                 label = rel.replace(".md", "").replace("-", " ").title()
