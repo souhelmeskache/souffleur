@@ -9,7 +9,8 @@ exceptions entry, never an improvisation.
 from __future__ import annotations
 
 from ..llm import emit_json_ex
-from .schemas import Node, Record, RollTable, Secret, Patch, Partition
+from .schemas import (Node, Record, RollTable, Secret, Patch, Partition,
+                      Evenement, Aventure)
 
 SYSTEM = """You convert ONE unit of a tabletop RPG module into structured
 objects. Fidelity rules:
@@ -18,12 +19,28 @@ objects. Fidelity rules:
   offsets inside this unit's text that it translates. No anchor = invalid.
 - Creatures/NPCs: emit {"records": [...]} with their RAW source stats in
   "stats_source" plus a "ruleset" field ("2e" etc.). DO NOT convert numbers.
+  If the source states what an entity is FOR (function, charge/mood,
+  agenda, reach/scope), carry it verbatim in the transverse fields
+  {fonction, charge, agenda, portee}; anything not stated stays empty —
+  NEVER invent it. If a later event depends on that entity, list it in
+  "fonctions_aval".
 - Readable prose: emit {"nodes": [...]} with type chapitre|section|scene|
-  read_aloud and altitude univers|arc|scene.
+  read_aloud and altitude univers|arc|scene. If a node is the module's END,
+  convert it into an exit hinge (D-123): charniere_sortie:
+  {ouvre_vers_md, prerequis_etat} — NEVER "the end".
 - Rollable tables: emit {"tables": [...]} with de:"1d20" and contiguous ranges.
 - Hidden/DM-only information that can be burned: emit {"secrets": [...]} with
   statut public|suspect|secret, porteurs (entity ids), revelation
   {declencheur, node_cible}, consequence_si_brule.
+- Predetermined world events ("if the PCs do nothing, X happens by ..."),
+  deadlines, laws without spatial limit: emit {"evenements": [...]} with
+  rubrique "trajectoire" or "condition", declencheur {type:
+  delai|etat|date, valeur}, once:true, description_md, consequences:[md],
+  perturbations [{condition_etat, porteur_cible_id?, issue:
+  transplantee|abandonnee}] — issue must CHANGE the course (transplanted to
+  another bearer, or abandoned), never merely delay it; if the source gives
+  no perturbation condition, use [] — never invent one. CONVERT what the
+  module states; NEVER create events the module does not contain.
 Return ONLY a JSON object with any of those keys (empty object if nothing)."""
 
 
@@ -36,8 +53,10 @@ def _anchors(raw, uid) -> list[tuple[int, int]]:
 
 def _validate(obj: dict, unit, tables: "RuleTablesLike") -> dict:
     out: dict = {"nodes": [], "records": [], "tables": [], "secrets": [],
-                 "patches": [], "raw_stats": []}
+                 "patches": [], "raw_stats": [], "evenements": [],
+                 "exceptions": []}
     for n in obj.get("nodes", []):
+        cs = n.get("charniere_sortie")
         out["nodes"].append(Node(
             nid=str(n["id"]), type_=str(n["type"]), titre=str(n.get("titre", "")),
             corps_md=str(n["corps_md"]), altitude=str(n["altitude"]),
@@ -45,14 +64,19 @@ def _validate(obj: dict, unit, tables: "RuleTablesLike") -> dict:
                     "condition_textuelle": str(l.get("condition_textuelle", ""))}
                    for l in n.get("liens", [])],
             anchors=_anchors(n, f"node {n.get('id')}"),
+            charniere_sortie=cs,
         ))
     for r in obj.get("records", []):
         anchors = _anchors(r, f"record {r.get('id')}")
         stats_source = r.get("stats_source") or {}
         converted = tables.convert_stats(stats_source)
+        tr = {k: str(r[k]) for k in ("fonction", "charge", "agenda", "portee")
+              if r.get(k)}
         out["records"].append(Record(
             rid=str(r["id"]), classe=str(r["classe"]), nom=str(r["nom"]),
             stats_5e=converted, anchors=anchors, tags=r.get("tags"),
+            transverse=tr,
+            fonctions_aval=[str(x) for x in (r.get("fonctions_aval") or [])],
         ))
         if r.get("ruleset") and str(r["ruleset"]) != "5e":
             out["raw_stats"].append({"id": str(r["id"]),
@@ -80,7 +104,46 @@ def _validate(obj: dict, unit, tables: "RuleTablesLike") -> dict:
                                     operation=str(p["operation"]),
                                     payload=str(p.get("payload", "")),
                                     cause=str(p.get("cause", ""))))
+    for e in obj.get("evenements", []):
+        anchors = _anchors(e, f"evenement {e.get('id')}")
+        perturbations = e.get("perturbations") or []
+        if not perturbations and e.get("rubrique") == "trajectoire":
+            out["exceptions"].append(
+                f"evenement {e.get('id')}: perturbations [] — aucune "
+                "condition de perturbation fournie par la source")
+        try:
+            out["evenements"].append(Evenement(
+                eid=str(e["id"]),
+                description_md=str(e["description_md"]),
+                declencheur={"type": str((e.get("declencheur") or {})
+                                         .get("type", "etat")),
+                             "valeur": str((e.get("declencheur") or {})
+                                           .get("valeur", ""))},
+                altitude=str(e.get("altitude", "adventure")),
+                consequences=[str(c) for c in (e.get("consequences") or [])],
+                perturbations=perturbations,
+                once=bool(e.get("once", True)),
+                anchors=anchors,
+                rubrique=str(e.get("rubrique", "trajectoire")),
+            ))
+        except ValueError as ex:
+            # garde anti-rail violée par la sortie LLM: signalé, jamais corrigé
+            out["exceptions"].append(f"{unit.uid} evenement {e.get('id')}: {ex}")
     return out
+
+
+def absorb_aventure(partition: Partition, evenements: list) -> None:
+    """Assemble/étend l'étage aventure d'une partition à partir des
+    Evenements produits par la route LLM (triés par rubrique)."""
+    if not evenements:
+        return
+    if partition.aventure is None:
+        partition.aventure = Aventure([], [], "")
+    for e in evenements:
+        if e.rubrique == "condition":
+            partition.aventure.conditions.append(e)
+        else:
+            partition.aventure.trajectoire.append(e)
 
 
 def convert_unit(llm, unit_text: str, unit, partition: Partition,

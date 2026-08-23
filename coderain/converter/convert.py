@@ -13,11 +13,12 @@ from pathlib import Path
 
 from .schemas import Manifest, Partition, Unit
 from .ruletables import RuleTables, ConversionException
+from .semantic import absorb_aventure
 from . import segmentation, buckets, semantic
 from . import validate_form, validate_fidelity, exceptions as exc_report
 from .emit import write_partition
 
-VERSION_CONVERTISSEUR = "0.1.0"
+VERSION_CONVERTISSEUR = "0.3.0"   # D-178: étage aventure
 
 
 class TokenMeter:
@@ -95,6 +96,9 @@ def convert_module(source_text: str, titre: str, structures: list[str],
             partition.tables += res["tables"]
             partition.secrets += res["secrets"]
             partition.patches += res["patches"]
+            if res.get("evenements"):
+                absorb_aventure(partition, res["evenements"])
+            rule_exceptions.extend(res.get("exceptions", []))
 
         for i in range(0, len(units), semantic.BATCH_SIZE):
             chunk = [(u, source_text[u.start:u.end])

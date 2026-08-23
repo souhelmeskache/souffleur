@@ -60,4 +60,78 @@ def validate_form(partition, partition_dir=None) -> list[str]:
         from pathlib import Path
         if not (Path(partition_dir) / "directeur.md").exists():
             errors.append("directeur.md absent — pièce standard (MRPG-D-177)")
+
+    # 7) D-178 étage aventure — extensions de la fiche méta 2026-08-23
+    if partition.aventure is None:
+        if partition.nodes:
+            errors.append("étage aventure absent (trajectoire/conditions/"
+                          "charnière) — non négociable pour P2 "
+                          "(rapport conformité §2.1)")
+    else:
+        ev_ids = {e.id for e in partition.aventure.events()}
+        # 7.1 tout evenement est ancré
+        for e in partition.aventure.events():
+            if not e.anchors:
+                errors.append(f"evenement {e.id}: sans ancre source (§6.1)")
+            for p in e.perturbations:
+                pid = p.get("porteur_cible_id")
+                if pid and pid not in ids and pid not in ev_ids:
+                    errors.append(f"evenement {e.id}: porteur_cible_id "
+                                  f"inconnu {pid}")
+                if not p.get("issue"):
+                    errors.append(
+                        f"evenement {e.id}: perturbation sans issue valide "
+                        "(garde anti-rail D-120 §5.1)")
+        # 7.4 fonctions_aval référencés existent
+        for r in partition.records:
+            for fid in getattr(r, "fonctions_aval", []):
+                if fid not in ev_ids:
+                    errors.append(f"record {r.id}: fonctions_aval inconnu "
+                                  f"{fid}")
+        # 7.3 LE DERNIER node (ordre de partition) sans charniere_sortie
+        #     ni lien sortant ⇒ rouge (fiche §6.3 / D-123 §6)
+        if partition.nodes:
+            last = partition.nodes[-1]
+            if not last.liens \
+                    and not getattr(last, "charniere_sortie", None):
+                errors.append(
+                    f"node {last.id}: dernier node sans lien sortant ni "
+                    "charniere_sortie (D-123 §6)")
+        # charnière d'aventure obligatoire — au niveau de l'étage OU portée
+        # par un node terminal (fiche D-178 §4, D-123 §6)
+        has_charniere_node = any(getattr(n, "charniere_sortie", None)
+                                 for n in partition.nodes)
+        if not partition.aventure.charniere_md.strip() \
+                and not has_charniere_node:
+            errors.append("aventure: charnière de sortie vide (D-123 §6)")
     return errors
+
+
+def adventure_exceptions(partition) -> list[str]:
+    """Lignes d'exceptions propres à l'étage aventure (fiche §6 : les
+    absences fournies ni par la source ni par l'auteur sont SIGNALÉES,
+    jamais improvisées). Retourne une liste de chaînes."""
+    out: list[str] = []
+    if partition.aventure is None:
+        return out
+    av = partition.aventure
+    out.extend(av.warnings)
+    for e in av.events():
+        if not e.perturbations and e.rubrique == "trajectoire":
+            line = (f"evenement {e.id}: perturbations [] — aucune condition "
+                    "de perturbation fournie par la source")
+            if line not in out:
+                out.append(line)
+        if not str(e.declencheur.get("valeur", "")).strip():
+            line = f"evenement {e.id}: declencheur sans valeur fournie"
+            if line not in out:
+                out.append(line)
+    for r in partition.records:
+        if r.classe in ("pnj", "faction") and (
+                not r.transverse.get("agenda")
+                or not r.transverse.get("portee")):
+            line = (f"record {r.id} ({r.classe}): agenda/portee absents — "
+                    "non fournis par la source")
+            if line not in out:
+                out.append(line)
+    return out

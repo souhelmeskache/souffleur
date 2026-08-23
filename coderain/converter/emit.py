@@ -31,15 +31,20 @@ def write_partition(partition, out_dir: Path) -> Path:
 
     if partition.aventure is not None:
         av = partition.aventure
-        fm = _front_matter({"etage": "adventure", "chantier": "D-178",
-                            "trajectoire": av.trajectoire,
-                            "conditions": av.conditions})
+        fm = _front_matter({
+            "etage": "adventure", "chantier": "D-178",
+            # schéma evenement FIGÉ par D-182 (actée 2026-08-23)
+            "schema_evenement": "fige-D-182",
+            "trajectoire": [e.to_dict() for e in av.trajectoire],
+            "conditions": [e.to_dict() for e in av.conditions]})
         body = ("## Charnière de sortie\n\n" + av.charniere_md + "\n")
         (out_dir / "aventure.md").write_text(fm + body, encoding="utf-8")
 
     for n in partition.nodes:
         fm = _front_matter({"id": n.id, "type": n.type, "titre": n.titre,
                             "altitude": n.altitude, "liens": n.liens,
+                            **({"charniere_sortie": n.charniere_sortie}
+                               if getattr(n, "charniere_sortie", None) else {}),
                             "anchors": n.anchors})
         (out_dir / "nodes" / f"{n.id}.md").write_text(fm + n.corps_md + "\n",
                                                       encoding="utf-8")
@@ -47,7 +52,9 @@ def write_partition(partition, out_dir: Path) -> Path:
         fm = _front_matter({"id": r.id, "classe": r.classe, "nom": r.nom,
                             "tags": r.tags, "anchors": r.anchors,
                             **({"transverse": r.transverse}
-                               if r.transverse else {})})
+                               if r.transverse else {}),
+                            **({"fonctions_aval": r.fonctions_aval}
+                               if getattr(r, "fonctions_aval", None) else {})})
         body = json.dumps(r.stats_5e, ensure_ascii=False, indent=1)
         (out_dir / "records" / f"{r.id}.md").write_text(fm + body + "\n",
                                                         encoding="utf-8")
@@ -72,11 +79,19 @@ def write_partition(partition, out_dir: Path) -> Path:
 
     # machine-readable mirror of everything except prose bodies
     index = {
-        "nodes": [{"id": n.id, "type": n.type, "altitude": n.altitude} for n in partition.nodes],
-        "records": [{"id": r.id, "classe": r.classe} for r in partition.records],
+        "nodes": [{"id": n.id, "type": n.type, "altitude": n.altitude,
+                   **({"charniere_sortie": True}
+                      if getattr(n, "charniere_sortie", None) else {})}
+                  for n in partition.nodes],
+        "records": [{"id": r.id, "classe": r.classe,
+                     "transverse": bool(getattr(r, "transverse", None))}
+                    for r in partition.records],
         "tables": [{"id": t.id, "de": t.de} for t in partition.tables],
         "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
-        "aventure": ({"etage": "adventure"} if partition.aventure else None),
+        "aventure": ({"etage": "adventure",
+                      "trajectoire": len(av.trajectoire),
+                      "conditions": len(av.conditions)}
+                     if partition.aventure else None),
     }
     (out_dir / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=1),
                                         encoding="utf-8")

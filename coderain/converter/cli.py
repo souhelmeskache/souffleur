@@ -35,6 +35,7 @@ from coderain.converter.emit import write_partition          # noqa: E402
 from coderain.converter.exceptions import build, render_md, write_report  # noqa: E402
 from coderain.converter.ruletables import RuleTables         # noqa: E402
 from coderain.converter.schemas import Manifest, Partition, Record  # noqa: E402
+from coderain.converter.validate_form import adventure_exceptions  # noqa: E402
 
 
 def _extract_text(path: Path) -> str:
@@ -75,7 +76,7 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
         hash_source=__import__("hashlib").sha256(
             text.encode("utf-8")).hexdigest(),
         date_conversion=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        version_convertisseur="0.1.0+local")
+        version_convertisseur="0.3.0+local")  # D-178: étage aventure
 
     partition = Partition(manifest)
     tables_rule = RuleTables("5e")
@@ -101,14 +102,18 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
                     raw["id"], raw["classe"], raw["nom"],
                     {**raw["stats"], "nom": raw["nom"]}, [anchor],
                     tags=raw.get("tags"),
-                    transverse=raw.get("transverse")))
+                    transverse=raw.get("transverse"),
+                    fonctions_aval=raw.get("fonctions_aval")))
             break
 
     checks = extract_checks(text, units)
 
     # adventure stage (D-178): judgment supplied as aventure-auteur.json in
-    # the corpus home — trajectoire + perturbations, world conditions with
-    # their triggers, and the exit converted into a hinge (never an end)
+    # the corpus home — trajectoire + perturbations structurées, world
+    # conditions with their triggers, and the exit converted into a hinge
+    # (never an end). Inherited shapes convert WITH SIGNALLED LOSS: every
+    # missing field lands in the exceptions report (fiche §6).
+    adventure_rule_exceptions: list[str] = []
     for candidate in (CORPUS / "aventure-auteur.json",
                       src.parent / "aventure-auteur.json"):
         if candidate.exists():
@@ -117,6 +122,24 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
             partition.aventure = Aventure(
                 raw.get("trajectoire", []), raw.get("conditions", []),
                 raw.get("charniere_md", ""))
+            adventure_rule_exceptions = list(partition.aventure.warnings)
+            # charnières de sortie portées par des nodes terminaux
+            # (fiche D-178 §4) — judgement auteur, application déterministe
+            for cs in raw.get("charniere_sorties", []):
+                nid = str(cs.get("node_id", ""))
+                match = next((n for n in partition.nodes if n.id == nid),
+                             None)
+                if match is None:
+                    adventure_rule_exceptions.append(
+                        f"charniere_sortie: node cible inconnu {nid}")
+                    continue
+                try:
+                    match.charniere_sortie = {
+                        "ouvre_vers_md": str(cs["ouvre_vers_md"]),
+                        "prerequis_etat": str(cs["prerequis_etat"])}
+                except KeyError as ke:
+                    adventure_rule_exceptions.append(
+                        f"charniere_sortie {nid}: champ manquant {ke}")
             break
 
     write_partition(partition, out_dir)
@@ -124,12 +147,21 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
     from .directeur import generate as gen_director
     gen_director(out_dir)
 
+    # dédoublonnage en préservant l'ordre: adventure_exceptions(partition)
+    # ré-inclut déjà av.warnings
+    seen: set[str] = set()
+    merged_adventure_exceptions = []
+    for line in (adventure_rule_exceptions
+                 + adventure_exceptions(partition)):
+        if line not in seen:
+            seen.add(line)
+            merged_adventure_exceptions.append(line)
     report = build(manifest.to_dict(),
                    validate_form.validate_form(partition, out_dir),
                    coverage := validate_fidelity.coverage_report(
                        units, [], len(text)),
                    validate_fidelity.mass_report(text, units, partition),
-                   [], [], 0)
+                   [], merged_adventure_exceptions, 0)
     rp = write_report(report, out_dir / "rapport-conversion.json")
     (out_dir / "rapport-conversion.md").write_text(render_md(report),
                                                    encoding="utf-8")

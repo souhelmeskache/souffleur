@@ -7,7 +7,7 @@ object carries source anchors, and the validators check coverage without ever
 requiring a human to read the module.
 """
 from .schemas import (Partition, Manifest, Node, Record, RollTable, Secret,
-                      Patch, Unit, Aventure)
+                      Patch, Unit, Aventure, Evenement)
 from . import ruletables, annexe_a, segmentation, buckets, semantic
 from . import emit, validate_form, validate_fidelity, exceptions
 from .convert import convert_module

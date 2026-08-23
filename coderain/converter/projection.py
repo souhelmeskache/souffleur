@@ -115,14 +115,37 @@ def derive(partition_dir: Path, root_dir: Path, save_slug: str,
         front, _body = _split_front(av_path.read_text(encoding="utf-8"))
         meta = json.loads(front) if front else {}
         for i, cond in enumerate(meta.get("conditions", [])):
+            dec = cond.get("declencheur") or {}
+            dec_txt = (str(dec.get("valeur", "")) if isinstance(dec, dict)
+                       else str(dec))
             store.upsert_entry("locations.md", Entry(
                 title=f"Condition de monde #{i + 1}",
-                slug=f"cond-monde-{i + 1}",
+                slug=str(cond.get("id") or f"cond-monde-{i + 1}"),
                 attrs={"triggers_all": ", ".join(cond.get("triggers_all", []))
-                       or cond.get("declencheur", ""),
+                       or dec_txt,
                        "weight": "heavy"},
                 body=str(cond.get("description_md", ""))))
             counts["conditions"] += 1
+        # trajectoire par défaut (D-120) — POTENTIEL pour le Director,
+        # jamais auto-déclenchée (garde anti-rail): chaque événement porte
+        # ses perturbations et l'état qui les déclenche
+        for ev in meta.get("trajectoire", []):
+            perts = "; ".join(
+                f"{p.get('condition_etat', '?')} ⇒ {p.get('issue', 'issue?')}"
+                for p in ev.get("perturbations", [])) or "(aucune fournie)"
+            store.upsert_entry("locations.md", Entry(
+                title=f"Trajectoire #{ev.get('id', '?')}",
+                slug=str(ev.get("id") or f"traj-{ev.get('id', '?')}"),
+                attrs={"weight": "heavy",
+                       "once": str(ev.get("once", True)).lower(),
+                       "triggers_all": (
+                           (ev.get("declencheur") or {}).get("valeur", "")
+                           if isinstance(ev.get("declencheur"), dict)
+                           else str(ev.get("declencheur", "")))},
+                body=(f"{ev.get('description_md', '')}\n\nPerturbations: "
+                      f"{perts}")))
+            counts.setdefault("trajectoire", 0)
+            counts["trajectoire"] += 1
 
     # 4) secrets → hidden entries with porteurs kept visible to routing (D-019)
     for f in sorted((partition_dir / "secrets").glob("*.md")):
