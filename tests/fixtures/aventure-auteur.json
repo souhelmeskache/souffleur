@@ -1,0 +1,28 @@
+{
+ "trajectoire": [
+  {
+   "id": "traj-fixture-01",
+   "description_md": "le mannequin de test reprend sa place si personne ne l'ecarte",
+   "declencheur": {"type": "etat", "valeur": "porte-nord franchie"},
+   "once": true,
+   "consequences": ["la salle du tresor se reverrouille"],
+   "perturbations": [
+    {
+     "condition_etat": "mannequin ecarte avant le passage",
+     "porteur_cible_id": "para-2",
+     "issue": "transplantee"
+    }
+   ],
+   "anchors": [[48, 96]]
+  }
+ ],
+ "conditions": [],
+ "charniere_md": "le couloir d'essai continue au-dela de la porte nord",
+ "charniere_sorties": [
+  {
+   "node_id": "para-4",
+   "ouvre_vers_md": "l'essai suivant commence apres la table de verification",
+   "prerequis_etat": "etat: cle-de-controle prise"
+  }
+ ]
+}

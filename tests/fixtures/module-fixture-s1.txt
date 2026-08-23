@@ -1,0 +1,11 @@
+#1
+Vous vous tenez dans un couloir d'essai. Si vous ouvrez la porte nord, Go to 2.
+#2
+Un mannequin de test bloque le passage. Si vous l'ecartez, Go to 3.
+#3
+La salle du tresor d'essai s'ouvre. Si vous prenez la cle de controle, Go to 4.
+#4
+Table de verification (1d2):
+1: succes de l'essai
+2: essai a repeter
+Si vous refermez la porte, Go to 2.

@@ -1,0 +1,85 @@
+name: ci
+
+# D-189 etage 1+2 : gate pre-merge par branche (job tests) + integration
+# complete sur main (job integration). Pas de schedule nightly en v1.
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: tests (gate de branche)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Dependances
+        run: pip install -r requirements.txt
+      - name: Suites de tests (trinity_test exclu — I-270)
+        shell: pwsh
+        run: |
+          $env:PYTHONUTF8 = '1'
+          $env:PYTHONIOENCODING = 'utf-8'
+          $failed = @()
+          $skipped = @()
+          Get-ChildItem tests -Filter *.py | Sort-Object Name | ForEach-Object {
+            if ($_.Name -eq 'trinity_test.py') {
+              $skipped += $_.Name
+              Write-Host "=== SKIP $($_.Name) — I-270 : profil de connexion absent de config.yaml, echec preexistant au CI (le runner local tourne sans pytest ; chaque suite est un script autonome) ==="
+              return
+            }
+            Write-Host "=== $($_.Name) ==="
+            $out = & python $_.FullName 2>&1
+            $out | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+              $failed += $_.Name
+              Add-Content -Path ci-log.txt -Value "=== ECHEC $($_.Name) ===$([Environment]::NewLine)$($out -join [Environment]::NewLine)"
+            }
+          }
+          if ($skipped) { Write-Host "SKIPPED: $($skipped -join ', ')" }
+          if ($failed) { Write-Host "FAILED: $($failed -join ', ')"; exit 1 }
+          Write-Host "ALL SUITES PASSED"
+      - name: Artefact log d'echec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.ref_name }}-${{ github.run_number }}
+          path: ci-log.txt
+          if-no-files-found: ignore
+
+  integration:
+    name: integration bout-en-bout (main uniquement)
+    needs: tests
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Dependances
+        run: pip install -r requirements.txt
+      - name: Conversion hors-ligne de la fixture synthetique + validation
+        shell: pwsh
+        run: |
+          # corpus vide explicite : la conversion CI ne doit jamais lire un
+          # home de corpus local (autorat du specimen) — determinisme total
+          $corpus = Join-Path $env:RUNNER_TEMP 'corpus-vide'
+          New-Item -ItemType Directory -Force -Path $corpus | Out-Null
+          $env:CODERAIN_CORPUS = $corpus
+          python tests/fixtures/ci_boutenbout.py 2>&1 | Tee-Object -Variable out
+          if ($LASTEXITCODE -ne 0) {
+            $out -join [Environment]::NewLine | Set-Content integration-log.txt
+            exit 1
+          }
+      - name: Artefact log d'echec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-integration-${{ github.run_number }}
+          path: integration-log.txt
+          if-no-files-found: ignore
