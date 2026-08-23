@@ -71,9 +71,24 @@ def _semantic_json(uid, start, end):
                                  "resultat_md": "rien du tout"}],
                             "anchors": anchor}]}
     return {"nodes": [{"id": "depart", "type": "chapitre", "titre": "Depart",
-                       "altitude": "scene", "corps_md": SOURCE[start:end],
+                       # fiche SCÉNARIO 2026-08-23: le node macro porte les
+                       # trois rubriques — objectif (D-065), débouchés avec
+                       # prérequis d'état (D-118 amendée), héritage (D-183)
+                       "altitude": "scenario",
+                       "corps_md": SOURCE[start:end],
+                       "objectif_md": "traverser la vallee et entrer",
                        "liens": [{"cible_id": "salle-a",
                                   "condition_textuelle": "si combattez"}],
+                       "debouches": [
+                           {"id": "vers-salle-a", "cible_id": "salle-a",
+                            "prerequis_etat": [{"type": "flag",
+                                                "nom": "torche"}],
+                            "condition_textuelle": "si combattez"},
+                           {"id": "rebrousse", "cible_id": "salle-a",
+                            "condition_textuelle": "si on abandonne"}],
+                       "heritage": [{"fait_md": "le gobelin garde la porte",
+                                     "ancre_source": [start, end],
+                                     "porte": ["gobelin-porte"]}],
                        "anchors": anchor}],
             # D-178/D-182: étage aventure — trajectoire convertie (jamais
             # créée), perturbation avec issue (garde anti-rail D-120 §5.1)
@@ -166,6 +181,19 @@ assert partition.nodes[-1].charniere_sortie is not None   # D-123 §6
 assert (pdir / "aventure.md").exists()
 print("4bis) étage aventure émis: trajectoire + charnière de sortie")
 
+# fiche SCÉNARIO: rubriques converties sur le node macro, mesurées, émises
+dep = [n for n in partition.nodes if n.id == "depart"][0]
+assert dep.altitude == "scenario" and len(dep.debouches) == 2
+assert dep.heritage[0]["porte"] == ["gobelin-porte"]
+ms = report["mesures_scenario"]
+assert ms["noeuds_scenario"] == 1 and ms["debouches_total"] == 2
+assert ms["debouches_prerequis_testables"] == 1      # un seul porte un flag
+assert ms["taux_debouches_testables"] == 0.5 and ms["heritage_entries"] == 1
+fm_dep = json.loads((pdir / "nodes" / "depart.md").read_text(
+    encoding="utf-8").split("\n---\n")[0].replace("---\n", "", 1))
+assert fm_dep["altitude"] == "scenario" and len(fm_dep["debouches"]) == 2
+print("4ter) étage scénario émis: objectif + débouchés + héritage, mesures OK")
+
 print("5) negative: dangling link -> form error; gap -> ROUGE; no-anchor -> reject")
 part2 = Partition(Manifest(titre="t", corpus_source="2e", corpus_cible="5e",
                            structures=["S1"], hash_source="h", date_conversion="d",
@@ -253,5 +281,86 @@ assert rep3["verdict"] == "VERT", rep3
 assert rep3["comptages"]["recheck_alarms"] >= 1
 assert rep3["comptages"]["recheck_samples"] >= 1
 print("   divergence caught:", rep3["details"]["recheck_alarms"])
+
+print("8) étage SCÉNARIO: valideur (fiche §5) + gardes de construction")
+
+def _part_scen():
+    p = Partition(Manifest(titre="t", corpus_source="2e", corpus_cible="5e",
+                           structures=["S1"], hash_source="h",
+                           date_conversion="d", version_convertisseur="v"))
+    return p
+
+# 8a — scénario complet: zéro erreur, zéro exception, mesures justes
+p8 = _part_scen()
+n = Node("sc-ok", "section", "SC", "body", "scene", anchors=[(0, 5)])
+n.attach_scenario(
+    "objectif du scenario",
+    debouches=[{"id": "d1", "cible_id": "sc-ok",
+                "prerequis_etat": [{"type": "quete_etat", "id": "sc-ok",
+                                    "etat": "actif"}]},
+               {"id": "d2", "ouvre_vers_md": "la suite",
+                "condition_textuelle": "si le heros fuit"}],
+    heritage=[{"fait_md": "un fait porteur", "ancre_source": [0, 4],
+               "porte": ["sc-ok"]}])
+p8.nodes.append(n)
+rep8 = validate_form.scenario_report(p8)
+assert rep8["erreurs"] == [], rep8["erreurs"]
+assert rep8["exceptions"] == []
+assert rep8["mesures"]["taux_debouches_testables"] == 0.5
+assert rep8["mesures"]["taux_remplissage_heritage"] == 1.0
+
+# 8b — objectif absent ⇒ exception SIGNALÉE (non bloquante, I-111)
+nv = Node("sc-vide", "section", "SV", "body", "scene", anchors=[(5, 9)])
+nv.attach_scenario()
+p8.nodes.append(nv)
+rep8b = validate_form.scenario_report(p8)
+assert any("objectif_md absent" in e for e in rep8b["exceptions"])
+assert not any("objectif" in e for e in rep8b["erreurs"])
+
+# 8c — ni débouché ni charnière ⇒ ROUGE (fiche §5.2)
+p8c = _part_scen()
+nc = Node("sc-nu", "section", "SN", "body", "scene", anchors=[(0, 3)])
+nc.attach_scenario("objectif")
+p8c.nodes.append(nc)
+assert any("ni debouche ni charniere_sortie" in e
+           for e in validate_form.scenario_report(p8c)["erreurs"])
+
+# 8d — cible inconnue / porte inconnue / prerequis id inconnu ⇒ ROUGE (§5.3)
+p8d = _part_scen()
+nd = Node("sc-dang", "section", "SD", "body", "scene", anchors=[(0, 3)])
+nd.attach_scenario("objectif", debouches=[
+    {"id": "d-ghost", "cible_id": "ghost"},
+    {"id": "d-ev", "ouvre_vers_md": "x",
+     "prerequis_etat": [{"type": "entite_vivante", "id": "ghost-ev"}]}],
+    heritage=[{"fait_md": "f", "ancre_source": [0, 2],
+               "porte": ["ghost-porte"]}])
+p8d.nodes.append(nd)
+errs8d = validate_form.scenario_report(p8d)["erreurs"]
+assert sum(1 for e in errs8d if "inconnu" in e or "inconnue" in e) == 3, errs8d
+
+# 8e — gardes de construction: altitude, doublon, héritage incomplet
+try:
+    Node("x1", "section", "X", "b", "scene", anchors=[(0, 1)],
+         objectif_md="interdit hors altitude scenario")
+    raise AssertionError("rubriques scénario sur node scene doivent lever")
+except ValueError:
+    pass
+try:
+    n.attach_scenario(debouches=[{"id": "d1", "cible_id": "sc-ok"},
+                                 {"id": "d1", "cible_id": "sc-ok"}])
+    raise AssertionError("debouche dupliqué doit lever")
+except ValueError:
+    pass
+try:
+    n.attach_scenario(heritage=[{"ancre_source": [0, 2]}])
+    raise AssertionError("heritage sans fait_md doit lever")
+except ValueError:
+    pass
+try:
+    n.attach_scenario(debouches=[{"id": "d-bad"}])
+    raise AssertionError("debouche sans cible ni ouvre_vers doit lever")
+except ValueError:
+    pass
+print("   valideur §5 complet: exceptions signalées vs rouges vs mesures")
 
 print("\nCONVERTER P4 TESTS PASSED")

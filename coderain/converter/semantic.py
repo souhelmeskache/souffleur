@@ -25,7 +25,16 @@ objects. Fidelity rules:
   NEVER invent it. If a later event depends on that entity, list it in
   "fonctions_aval".
 - Readable prose: emit {"nodes": [...]} with type chapitre|section|scene|
-  read_aloud and altitude univers|arc|scene. If a node is the module's END,
+  read_aloud and altitude univers|arc|scene.
+- A node with altitude "scenario" (macro level) may carry: "objectif_md"
+  (the trajectory aimed at — never a sequence), "debouches": [{id,
+  cible_id | ouvre_vers_md, prerequis_etat: [{type:
+  entite_vivante|flag|quete_etat, ...}], condition_textuelle}] — a debouche
+  is BY WHAT one can go on, not where; prerequis_etat only when the source
+  states it, else condition_textuelle. And "heritage": [{fait_md,
+  ancre_source: [start, end], porte: [ids]}] — facts that keep later
+  scenarios portable. CONVERT what the source states; leave a rubric out
+  rather than invent it. If a node is the module's END,
   convert it into an exit hinge (D-123): charniere_sortie:
   {ouvre_vers_md, prerequis_etat} — NEVER "the end".
 - Rollable tables: emit {"tables": [...]} with de:"1d20" and contiguous ranges.
@@ -65,6 +74,9 @@ def _validate(obj: dict, unit, tables: "RuleTablesLike") -> dict:
                    for l in n.get("liens", [])],
             anchors=_anchors(n, f"node {n.get('id')}"),
             charniere_sortie=cs,
+            objectif_md=str(n.get("objectif_md", "")),
+            debouches=n.get("debouches") or None,
+            heritage=n.get("heritage") or None,
         ))
     for r in obj.get("records", []):
         anchors = _anchors(r, f"record {r.get('id')}")

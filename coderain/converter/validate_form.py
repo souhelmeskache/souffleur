@@ -135,3 +135,92 @@ def adventure_exceptions(partition) -> list[str]:
             if line not in out:
                 out.append(line)
     return out
+
+
+def scenario_report(partition) -> dict:
+    """Étage SCÉNARIO (fiche méta 2026-08-23 §5) — extensions du valideur :
+
+    1. tout node altitude 'scenario' a un objectif_md OU une ligne
+       d'exception signalée (vide + exception, `I-111`) — non bloquant ;
+    2. ≥ 1 debouche par scénario, ou charniere_sortie sur le dernier —
+       ROUGE (fiche §5.2) ;
+    3. tout id référencé par prerequis_etat / heritage.porte / cible_id
+       existe — ROUGE (fiche §5.3) ;
+    4. comptage testables ⊥ textuels rapporté en mesures (fiche §5.4).
+
+    Retour : {"erreurs": [...], "exceptions": [...], "mesures": {...}}.
+    """
+    erreurs: list[str] = []
+    exceptions: list[str] = []
+    # espace d'ids référençables par heritage.porte (fiche §3): primitives +
+    # debouche_id + evenement_id ; les cibles de débouché restent des nodes
+    ids = partition.ids()
+    ids |= {d["id"] for n in partition.nodes
+            for d in getattr(n, "debouches", [])}
+    if partition.aventure is not None:
+        ids |= {e.id for e in partition.aventure.events()}
+    n_scen = obj_manq = deb_tot = deb_test = deb_txt = 0
+    her_entries = scen_her = n_charn = 0
+    for n in partition.nodes:
+        if n.altitude != "scenario":
+            continue
+        n_scen += 1
+        if not getattr(n, "objectif_md", "").strip():
+            obj_manq += 1
+            exceptions.append(
+                f"scenario {n.id}: objectif_md absent — non fourni par la "
+                "source (vide + exception, I-111)")
+        debouches = getattr(n, "debouches", [])
+        if not debouches and not getattr(n, "charniere_sortie", None):
+            erreurs.append(f"scenario {n.id}: ni debouche ni "
+                           "charniere_sortie (fiche SCÉNARIO §5.2)")
+        for d in debouches:
+            deb_tot += 1
+            if d["cible_id"] and d["cible_id"] not in ids:
+                erreurs.append(f"debouche {d['id']}: cible inconnue "
+                               f"{d['cible_id']} (fiche §5.3)")
+            if d["prerequis_etat"]:
+                deb_test += 1
+                for p in d["prerequis_etat"]:
+                    pid = p.get("id")
+                    if p["type"] != "flag" and pid and pid not in ids:
+                        erreurs.append(f"debouche {d['id']}: prerequis id "
+                                       f"inconnu {pid} (fiche §5.3)")
+            elif d["condition_textuelle"].strip():
+                deb_txt += 1
+            else:
+                erreurs.append(f"debouche {d['id']}: ni prerequis_etat ni "
+                               "condition_textuelle (fiche §2)")
+        for h in getattr(n, "heritage", []):
+            her_entries += 1
+            a0, a1 = h["ancre_source"]
+            if not (0 <= a0 <= a1):
+                erreurs.append(f"scenario {n.id}: heritage ancre_source "
+                               f"invalide {h['ancre_source']}")
+            for pid in h["porte"]:
+                if pid not in ids:
+                    erreurs.append(f"scenario {n.id}: heritage.porte "
+                                   f"inconnu {pid} (fiche §5.3)")
+        if getattr(n, "heritage", []):
+            scen_her += 1
+        if getattr(n, "charniere_sortie", None):
+            n_charn += 1
+    taux_testables = (round(deb_test / deb_tot, 3)
+                      if deb_tot else None)
+    taux_heritage = (round(scen_her / n_scen, 3) if n_scen else None)
+    return {
+        "erreurs": erreurs,
+        "exceptions": exceptions,
+        "mesures": {
+            "noeuds_scenario": n_scen,
+            "objectifs_manquants": obj_manq,
+            "debouches_total": deb_tot,
+            "debouches_prerequis_testables": deb_test,
+            "debouches_condition_textuelle": deb_txt,
+            "taux_debouches_testables": taux_testables,
+            "heritage_entries": her_entries,
+            "scenarios_avec_heritage": scen_her,
+            "taux_remplissage_heritage": taux_heritage,
+            "charnieres_sur_node": n_charn,
+        },
+    }

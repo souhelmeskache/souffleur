@@ -143,9 +143,15 @@ def convert_module(source_text: str, titre: str, structures: list[str],
             lambda l, txt, unit: semantic.convert_unit(l, txt, unit, partition,
                                                        tables))
 
-    report = exc_report.build(manifest.to_dict(), form_errors + stage_errors,
+    # étage SCÉNARIO (fiche méta 2026-08-23): same contract on the LLM route —
+    # structural violations red, source absences as signalled exceptions
+    scen = validate_form.scenario_report(partition)
+    report = exc_report.build(manifest.to_dict(), form_errors + stage_errors
+                              + scen["erreurs"],
                               coverage, mass_alarms, recheck_alarms,
-                              rule_exceptions, samples)
+                              rule_exceptions, samples,
+                              infos=scen["exceptions"],
+                              mesures_scenario=scen["mesures"])
     report["tokens"] = meter.summary()
     write_partition(partition, Path(out_dir))
     exc_report.write_report(report, Path(out_dir).parent /

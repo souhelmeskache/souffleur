@@ -45,6 +45,13 @@ def write_partition(partition, out_dir: Path) -> Path:
                             "altitude": n.altitude, "liens": n.liens,
                             **({"charniere_sortie": n.charniere_sortie}
                                if getattr(n, "charniere_sortie", None) else {}),
+                            # étage SCÉNARIO (fiche méta 2026-08-23)
+                            **({"objectif_md": n.objectif_md}
+                               if getattr(n, "objectif_md", "") else {}),
+                            **({"debouches": n.debouches}
+                               if getattr(n, "debouches", []) else {}),
+                            **({"heritage": n.heritage}
+                               if getattr(n, "heritage", []) else {}),
                             "anchors": n.anchors})
         (out_dir / "nodes" / f"{n.id}.md").write_text(fm + n.corps_md + "\n",
                                                       encoding="utf-8")
@@ -81,7 +88,9 @@ def write_partition(partition, out_dir: Path) -> Path:
     index = {
         "nodes": [{"id": n.id, "type": n.type, "altitude": n.altitude,
                    **({"charniere_sortie": True}
-                      if getattr(n, "charniere_sortie", None) else {})}
+                      if getattr(n, "charniere_sortie", None) else {}),
+                   **({"scenario": True}
+                      if n.altitude == "scenario" else {})}
                   for n in partition.nodes],
         "records": [{"id": r.id, "classe": r.classe,
                      "transverse": bool(getattr(r, "transverse", None))}

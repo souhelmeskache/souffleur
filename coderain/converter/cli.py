@@ -142,6 +142,31 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
                         f"charniere_sortie {nid}: champ manquant {ke}")
             break
 
+    # scenario stage (fiche méta 2026-08-23): the three rubrics written en
+    # bloc, à froid, from scenario-auteur.json in the corpus home — CONVERTED
+    # from source material, never invented (I-111); validation happens at
+    # attachment (schemas) and at report time (validate_form.scenario_report)
+    for candidate in (CORPUS / "scenario-auteur.json",
+                      src.parent / "scenario-auteur.json"):
+        if candidate.exists():
+            raw = json.loads(candidate.read_text(encoding="utf-8"))
+            by_id = {n.id: n for n in partition.nodes}
+            for entry in raw.get("scenarios", []):
+                nid = str(entry.get("node_id", ""))
+                node = by_id.get(nid)
+                if node is None:
+                    adventure_rule_exceptions.append(
+                        f"scenario: node cible inconnu {nid}")
+                    continue
+                try:
+                    node.attach_scenario(
+                        entry.get("objectif_md", ""),
+                        entry.get("debouches") or None,
+                        entry.get("heritage") or None)
+                except (KeyError, ValueError, TypeError) as e:
+                    adventure_rule_exceptions.append(f"scenario {nid}: {e}")
+            break
+
     write_partition(partition, out_dir)
     write_checks(out_dir, checks)
     from .directeur import generate as gen_director
@@ -156,16 +181,24 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
         if line not in seen:
             seen.add(line)
             merged_adventure_exceptions.append(line)
+    # étage SCÉNARIO (fiche méta 2026-08-23 §5): erreurs structurelles ⇒
+    # rouge; absences non fournies par la source ⇒ lignes d'exception
+    # signalée (non bloquantes); comptages testables ⊥ textuels ⇒ mesures
+    scen = validate_form.scenario_report(partition)
     report = build(manifest.to_dict(),
-                   validate_form.validate_form(partition, out_dir),
+                   validate_form.validate_form(partition, out_dir)
+                   + scen["erreurs"],
                    coverage := validate_fidelity.coverage_report(
                        units, [], len(text)),
                    validate_fidelity.mass_report(text, units, partition),
-                   [], merged_adventure_exceptions, 0)
+                   [], merged_adventure_exceptions, 0,
+                   infos=scen["exceptions"],
+                   mesures_scenario=scen["mesures"])
     rp = write_report(report, out_dir / "rapport-conversion.json")
     (out_dir / "rapport-conversion.md").write_text(render_md(report),
                                                    encoding="utf-8")
     return {"verdict": report["verdict"], "nodes": len(partition.nodes),
+            "scenarios": scen["mesures"]["noeuds_scenario"],
             "records": len(partition.records), "checks": sum(len(v) for v in
                                                              checks.values()),
             "out": str(out_dir)}

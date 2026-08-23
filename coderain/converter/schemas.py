@@ -132,12 +132,20 @@ class Manifest:
 
 
 class Node:
-    """Readable prose: chapters/sections/scenes/read-aloud + cross links."""
+    """Readable prose: chapters/sections/scenes/read-aloud + cross links.
+
+    Étage SCÉNARIO (fiche méta 2026-08-23): un node d'altitude 'scenario'
+    porte objectif_md (`D-065` : trajectoire visée, jamais une séquence),
+    debouches (`D-118` amendée : PAR QUOI on peut y aller) et heritage
+    (critère `D-183` : gel ⊥ scellement). Matière source absente ⇒ rubrique
+    vide + exception signalée, jamais improvisée (`I-111`)."""
 
     def __init__(self, nid: str, type_: str, titre: str, corps_md: str,
                  altitude: str, liens: list[dict] | None = None,
                  anchors: list[tuple[int, int]] | None = None,
-                 charniere_sortie: dict | None = None):
+                 charniere_sortie: dict | None = None,
+                 objectif_md: str = "", debouches: list[dict] | None = None,
+                 heritage: list[dict] | None = None):
         check_id(nid, "node")
         if type_ not in NODE_TYPES:
             raise ValueError(f"node {nid}: type {type_!r} not in {NODE_TYPES}")
@@ -158,7 +166,35 @@ class Node:
             cs = {"ouvre_vers_md": str(cs["ouvre_vers_md"]),
                   "prerequis_etat": str(cs["prerequis_etat"])}
         self.charniere_sortie = cs   # D-123: sortie d'aventure, jamais une fin
+        self.objectif_md, self.debouches, self.heritage = "", [], []
+        if any([objectif_md, debouches, heritage]):
+            if altitude != "scenario":
+                raise ValueError(
+                    f"node {nid}: rubriques scénario exigent altitude "
+                    "'scenario' (fiche SCÉNARIO §1)")
+            self._set_scenario(objectif_md, debouches, heritage)
         self.anchors = [(int(a), int(b)) for a, b in anchors]
+
+    def _set_scenario(self, objectif_md, debouches, heritage) -> None:
+        seen: set[str] = set()
+        for d in debouches or []:
+            d = make_debouche(d, f"node {self.id}")
+            if d["id"] in seen:
+                raise ValueError(f"node {self.id}: debouche dupliqué {d['id']}")
+            seen.add(d["id"])
+            self.debouches.append(d)
+        for h in heritage or []:
+            self.heritage.append(make_heritage(h, f"node {self.id}"))
+        self.objectif_md = str(objectif_md or "")
+
+    def attach_scenario(self, objectif_md: str = "",
+                        debouches: list[dict] | None = None,
+                        heritage: list[dict] | None = None) -> None:
+        """Application à froid par l'adaptateur depuis le fichier auteur
+        (contrat aval de la fiche SCÉNARIO §4) : monte l'altitude et pose
+        les trois rubriques — la validation reste à la construction."""
+        self.altitude = "scenario"
+        self._set_scenario(objectif_md, debouches, heritage)
 
 
 class Record:

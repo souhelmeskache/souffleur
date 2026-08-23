@@ -13,13 +13,16 @@ from pathlib import Path
 def build(manifest_fields: dict, form_errors: list[str], coverage: dict,
           mass_alarms: list[str], recheck_alarms: list[str],
           rule_exceptions: list[str], samples_taken: int = 0,
-          infos: list[str] | None = None) -> dict:
+          infos: list[str] | None = None,
+          mesures_scenario: dict | None = None) -> dict:
     """Blocking = real losses/errors (form, coverage, rule gaps). Alarms are
     nominal review flags. Infos are DECLARED non-conversions whose content is
-    provably still present (verbatim nodes) — they never turn the light red."""
+    provably still present (verbatim nodes) — they never turn the light red.
+    mesures_scenario: measured facts of a stage (fiche SCÉNARIO §7) — never
+    verdict-bearing on their own."""
     green = not (form_errors or coverage["gaps"] or coverage["overlaps"]
                  or coverage["unanchored_claims"] or rule_exceptions)
-    return {
+    report = {
         "date": date.today().isoformat(),
         "version_convertisseur": manifest_fields.get("version_convertisseur"),
         "verdict": "VERT" if green else "ROUGE",
@@ -46,6 +49,9 @@ def build(manifest_fields: dict, form_errors: list[str], coverage: dict,
             "infos_declarees": infos or [],
         },
     }
+    if mesures_scenario is not None:
+        report["mesures_scenario"] = dict(mesures_scenario)
+    return report
 
 
 def write_report(report: dict, path: Path) -> Path:
@@ -66,6 +72,11 @@ def render_md(report: dict) -> str:
     ]
     for k, v in c.items():
         lines.append(f"| {k} | {v} |")
+    if report.get("mesures_scenario"):
+        lines += ["", "## mesures étage scénario", "", "| mesure | valeur |",
+                  "|---|---|"]
+        for k, v in report["mesures_scenario"].items():
+            lines.append(f"| {k} | {v} |")
     for section, rows in report["details"].items():
         if rows:
             lines += ["", f"## {section}"]
