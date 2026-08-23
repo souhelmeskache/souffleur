@@ -1,10 +1,9 @@
-"""TEMPORAIRE — preuve du gate (lane ci-integration-continue, D-189).
+"""Preuve du gate (lane ci-integration-continue, D-189) — conservé comme trace.
 
-Ce fichier existe uniquement pour démontrer qu'un test cassé poussé sur une
-branche rend le run rouge et produit l'artefact de log. Il est supprimé au
-commit suivant. Aucun test existant n'est modifié.
+Ce fichier a D'ABORD été poussé volontairement cassé (commit 1d1e1b9,
+contournement unique et documenté du pre-commit local) : le run
+32631315745 est passé rouge avec l'artefact logs-ci-integration-continue-2,
+prouvant que le gate mord. Il est désormais inoffensif — la branche est
+rendue verte par ce commit.
 """
-import sys
-
-print("gate demo : ECHEC VOLONTAIRE (preuve que le gate mord)")
-sys.exit(1)
+print("gate demo : trace du passage rouge volontaire (voir rapport lane CI)")
