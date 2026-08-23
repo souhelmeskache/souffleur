@@ -51,7 +51,13 @@ def _semantic_json(uid, start, end):
         return {"nodes": [{"id": "salle-a", "type": "section",
                            "titre": "Salle A", "altitude": "scene",
                            "corps_md": SOURCE[start:end],
-                           "liens": [], "anchors": anchor}],
+                           "liens": [],
+                           # D-123 §6: le dernier node porte une charnière,
+                           # jamais une fin
+                           "charniere_sortie": {
+                               "ouvre_vers_md": "la suite est ouverte",
+                               "prerequis_etat": "etat: gobelin-porte neutralise"},
+                           "anchors": anchor}],
                 "records": [{"id": "gobelin-porte", "classe": "creature",
                              "nom": "Gobelin", "ruleset": "2e",
                              "stats_source": RECORD_STATS,
@@ -68,7 +74,20 @@ def _semantic_json(uid, start, end):
                        "altitude": "scene", "corps_md": SOURCE[start:end],
                        "liens": [{"cible_id": "salle-a",
                                   "condition_textuelle": "si combattez"}],
-                       "anchors": anchor}]}
+                       "anchors": anchor}],
+            # D-178/D-182: étage aventure — trajectoire convertie (jamais
+            # créée), perturbation avec issue (garde anti-rail D-120 §5.1)
+            "evenements": [{"id": "ev-depart", "rubrique": "trajectoire",
+                            "altitude": "adventure",
+                            "description_md": "le monde continue sans le heros",
+                            "declencheur": {"type": "etat",
+                                            "valeur": "depart quitte"},
+                            "once": True,
+                            "consequences": ["la salle A se verrouille"],
+                            "perturbations": [{
+                                "condition_etat": "heros blesse avant l'entree",
+                                "issue": "abandonnee"}],
+                            "anchors": anchor}]}
 
 
 class StubLLM:
@@ -138,6 +157,14 @@ gob = [r for r in partition.records if r.id == "gobelin-porte"][0]
 st = gob.stats_5e
 assert st["attaque_bonus"] == 5 and st["ca"] == 15 and st["pv"] == 18, st
 print("4) rules converted deterministically:", {k: st[k] for k in ("attaque_bonus", "ca", "pv")})
+
+# D-178/D-182: étage aventure converti, émis, garde anti-rail satisfaite
+assert partition.aventure is not None, "étage aventure manquant"
+traj = partition.aventure.trajectoire
+assert len(traj) == 1 and traj[0].perturbations[0]["issue"] == "abandonnee"
+assert partition.nodes[-1].charniere_sortie is not None   # D-123 §6
+assert (pdir / "aventure.md").exists()
+print("4bis) étage aventure émis: trajectoire + charnière de sortie")
 
 print("5) negative: dangling link -> form error; gap -> ROUGE; no-anchor -> reject")
 part2 = Partition(Manifest(titre="t", corpus_source="2e", corpus_cible="5e",
