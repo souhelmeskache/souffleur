@@ -299,10 +299,18 @@ function Update-Jour {
 
 function Sync-GardesDepuisDisque {
     # I-277 (suite) : fichesBannies/echecsParFiche sont relus DU DISQUE au DEBUT de chaque
-    # tour, sous verrou. Sans cela, une instance vivante garde ses listes en memoire toute
-    # la journee et RESSUSCITE au prochain Save-State un ban que -Deban vient de retirer
-    # (meme mecanisme que le lost update, cote veilleur). Le disque fait foi pour les
-    # listes de GARDE ; lanesLancees reste geree par la fusion (marques en vol mid-tour).
+    # tour, sous verrou (le disque fait foi pour les listes de garde).
+    # I-280 : le disque fait foi AUSSI pour lanesLancees. Mesure en reel le 2026-08-23
+    # (20:04/20:09) : un -Deban pendant que l'instance vivante tourne corrigeait le disque
+    # mais pas sa RAM ; pire, son prochain Save-State RESSUSCITAIT la marque retiree (la
+    # fusion anti-ecrasement ne fait qu'ajouter, elle ne sait pas retirer) et la decision
+    # « fiche deja lancee » restait prise sur une memoire perimee - la relance exigeait
+    # l'arret de l'instance (sequence stop -> deban -> start). Desormais lanesLancees est
+    # REMPLACEE par sa valeur disque SOUS VERROU a chaque tour, AVANT toute decision de
+    # lancement : ce que -Deban retire du disque sort de la RAM au tour suivant, sans
+    # redemarrage. Sans risque pour les marques en vol mid-tour : Invoke-LaunchLane ecrit
+    # sa marque au disque immediatement (Save-State AVANT lancement), donc entre deux tours
+    # le disque n'est jamais en retard sur la RAM.
     if ($DryRun) { return }
     $mutexSync = Enter-StateLock -DelaiMs 2000
     if ($null -eq $mutexSync) { return }   # ne jamais bloquer un tour pour ca ; reessaie au suivant
@@ -311,6 +319,14 @@ function Sync-GardesDepuisDisque {
         if ($brut) {
             $disque = $brut | ConvertFrom-Json
             if ($disque.jour -eq $state.jour) {
+                # I-280 : marques du deja-lance = valeur disque INTEGRALE (pas une fusion :
+                # la fusion ne sait qu'ajouter et ressusciterait exactement ce que -Deban
+                # vient de retirer).
+                if ($disque.PSObject.Properties['lanesLancees'] -and $null -ne $disque.lanesLancees) {
+                    $state.lanesLancees = @($disque.lanesLancees)
+                } else {
+                    $state.lanesLancees = @()
+                }
                 $state.fichesBannies = @($disque.fichesBannies)
                 if (-not $disque.PSObject.Properties['echecsParFiche'] -or $null -eq $disque.echecsParFiche) {
                     $state.echecsParFiche = [pscustomobject]@{}
