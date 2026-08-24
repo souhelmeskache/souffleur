@@ -222,18 +222,29 @@ if ($DryRun) {
 # I-275 livrable 13 : le prompt porte desormais la cloture P4 — si le terminal se ferme a
 # completion, plus personne ne peut retirer le worktree apres coup ; c'est DONC a la lane de
 # nettoyer elle-meme, en DERNIER geste.
+#
+# I-299 livrable 6 : la fenetre pose la marque echec-externe-* sur TOUTE erreur fournisseur
+# avant tout livrable - plus seulement finish_reason: network_error. Le cas reel du 24/08
+# 17:55 (« Upstream request failed: Endpoint is unavailable ») est passe AU TRAVERS : mort
+# silencieuse, ni marque, ni compteur, stall invisible. Critere, du plus precis au plus large :
+#   1. finish_reason: network_error (signature I-287 d'origine) ;
+#   2. « Upstream request failed » (signature I-299 §2) ;
+#   3. IDEAL : toute sortie non nulle SANS aucun travail d'outil constate dans la preuve -
+#      un run qui meurt avant d'avoir lu/ecrit/execute quoi que ce soit n'a aucune faute de
+#      fiche a porter (les marqueurs d'outil sont juges APRES retrait des sequences ANSI).
+# La marque reste posee SEULEMENT si le run a echoue ; elle nomme desormais sa cause.
 $Prompt = "Execute $Fiche. Branche et worktree deja en place. Commit avant rapport, hash inclus. " +
           "Puis clôture P4 : git worktree remove de ton worktree + suppression de ta branche depuis le dépôt principal, " +
           "selon README-nouvelle-lane - DERNIER geste avant de rendre la main."
 $horodatage = Get-Date -Format 'yyyyMMdd-HHmmss'
 $promptFile = Join-Path ([System.IO.Path]::GetTempPath()) ("lane-{0}-{1}.md" -f $Nom, $horodatage)
 # I-287 livrable 2 : la sortie du run est TEE'ee vers une preuve sur disque (meme ecole que
-# les preuves de session meta). Si le run meurt (codeSortie <> 0) et que la preuve porte
-# finish_reason: network_error - mort FOURNISSEUR, ni faute de la fiche ni faute de la lane -
-# une MARQUE echec-externe-*.flag est posee dans le poste. Le veilleur la lit au tour
-# suivant : echec non compte dans echecsParFiche, journal « [INFO] echec externe, compteur
-# intact ». Sans elle, la mort reseau du run precedent faisait porter a la RELANCE (et donc
-# a la fiche) la responsabilite d'une panne exterieure : c'est exactement I-287.
+# les preuves de session meta). Si le run meurt (codeSortie <> 0) sur une erreur FOURNISSEUR,
+# une MARQUE echec-externe-*.flag est posee dans le poste - voir le critere elargi I-299
+# detaille plus bas. Le veilleur la lit au tour suivant : echec non compte dans
+# echecsParFiche, journal « [INFO] echec externe, compteur intact ». Sans elle, la mort
+# reseau du run precedent faisait porter a la RELANCE (et donc a la fiche) la responsabilite
+# d'une panne exterieure : c'est exactement I-287, et son stall invisible I-299.
 $proofLog   = Join-Path $PostRoot ("preuve-session-lane-{0}-{1}.log" -f $Nom, $horodatage)
 $marqueExt  = Join-Path $PostRoot ("echec-externe-{0}-{1}.flag" -f $Nom, $horodatage)
 $FicheLit   = $Fiche -replace "'", "''"
@@ -259,16 +270,27 @@ $inner = "Set-Location -LiteralPath '$WorktreePath'; " +
          "  Write-Host '[nouvelle-lane] un exit 0 sans livrable n''est pas une completion (I-281) - code sortie force a 3.' -ForegroundColor Red; " +
          "  `$codeSortie = 3 } " +
          "`$sortiePreuve = Get-Content -LiteralPath '$proofLog' -Raw -ErrorAction SilentlyContinue; " +
-         "if ((`$codeSortie -ne 0) -and (`$sortiePreuve -match 'finish[_-]?[Rr]eason.{0,24}network[_-]?error')) { " +
-         "  Set-Content -LiteralPath '$marqueExt' -Value ('fiche=$FicheLit|horodatage=' + (Get-Date -Format o) + '|preuve=$proofLog') -Encoding UTF8; " +
-         "  Write-Host '[nouvelle-lane] [INFO] echec externe (finish_reason: network_error, fournisseur) consigne au veilleur : ce mort n''est pas une faute de fiche (I-287)' -ForegroundColor Yellow } " +
+         "`$mortFournisseur = `$false; `$causeExterne = ''; " +
+         "if (-not `$sortiePreuve) { `$mortFournisseur = `$true; `$causeExterne = 'preuve vide ou illisible (mort avant toute sortie)' } " +
+         "elseif (`$sortiePreuve -match 'finish[_-]?[Rr]eason.{0,32}network[_-]?error') { `$mortFournisseur = `$true; `$causeExterne = 'finish_reason: network_error' } " +
+         "elseif (`$sortiePreuve -match 'Upstream request failed') { `$mortFournisseur = `$true; `$causeExterne = 'Upstream request failed (endpoint fournisseur indisponible)' } " +
+         "else { " +
+         "  `$sansAnsi = ((`$sortiePreuve -split [string][char]27) -join '') -replace '\[[0-9;]*m', ''; " +
+         "  `$outilConstate = ((`$sansAnsi -match '(?m)^[ \t]*[`$?][ \t]') -or (`$sansAnsi -match '(?m)^[ \t]*(Read|Write|Edit|MultiEdit|Glob|Grep|Bash|Task|WebFetch|WebSearch)[ \t]')); " +
+         "  if (-not `$outilConstate) { `$mortFournisseur = `$true; `$causeExterne = 'sortie non nulle SANS aucun travail d''outil constate dans la preuve (I-299)' } " +
+         "} " +
+         "if ((`$codeSortie -ne 0) -and `$mortFournisseur) { " +
+         "  Set-Content -LiteralPath '$marqueExt' -Value ('fiche=$FicheLit|horodatage=' + (Get-Date -Format o) + '|preuve=$proofLog|cause=' + `$causeExterne) -Encoding UTF8; " +
+         "  Write-Host ('[nouvelle-lane] [INFO] echec externe (' + `$causeExterne + ', fournisseur) consigne au veilleur : ce mort n''est pas une faute de fiche (I-287/I-299)') -ForegroundColor Yellow } " +
          "Remove-Item -LiteralPath '$promptFile' -ErrorAction SilentlyContinue; " +
          "if (`$codeSortie -ne 0) { " +
          "  Write-Host ''; Write-Host ('[nouvelle-lane] lane en echec (code sortie ' + `$codeSortie + ') - fenetre laissee ouverte (D-192 : fermeture a completion seulement)' ) -ForegroundColor Red; " +
          "  Read-Host 'Appuyez sur Entree pour fermer'; exit `$codeSortie } "
-# I-287 livrable 2 : la fenetre TEE la sortie du run vers la preuve, et si le run meurt sur
-# finish_reason: network_error (mort FOURNISSEUR), pose une marque echec-externe-*.flag dans
-# le poste - posee SEULEMENT si le run a echoue (un run survecu a une coupure ne marque rien).
+# I-287 livrable 2 + I-299 livrable 6 : la fenetre TEE la sortie du run vers la preuve, et si
+# le run meurt sur une erreur fournisseur (critere elargi : les deux signatures connues, ou
+# toute sortie non nulle sans aucun travail d'outil constate), elle pose une marque
+# echec-externe-*.flag dans le poste - posee SEULEMENT si le run a echoue (un run survecu a
+# une coupure ne marque rien).
 $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
 Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $b64)
 Write-Host "[nouvelle-lane] session opencode lancee dans une nouvelle fenetre (worktree : $WorktreePath ; fermeture automatique a completion - D-192)" -ForegroundColor Cyan
