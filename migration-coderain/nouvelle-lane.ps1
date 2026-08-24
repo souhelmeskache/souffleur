@@ -256,7 +256,14 @@ Set-Content -LiteralPath $promptFile -Value $Prompt -Encoding UTF8
 # I-281 recu de livraison : APRES le run, les chemins absolus du P1 ($P1Lit) sont testes sur
 # disque. Un exit 0 sans livrable force le code sortie a 3 et nomme chaque fichier absent -
 # la fenetre reste alors ouverte sur l'erreur visible (meme regime D-192).
-$inner = "Set-Location -LiteralPath '$WorktreePath'; " +
+# FICHE lanes-nommees 2026-08-24 (I-302) : la fenetre nait VISIBLE et TITREE. Premiere
+# instruction du script interne : titre 'LANE <nom>' ($Nom interpole par le lanceur) -
+# signature carree par la trieuse ('LANE *') ; et '-WindowStyle Normal' sur le
+# Start-Process ci-dessous : plus aucun heritage du contexte cache de l'instance.
+# NOTE fiche : elle ecrit '$host.UI.RawTitle', propriete INEXISTANTE (constat bac a sable,
+# erreur « RawTitle introuvable ») - l'API reelle du titre console est RawUI.WindowTitle ;
+# l'intention est honoree avec l'API qui marche.
+$inner = "`$host.UI.RawUI.WindowTitle = 'LANE $Nom'; Set-Location -LiteralPath '$WorktreePath'; " +
          "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null; " +
          "`$p = Get-Content -LiteralPath '$promptFile' -Raw -Encoding UTF8; " +
          "opencode.cmd run `$p 2>&1 | Tee-Object -FilePath '$proofLog' -Append; " +
@@ -292,6 +299,6 @@ $inner = "Set-Location -LiteralPath '$WorktreePath'; " +
 # echec-externe-*.flag dans le poste - posee SEULEMENT si le run a echoue (un run survecu a
 # une coupure ne marque rien).
 $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
-Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $b64)
+Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Normal', '-EncodedCommand', $b64)
 Write-Host "[nouvelle-lane] session opencode lancee dans une nouvelle fenetre (worktree : $WorktreePath ; fermeture automatique a completion - D-192)" -ForegroundColor Cyan
 exit 0
