@@ -491,6 +491,25 @@ function Add-Digest {
     Write-Tolerant ({ Add-Content -LiteralPath $digestPath -Value ("- {0} - {1}" -f (Get-Date -Format 'HH:mm:ss'), $Ligne) -Encoding UTF8 }) "digest ($Ligne)"
 }
 
+# ---- I-287 livrable 2 : marques d'ECHEC EXTERNE posees par la fenetre d'une lane morte sur
+# erreur fournisseur (finish_reason: network_error). Format : fiche=<chemin>|horodatage=<iso>|
+# preuve=<log>. Une marque de PLUS de 24 h est une preuve perimee : ignoree ici (jetee par
+# l'entretien du tour) pour ne jamais masquer un echec qui ne doit plus rien a la panne.
+# NB : retour PLAT (pas de virgule protective) - chaque appelant emballe deja dans @() ; un
+# emballage double ferait iterer les boucles sur un tableau vide (FullName=null, crash I-287).
+function Get-MarquesEchecExterne {
+    param([string]$FicheCible)
+    $trouvees = @()
+    if (-not $FicheCible) { return $trouvees }
+    foreach ($m in @(Get-ChildItem -LiteralPath $PostRoot -Filter 'echec-externe-*.flag' -File -ErrorAction SilentlyContinue)) {
+        if (((Get-Date) - $m.LastWriteTime).TotalHours -gt 24) { continue }
+        $contenu = ''
+        try { $contenu = Get-Content -LiteralPath $m.FullName -Raw -Encoding UTF8 } catch { }
+        if ($contenu -and $contenu.Contains($FicheCible)) { $trouvees += $m }
+    }
+    return $trouvees
+}
+
 function Invoke-LaunchLane {
     param([string]$Nom, [string]$Fiche)
     if ((Get-BudgetRestant) -le 0) {
@@ -520,6 +539,22 @@ function Invoke-LaunchLane {
     # (constate en bac a sable le 2026-08-23 : worktree cree dans le depot reel).
     & (Join-Path $PostRoot 'nouvelle-lane.ps1') -Nom $Nom -Fiche $Fiche -RepoRoot $RepoMoteur
     if ($LASTEXITCODE -ne 0) {
+        # ---- I-287 livrable 2 : ERREUR EXTERNE, PAS UNE FAUTE DE FICHE. Une marque d'echec externe
+        # FRAICHE (< 24 h) portant cette fiche prouve que le run precedent est mort reseau
+        # (finish_reason: network_error, fourni par la fenetre) : l'echec de relance observe
+        # ici herite de cette panne exterieure. La borne N=2 ne juge que des FAUTES PROPRES :
+        # compteur INTACT, pas de ban ; la marque est consommee et la fiche repart au tour
+        # suivant (cas reel I-287 du 24/08 : inventaire-saves morte reseau a 08:50, relance
+        # 08:56 comptee 1/2 - une seconde panne eut BANNI la fiche).
+        $marquesExterne = @(Get-MarquesEchecExterne -FicheCible $Fiche)
+        if ($marquesExterne.Count -gt 0) {
+            foreach ($m in $marquesExterne) { Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue }
+            $state.lanesLancees = @($state.lanesLancees | Where-Object { $_ -ne $Fiche })
+            Save-State -Exclure @($Fiche)
+            Write-VeilLog ("echec externe, compteur intact - lane '{0}' (code sortie {1}) : mort reseau precedente (finish_reason: network_error) prouvee par {2} ; borne N=2 jugee sur fautes propres seulement (I-287) - retee au prochain tour" -f $Nom, $LASTEXITCODE, ($marquesExterne | ForEach-Object { $_.Name }) -join ', ') 'INFO'
+            Add-Digest ("lane '{0}' : echec EXTERNE (reseau fournisseur, I-287) - compteur intact, fiche retee" -f $Nom)
+            return $false
+        }
         # Verification du code sortie (v1.1) : un echec enfant ne tue pas le parent. La marque
         # du deja-lance est RETIREE (v1.1 : retentee au prochain tour si la cause disparait)
         # MAIS l'echec coute desormais (livrable 3) : compteur d'echecs consecutifs PAR fiche ;
@@ -542,6 +577,12 @@ function Invoke-LaunchLane {
         return $false
     }
     $state.sessionsJour = [int]$state.sessionsJour + 1
+    # I-287 : un relancement parti solde les marques d'echec externe anterieures de cette
+    # fiche - la preuve a servi ou n'a plus lieu d'etre, elle ne traine pas dans le poste.
+    foreach ($m in @(Get-MarquesEchecExterne -FicheCible $Fiche)) {
+        Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue
+        Write-VeilLog ("marque d'echec externe anterieure soldee par le relancement de '{0}' : {1}" -f $Nom, $m.Name) 'INFO'
+    }
     Add-Digest ("lane '{0}' lancee - fiche : {1}" -f $Nom, $Fiche)
     Save-State
     return $true
@@ -668,6 +709,16 @@ function Invoke-Tour {
 function Invoke-TourCorps {
     Update-Jour
     Sync-GardesDepuisDisque
+    # ---- I-287 : entretien des marques d'echec externe - une preuve de plus de 48 h est
+    # perimee : jetee (journalisee), pour que le poste ne conserve jamais qu'une preuve fraiche.
+    if (-not $DryRun) {
+        foreach ($m in @(Get-ChildItem -LiteralPath $PostRoot -Filter 'echec-externe-*.flag' -File -ErrorAction SilentlyContinue)) {
+            if (((Get-Date) - $m.LastWriteTime).TotalHours -gt 48) {
+                Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue
+                Write-VeilLog ("marque d'echec externe perimee (> 48 h) jetee : {0}" -f $m.Name) 'INFO'
+            }
+        }
+    }
     # D-197 : observe ce tour-ci ? $null = depot moteur illisible (file lanes non lue)
     # => le declencheur producteur ne compte aucun tour sans observation reelle.
     $lancables = $null
