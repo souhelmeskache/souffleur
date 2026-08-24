@@ -94,60 +94,79 @@ $null = & git -C $RepoRoot rev-parse --verify --quiet "refs/heads/$Nom"
 if ($LASTEXITCODE -eq 0) { $brancheExiste = $true }
 $cheminExiste = Test-Path -LiteralPath $WorktreePath
 if ($brancheExiste -or $cheminExiste) {
-    # Diagnostic sous garde : toute surprise git (worktree corrompu, depot illisible...)
-    # degrade vers « non nettoyable » - Fail conserve, jamais de suppression a l'aveugle.
+    # ---- I-303 REPRISE DE LANE INTERROMPUE (teste AVANT tout diagnostic de nettoyage) ----
+    # Le residu appartient A CETTE lane ? = branche homonyme '$Nom' + worktree ENREGISTRE
+    # exactement a '$WorktreePath'. Une lane tuee par le fournisseur EN COURS DE TRAVAIL
+    # puis relancee retrouve ici SON arbre : il est REELU TEL QUEL - ni nettoye ni juge
+    # (propre, sale, fusionne ou non), le travail non commite etant celui de la session
+    # meme qu'on relance, jamais une cible de suppression. La lecture du registre reste
+    # sous garde : surprise git => pas de reprise a l'aveugle, chemins I-287 inchanges.
+    $repriseLane = $false
+    $enregistre = $false
     try {
-        $enregistre = $false
         foreach ($l in @(& git -C $RepoRoot worktree list --porcelain)) {
             if ($l -like 'worktree *' -and (($l.Substring('worktree '.Length) -replace '/', '\') -ieq ($WorktreePath -replace '/', '\'))) { $enregistre = $true }
         }
-        $propre = $false
-        if ($enregistre) {
-            $porcelaine = @(& git -C $WorktreePath status --porcelain 2>$null | Where-Object { $_ -ne '' })
-            if ($LASTEXITCODE -eq 0 -and $porcelaine.Count -eq 0) { $propre = $true }
-        }
-        $referenceFusion = $null
-        if ($brancheExiste) {
-            $referenceFusion = "refs/heads/$Nom"
-        } elseif ($enregistre) {
-            $headResidu = (& git -C $WorktreePath rev-parse HEAD 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $headResidu) { $referenceFusion = "$headResidu".Trim() }
-        }
-        $fusionne = $false
-        if ($referenceFusion) {
-            & git -C $RepoRoot merge-base --is-ancestor $referenceFusion main 2>$null
-            if ($LASTEXITCODE -eq 0) { $fusionne = $true }
-        }
     } catch {
-        Write-Host "[nouvelle-lane] diagnostic du residu impossible : $($_.Exception.Message)" -ForegroundColor Yellow
-        $enregistre = $false; $propre = $false; $fusionne = $false
+        Write-Host "[nouvelle-lane] lecture du registre des worktrees impossible : $($_.Exception.Message)" -ForegroundColor Yellow
+        $enregistre = $false
     }
-    if ($fusionne -and -not $cheminExiste) {
-        # Residu BRANCHE SEULE (le worktree a deja disparu, ou n'a jamais ete cree) : la
-        # fusion suffit, il n'y a aucun arbre a juger. Suppression de branche seulement.
-        Write-Host "[nouvelle-lane] [INFO] I-287 residu de lane morte detecte : branche '$Nom' fusionnee dans main (plus de worktree) - nettoyage automatique au lieu de Fail" -ForegroundColor Yellow
-        & git -C $RepoRoot branch -d $Nom
-        if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse la suppression (-d) de la branche '$Nom' (encore checkout ailleurs ?) - intervention requise" }
-        Write-Host "[nouvelle-lane] [INFO] I-287 branch -d OK : '$Nom'" -ForegroundColor Yellow
-    } elseif ($enregistre -and $propre -and $fusionne) {
-        # Residu COMPLET : worktree enregistre + arbre propre + branche/HEAD fusionne.
-        Write-Host "[nouvelle-lane] [INFO] I-287 residu de lane morte detecte : worktree '$WorktreePath' propre + $(if ($brancheExiste) { "branche '$Nom' a main ou fusionnee" } else { "HEAD fusionne" }) dans main - nettoyage automatique au lieu de Fail" -ForegroundColor Yellow
-        & git -C $RepoRoot worktree remove $WorktreePath
-        if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse le worktree remove du residu propre - intervention requise sur $WorktreePath" }
-        Write-Host "[nouvelle-lane] [INFO] I-287 worktree remove OK : $WorktreePath" -ForegroundColor Yellow
-        if ($brancheExiste) {
-            # -d et non -D : la suppression reste sous la securite fusion de git.
-            & git -C $RepoRoot branch -d $Nom
-            if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse la suppression (-d) de la branche '$Nom' - intervention requise" }
-            Write-Host "[nouvelle-lane] [INFO] I-287 branch -d OK : '$Nom'" -ForegroundColor Yellow
+    if ($brancheExiste -and $enregistre -and $cheminExiste) {
+        $repriseLane = $true
+        Write-Host "[nouvelle-lane] [INFO] I-303 residu de CETTE lane : branche '$Nom' enregistree en worktree a '$WorktreePath' - REPRISE, arbre reelu tel quel (ni nettoye ni juge)" -ForegroundColor Cyan
+    }
+    if (-not $repriseLane) {
+        # Diagnostic sous garde : toute surprise git (worktree corrompu, depot illisible...)
+        # degrade vers « non nettoyable » - Fail conserve, jamais de suppression a l'aveugle.
+        try {
+            $propre = $false
+            if ($enregistre) {
+                $porcelaine = @(& git -C $WorktreePath status --porcelain 2>$null | Where-Object { $_ -ne '' })
+                if ($LASTEXITCODE -eq 0 -and $porcelaine.Count -eq 0) { $propre = $true }
+            }
+            $referenceFusion = $null
+            if ($brancheExiste) {
+                $referenceFusion = "refs/heads/$Nom"
+            } elseif ($enregistre) {
+                $headResidu = (& git -C $WorktreePath rev-parse HEAD 2>$null)
+                if ($LASTEXITCODE -eq 0 -and $headResidu) { $referenceFusion = "$headResidu".Trim() }
+            }
+            $fusionne = $false
+            if ($referenceFusion) {
+                & git -C $RepoRoot merge-base --is-ancestor $referenceFusion main 2>$null
+                if ($LASTEXITCODE -eq 0) { $fusionne = $true }
+            }
+        } catch {
+            Write-Host "[nouvelle-lane] diagnostic du residu impossible : $($_.Exception.Message)" -ForegroundColor Yellow
+            $enregistre = $false; $propre = $false; $fusionne = $false
         }
-        if (Test-Path -LiteralPath $WorktreePath) { Fail "I-287 : nettoyage incomplet, le chemin existe encore : $WorktreePath" }
-    } else {
-        $cause = if (-not $enregistre -and $cheminExiste) { "le chemin existe mais n'est pas un worktree enregistre de ce depot - contenu inconnu, jamais supprime" }
-                 elseif ($enregistre -and -not $propre) { "arbre NON propre (modifications non commitees ou fichiers non suivis) - jamais supprimer du travail non commite" }
-                 elseif (-not $fusionne) { "branche/HEAD NON fusionne dans main - jamais supprimer du travail non integre" }
-                 else { "etat du residu non reconnu - intervention requise" }
-        Fail ("residu existant non nettoyable pour la lane '{0}' : {1}" -f $Nom, $cause)
+        if ($fusionne -and -not $cheminExiste) {
+            # Residu BRANCHE SEULE (le worktree a deja disparu, ou n'a jamais ete cree) : la
+            # fusion suffit, il n'y a aucun arbre a juger. Suppression de branche seulement.
+            Write-Host "[nouvelle-lane] [INFO] I-287 residu de lane morte detecte : branche '$Nom' fusionnee dans main (plus de worktree) - nettoyage automatique au lieu de Fail" -ForegroundColor Yellow
+            & git -C $RepoRoot branch -d $Nom
+            if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse la suppression (-d) de la branche '$Nom' (encore checkout ailleurs ?) - intervention requise" }
+            Write-Host "[nouvelle-lane] [INFO] I-287 branch -d OK : '$Nom'" -ForegroundColor Yellow
+        } elseif ($enregistre -and $propre -and $fusionne) {
+            # Residu COMPLET : worktree enregistre + arbre propre + branche/HEAD fusionne.
+            Write-Host "[nouvelle-lane] [INFO] I-287 residu de lane morte detecte : worktree '$WorktreePath' propre + $(if ($brancheExiste) { "branche '$Nom' a main ou fusionnee" } else { "HEAD fusionne" }) dans main - nettoyage automatique au lieu de Fail" -ForegroundColor Yellow
+            & git -C $RepoRoot worktree remove $WorktreePath
+            if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse le worktree remove du residu propre - intervention requise sur $WorktreePath" }
+            Write-Host "[nouvelle-lane] [INFO] I-287 worktree remove OK : $WorktreePath" -ForegroundColor Yellow
+            if ($brancheExiste) {
+                # -d et non -D : la suppression reste sous la securite fusion de git.
+                & git -C $RepoRoot branch -d $Nom
+                if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse la suppression (-d) de la branche '$Nom' - intervention requise" }
+                Write-Host "[nouvelle-lane] [INFO] I-287 branch -d OK : '$Nom'" -ForegroundColor Yellow
+            }
+            if (Test-Path -LiteralPath $WorktreePath) { Fail "I-287 : nettoyage incomplet, le chemin existe encore : $WorktreePath" }
+        } else {
+            $cause = if (-not $enregistre -and $cheminExiste) { "le chemin existe mais n'est pas un worktree enregistre de ce depot - contenu inconnu, jamais supprime" }
+                     elseif ($enregistre -and -not $propre) { "arbre NON propre (modifications non commitees ou fichiers non suivis) - jamais supprimer du travail non commite" }
+                     elseif (-not $fusionne) { "branche/HEAD NON fusionne dans main - jamais supprimer du travail non integre" }
+                     else { "etat du residu non reconnu - intervention requise" }
+            Fail ("residu existant non nettoyable pour la lane '{0}' : {1}" -f $Nom, $cause)
+        }
     }
 }
 
@@ -182,24 +201,37 @@ if ($Overlaps.Count -gt 0) {
 }
 
 # ---- Creation du worktree (arbre propre garanti : ni --no-checkout, ni depot nu)
-& git -C $RepoRoot worktree add $WorktreePath -b $Nom main
-if ($LASTEXITCODE -ne 0) { Fail "git worktree add a echoue" }
+# I-303 : en reprise il n'y a RIEN a creer - worktree et branche existants sont reels tels
+# quels. La garde P2 ci-dessous est eludee avec la creation : son rollback (worktree remove
+# --force + branch -D) detruirait le travail non commite de la session relancee, exactement
+# ce qu'I-303 interdit de toucher.
+if (-not $repriseLane) {
+    & git -C $RepoRoot worktree add $WorktreePath -b $Nom main
+    if ($LASTEXITCODE -ne 0) { Fail "git worktree add a echoue" }
 
-# Verification d'isolement P2 : le worktree doit avoir son propre arbre checkoute
-$gitFile = Join-Path $WorktreePath '.git'
-$entries = @(Get-ChildItem -LiteralPath $WorktreePath -Force)
-if (-not (Test-Path -LiteralPath $gitFile) -or $entries.Count -lt 2) {
-    & git -C $RepoRoot worktree remove --force $WorktreePath
-    & git -C $RepoRoot branch -D $Nom
-    Fail "isolement P2 non constate (pas d'arbre propre) - worktree annule et nettoye"
+    # Verification d'isolement P2 : le worktree doit avoir son propre arbre checkoute
+    $gitFile = Join-Path $WorktreePath '.git'
+    $entries = @(Get-ChildItem -LiteralPath $WorktreePath -Force)
+    if (-not (Test-Path -LiteralPath $gitFile) -or $entries.Count -lt 2) {
+        & git -C $RepoRoot worktree remove --force $WorktreePath
+        & git -C $RepoRoot branch -D $Nom
+        Fail "isolement P2 non constate (pas d'arbre propre) - worktree annule et nettoye"
+    }
+    $checkedOut = @(Get-ChildItem -LiteralPath $WorktreePath -Recurse -File -ErrorAction SilentlyContinue).Count
+    Write-Host "[nouvelle-lane] isolement P2 constate - arbre propre : $checkedOut fichiers checkoutes dans $WorktreePath" -ForegroundColor Green
 }
-$checkedOut = @(Get-ChildItem -LiteralPath $WorktreePath -Recurse -File -ErrorAction SilentlyContinue).Count
-Write-Host "[nouvelle-lane] isolement P2 constate - arbre propre : $checkedOut fichiers checkoutes dans $WorktreePath" -ForegroundColor Green
 
 # ---- Recapitulatif une ligne
 Write-Host ("[nouvelle-lane] {0} | branche {0} | {1} | fiche : {2}" -f $Nom, $WorktreePath, $Fiche) -ForegroundColor Cyan
 
 if ($DryRun) {
+    if ($repriseLane) {
+        # I-303 : en reprise, rien n'a ete cree - donc RIEN a nettoyer. Le nettoyage DRYRUN
+        # standard detruirait le worktree existant ET son travail non commite : interdit.
+        Write-Host "[nouvelle-lane] DRYRUN - reprise (I-303) : rien cree, rien nettoye - worktree et branche existants REINTEGRAUX" -ForegroundColor Magenta
+        Write-Host "[nouvelle-lane] [INFO] reprise : worktree existant reelu tel quel" -ForegroundColor Cyan
+        exit 0
+    }
     Write-Host "[nouvelle-lane] DRYRUN - nettoyage : suppression du worktree et de la branche" -ForegroundColor Magenta
     & git -C $RepoRoot worktree remove $WorktreePath
     if ($LASTEXITCODE -ne 0) { & git -C $RepoRoot worktree remove --force $WorktreePath }
@@ -301,4 +333,5 @@ $inner = "`$host.UI.RawUI.WindowTitle = 'LANE $Nom'; Set-Location -LiteralPath '
 $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
 Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Normal', '-EncodedCommand', $b64)
 Write-Host "[nouvelle-lane] session opencode lancee dans une nouvelle fenetre (worktree : $WorktreePath ; fermeture automatique a completion - D-192)" -ForegroundColor Cyan
+if ($repriseLane) { Write-Host "[nouvelle-lane] [INFO] reprise : worktree existant reelu tel quel" -ForegroundColor Cyan }
 exit 0
