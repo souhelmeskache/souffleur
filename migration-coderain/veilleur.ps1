@@ -25,6 +25,13 @@ $LOCK_STALE_HEURES  = 6
 # I-275 livrable 3 : borne anti-boucle — apres N echecs consecutifs d'une meme fiche,
 # elle sort de la file jusqu'a intervention.
 $MAX_ECHECS_CONSECUTIFS = 2
+# D-197 (lane boucle-productive-v2) : declencheur du reveil PRODUCTEUR - configurable ici.
+# $PRODUCTEUR_N_TOIRS : tours consecutifs sans AUCUNE fiche lanable observee qui declenchent
+#                       l'eveil producteur si un slot technique est libre (12 tours x 300 s = 1 h).
+# $PRODUCTEUR_HEURE   : heure du jour a partir de laquelle la fenetre quotidienne s'ouvre
+#                       (premier tour apres 09:00 sans eveil producteur deja fait ce jour).
+$PRODUCTEUR_N_TOIRS = 12
+$PRODUCTEUR_HEURE   = 9
 $CI_REPO            = 'souhelmeskache/ttrpg-mvp'
 # I-277 : verrou d'ecriture du STATE, partage par toute voie qui touche veilleur-state.json
 # (boucle du veilleur ET outil officiel -Deban). Voir Enter-StateLock.
@@ -242,6 +249,10 @@ if (-not $state.PSObject.Properties['rapportsAttente']) { $state | Add-Member -N
 # pour que les affectations ulterieures (baseline, empreinte) trouvent toujours la propriete.
 if (-not $state.PSObject.Properties['baselineFait'])  { $state | Add-Member -NotePropertyName 'baselineFait'  -NotePropertyValue $false -Force }
 if (-not $state.PSObject.Properties['lanesEmpreinte']) { $state | Add-Member -NotePropertyName 'lanesEmpreinte' -NotePropertyValue '' -Force }
+# D-197 : memoire du reveil PRODUCTEUR - dernier jour ou il a eu lieu (borne 1/jour)
+# et compteur de tours consecutifs sans fiche lanable observee.
+if (-not $state.PSObject.Properties['producteurJour'])    { $state | Add-Member -NotePropertyName 'producteurJour'    -NotePropertyValue '' -Force }
+if (-not $state.PSObject.Properties['toursSansLancable']) { $state | Add-Member -NotePropertyName 'toursSansLancable' -NotePropertyValue 0  -Force }
 
 function Save-State {
     # I-275 livrable 3 : une fiche que l'appelant VIENT DE RETIRER (echec constate de
@@ -403,7 +414,8 @@ function Invoke-EvenementMeta {
     #     la mention « a traiter dans ta fenetre meta » : Souhel regarde sa fenetre permanente
     #     et y demande la lecture en direct. Aucun budget consomme, aucun verrou touche.
     #   - drapeau absent => reveil classique d'une session meta VISIBLE (fenetre normale).
-    param([string]$Motif, [string]$Rapport)
+    # D-197 : le mode (instruction | producteur) voyage avec l'evenement jusqu'au template.
+    param([string]$Motif, [string]$Rapport, [string]$Mode = 'instruction')
     if (Test-MetaVivant) {
         Write-VeilLog "TUI meta vivant (drapeau present) - aucune session fantome : evenement consigne au digest" 'INFO'
         Add-Digest ("reveil META ({0}) - {1} - A TRAITER DANS TA FENETRE META (TUI vivant, aucune session fantome lancee)" -f $Motif, $Rapport)
@@ -413,7 +425,7 @@ function Invoke-EvenementMeta {
 }
 
 function Invoke-WakeMeta {
-    param([string]$Motif, [string]$Rapport)
+    param([string]$Motif, [string]$Rapport, [string]$Mode = 'instruction')
     if (Test-LockMeta) {
         Write-VeilLog "garde verrou meta : une session meta est deja active - reveil refuse" 'GARDE'
         return $false
@@ -422,10 +434,12 @@ function Invoke-WakeMeta {
         Write-VeilLog ("garde volume : plafond {0} sessions/jour atteint - reveil refuse ({1})" -f $MAX_SESSIONS_JOUR, $Motif) 'GARDE'
         return $false
     }
+    # D-197 : le MODE du fil (instruction | producteur) est grave dans le prompt instancie -
+    # il voyage par FICHIER comme le reste du prompt, jamais par la ligne de commande.
     $template = Get-Content -LiteralPath $EveilTemplate -Raw -Encoding UTF8
-    $prompt = $template.Replace('{{MOTIF}}', $Motif).Replace('{{RAPPORT}}', $Rapport)
+    $prompt = $template.Replace('{{MOTIF}}', $Motif).Replace('{{RAPPORT}}', $Rapport).Replace('{{MODE}}', $Mode)
     if ($DryRun) {
-        Write-Host "[veilleur][DRYRUN] lancerais une session meta VISIBLE (motif : $Motif) avec le prompt :" -ForegroundColor Magenta
+        Write-Host "[veilleur][DRYRUN] lancerais une session meta VISIBLE (motif : $Motif ; mode : $Mode) avec le prompt :" -ForegroundColor Magenta
         Write-Host "--- debut prompt ---"
         Write-Host $prompt
         Write-Host "--- fin prompt ---"
@@ -651,6 +665,9 @@ function Invoke-Tour {
 function Invoke-TourCorps {
     Update-Jour
     Sync-GardesDepuisDisque
+    # D-197 : observe ce tour-ci ? $null = depot moteur illisible (file lanes non lue)
+    # => le declencheur producteur ne compte aucun tour sans observation reelle.
+    $lancables = $null
     # Le drapeau se lit UNE FOIS au debut du tour : sinon la section rapports le retourne
     # avant que la section lanes ne le lise, et la baseline ne protege plus.
     $premiereFois = (-not $state.baselineFait)
@@ -770,6 +787,44 @@ function Invoke-TourCorps {
                     # 'catalogue-relance' de partir a deux tours successifs). La fiche en echec
                     # est retee au tour suivant, ou bannie apres N echecs consecutifs (livrable 3).
                 }
+            }
+        }
+    }
+
+    # ---- 2bis. Reveil PRODUCTEUR (D-197, lane boucle-productive-v2)
+    # Declencheur : (>= 1 slot technique libre ET aucune fiche lanable observee pendant
+    # $PRODUCTEUR_N_TOIRS tours consecutifs) OU (premier tour apres $PRODUCTEUR_HEURE h
+    # sans eveil producteur deja fait ce jour). Borne : UN producteur par jour maximum,
+    # pose seulement quand l'eveil est reellement parti - un refus (verrou meta, budget)
+    # ne consomme rien et retente au tour suivant. Le mandat vit dans eveil-meta.md
+    # (section MANDAT PRODUCTEUR) ; le mode passe dans le prompt instancie ({{MODE}}),
+    # par fichier comme l'existant. TUI vivant : meme routage que les autres evenements
+    # (consigne au digest, aucune session fantome).
+    if ($null -ne $lancables) {
+        if (@($lancables).Count -gt 0) { $state.toursSansLancable = 0 }
+        else                           { $state.toursSansLancable = [int]$state.toursSansLancable + 1 }
+        # Le compteur vit ENTRE les processus : sauvegarde a chaque changement, sinon une
+        # instance relancee repartirait de zero et l'etat idle ne serait jamais atteint.
+        Save-State
+        $dispoProd = Get-LanesActives
+        $slotLibre      = ($dispoProd.Disponible -and (@($dispoProd.Lanes).Count -lt $MAX_LANES_ACTIVES))
+        $dejaFaitCeJour = ([string]$state.producteurJour -eq (Get-Date -Format 'yyyy-MM-dd'))
+        $idleProuve     = ([int]$state.toursSansLancable -ge $PRODUCTEUR_N_TOIRS)
+        $fenetreDuJour  = ((Get-Date).Hour -ge $PRODUCTEUR_HEURE) -and (-not $dejaFaitCeJour)
+        Write-VeilLog ("producteur : slotLibre={0} toursSansLancable={1}/{2} fenetre9h={3} dejaFait={4}" -f $slotLibre, $state.toursSansLancable, $PRODUCTEUR_N_TOIRS, $fenetreDuJour, $dejaFaitCeJour) 'INFO'
+        # Borne 1/jour portee par TOUT le declencheur : sans elle, l'etat idle persistant
+        # re-declencherait chaque tour suivant le premier reveil producteur.
+        if ((-not $dejaFaitCeJour) -and (($slotLibre -and $idleProuve) -or $fenetreDuJour)) {
+            $issue = Invoke-EvenementMeta -Motif 'reveil producteur (D-197)' `
+                                          -Rapport '(pas de rapport : balayage registre-items / registre-decisions, voir MANDAT PRODUCTEUR dans ce prompt)' `
+                                          -Mode 'producteur'
+            if ($issue) {
+                # Evenement consomme (session lancee OU capte par un TUI vivant) : borne du jour posee.
+                $state.producteurJour = Get-Date -Format 'yyyy-MM-dd'
+                Save-State
+                Write-VeilLog "eveil PRODUCTEUR parti - borne 1/jour posee"
+            } else {
+                Write-VeilLog "eveil producteur refuse ce tour (verrou/budget) - retente au tour suivant, borne non consommee" 'WARN'
             }
         }
     }
