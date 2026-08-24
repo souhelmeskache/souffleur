@@ -22,6 +22,10 @@ if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved.Path '.
 $RepoRoot = $resolved.Path
 $Parent = Split-Path -LiteralPath $RepoRoot
 $WorktreePath = Join-Path $Parent "coderain-$Nom"
+# Dossier du POSTE (la ou vivent state/journal/preuves du veilleur) : les deux scripts sont
+# deployes cote a cote ; le dossier du present script EST le poste (I-287 : preuves de session
+# lane et marques d'echec externe ecrites LA, la ou le veilleur les lit au tour suivant).
+$PostRoot = [System.IO.Path]::GetDirectoryName($PSCommandPath)
 
 Write-Host "[nouvelle-lane] lane=$Nom fiche=$Fiche depot=$RepoRoot dryrun=$DryRun" -ForegroundColor Cyan
 
@@ -74,9 +78,78 @@ if ($Status.Count -gt 0) { Fail "main n'est pas propre (git status --porcelain n
 Write-Host "[nouvelle-lane] controle 2 OK - main propre" -ForegroundColor Green
 
 # ---- Controle 3 : collisions branche/chemin + recouvrement de perimetre avec les lanes actives
+# ---- I-287 : un RESIDU de lane morte (lane tuee reseau en cours, auto-nettoyage P4 jamais
+# passe) ne doit plus bloquer la relance. Avant tout Fail, le residu est DIAGNOSTIQUE :
+# nettoyage automatique JOURNALISE (worktree remove + suppression de branche) si et seulement si
+#   (a) le chemin cible est un worktree ENREGISTRE de CE depot (jamais un repertoire etranger),
+#   (b) l'arbre est PROPRE : status --porcelain vide, donc ni modifications non commitees ni
+#       fichiers non suivis (exactement le critere que git worktree remove exige lui-meme),
+#   (c) la branche est a main OU fusionnee dedans (merge-base --is-ancestor couvre les deux ;
+#       sans branche nommee, le HEAD reellement checkout du residu fait foi).
+# Sinon Fail CONSERVE avec la cause NOMMEE : on ne supprime JAMAIS du travail non commite ni
+# du travail non integre. Cas reel I-287 du 24/08 : inventaire-saves morte reseau a 08:50,
+# relance 08:56 code 1 (« chemin existe deja »), compteur d'echecs 1/2, ban evite de justesse.
+$brancheExiste = $false
 $null = & git -C $RepoRoot rev-parse --verify --quiet "refs/heads/$Nom"
-if ($LASTEXITCODE -eq 0) { Fail "la branche '$Nom' existe deja dans le depot moteur" }
-if (Test-Path -LiteralPath $WorktreePath) { Fail "le chemin cible existe deja : $WorktreePath" }
+if ($LASTEXITCODE -eq 0) { $brancheExiste = $true }
+$cheminExiste = Test-Path -LiteralPath $WorktreePath
+if ($brancheExiste -or $cheminExiste) {
+    # Diagnostic sous garde : toute surprise git (worktree corrompu, depot illisible...)
+    # degrade vers « non nettoyable » - Fail conserve, jamais de suppression a l'aveugle.
+    try {
+        $enregistre = $false
+        foreach ($l in @(& git -C $RepoRoot worktree list --porcelain)) {
+            if ($l -like 'worktree *' -and (($l.Substring('worktree '.Length) -replace '/', '\') -ieq ($WorktreePath -replace '/', '\'))) { $enregistre = $true }
+        }
+        $propre = $false
+        if ($enregistre) {
+            $porcelaine = @(& git -C $WorktreePath status --porcelain 2>$null | Where-Object { $_ -ne '' })
+            if ($LASTEXITCODE -eq 0 -and $porcelaine.Count -eq 0) { $propre = $true }
+        }
+        $referenceFusion = $null
+        if ($brancheExiste) {
+            $referenceFusion = "refs/heads/$Nom"
+        } elseif ($enregistre) {
+            $headResidu = (& git -C $WorktreePath rev-parse HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $headResidu) { $referenceFusion = "$headResidu".Trim() }
+        }
+        $fusionne = $false
+        if ($referenceFusion) {
+            & git -C $RepoRoot merge-base --is-ancestor $referenceFusion main 2>$null
+            if ($LASTEXITCODE -eq 0) { $fusionne = $true }
+        }
+    } catch {
+        Write-Host "[nouvelle-lane] diagnostic du residu impossible : $($_.Exception.Message)" -ForegroundColor Yellow
+        $enregistre = $false; $propre = $false; $fusionne = $false
+    }
+    if ($fusionne -and -not $cheminExiste) {
+        # Residu BRANCHE SEULE (le worktree a deja disparu, ou n'a jamais ete cree) : la
+        # fusion suffit, il n'y a aucun arbre a juger. Suppression de branche seulement.
+        Write-Host "[nouvelle-lane] [INFO] I-287 residu de lane morte detecte : branche '$Nom' fusionnee dans main (plus de worktree) - nettoyage automatique au lieu de Fail" -ForegroundColor Yellow
+        & git -C $RepoRoot branch -d $Nom
+        if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse la suppression (-d) de la branche '$Nom' (encore checkout ailleurs ?) - intervention requise" }
+        Write-Host "[nouvelle-lane] [INFO] I-287 branch -d OK : '$Nom'" -ForegroundColor Yellow
+    } elseif ($enregistre -and $propre -and $fusionne) {
+        # Residu COMPLET : worktree enregistre + arbre propre + branche/HEAD fusionne.
+        Write-Host "[nouvelle-lane] [INFO] I-287 residu de lane morte detecte : worktree '$WorktreePath' propre + $(if ($brancheExiste) { "branche '$Nom' a main ou fusionnee" } else { "HEAD fusionne" }) dans main - nettoyage automatique au lieu de Fail" -ForegroundColor Yellow
+        & git -C $RepoRoot worktree remove $WorktreePath
+        if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse le worktree remove du residu propre - intervention requise sur $WorktreePath" }
+        Write-Host "[nouvelle-lane] [INFO] I-287 worktree remove OK : $WorktreePath" -ForegroundColor Yellow
+        if ($brancheExiste) {
+            # -d et non -D : la suppression reste sous la securite fusion de git.
+            & git -C $RepoRoot branch -d $Nom
+            if ($LASTEXITCODE -ne 0) { Fail "I-287 : git a refuse la suppression (-d) de la branche '$Nom' - intervention requise" }
+            Write-Host "[nouvelle-lane] [INFO] I-287 branch -d OK : '$Nom'" -ForegroundColor Yellow
+        }
+        if (Test-Path -LiteralPath $WorktreePath) { Fail "I-287 : nettoyage incomplet, le chemin existe encore : $WorktreePath" }
+    } else {
+        $cause = if (-not $enregistre -and $cheminExiste) { "le chemin existe mais n'est pas un worktree enregistre de ce depot - contenu inconnu, jamais supprime" }
+                 elseif ($enregistre -and -not $propre) { "arbre NON propre (modifications non commitees ou fichiers non suivis) - jamais supprimer du travail non commite" }
+                 elseif (-not $fusionne) { "branche/HEAD NON fusionne dans main - jamais supprimer du travail non integre" }
+                 else { "etat du residu non reconnu - intervention requise" }
+        Fail ("residu existant non nettoyable pour la lane '{0}' : {1}" -f $Nom, $cause)
+    }
+}
 
 $Overlaps = @()
 $WtList = @(& git -C $RepoRoot worktree list --porcelain)
@@ -154,6 +227,16 @@ $Prompt = "Execute $Fiche. Branche et worktree deja en place. Commit avant rappo
           "selon README-nouvelle-lane - DERNIER geste avant de rendre la main."
 $horodatage = Get-Date -Format 'yyyyMMdd-HHmmss'
 $promptFile = Join-Path ([System.IO.Path]::GetTempPath()) ("lane-{0}-{1}.md" -f $Nom, $horodatage)
+# I-287 livrable 2 : la sortie du run est TEE'ee vers une preuve sur disque (meme ecole que
+# les preuves de session meta). Si le run meurt (codeSortie <> 0) et que la preuve porte
+# finish_reason: network_error - mort FOURNISSEUR, ni faute de la fiche ni faute de la lane -
+# une MARQUE echec-externe-*.flag est posee dans le poste. Le veilleur la lit au tour
+# suivant : echec non compte dans echecsParFiche, journal « [INFO] echec externe, compteur
+# intact ». Sans elle, la mort reseau du run precedent faisait porter a la RELANCE (et donc
+# a la fiche) la responsabilite d'une panne exterieure : c'est exactement I-287.
+$proofLog   = Join-Path $PostRoot ("preuve-session-lane-{0}-{1}.log" -f $Nom, $horodatage)
+$marqueExt  = Join-Path $PostRoot ("echec-externe-{0}-{1}.flag" -f $Nom, $horodatage)
+$FicheLit   = $Fiche -replace "'", "''"
 Set-Content -LiteralPath $promptFile -Value $Prompt -Encoding UTF8
 # I-275 livrable 12 (D-192) : PLUS de -NoExit. Sortie 0 de 'opencode.cmd run' => la fenetre
 # se FERME seule ; sortie <> 0 => la fenetre RESTE ouverte sur l'erreur visible (seul cas de
@@ -165,7 +248,7 @@ Set-Content -LiteralPath $promptFile -Value $Prompt -Encoding UTF8
 $inner = "Set-Location -LiteralPath '$WorktreePath'; " +
          "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null; " +
          "`$p = Get-Content -LiteralPath '$promptFile' -Raw -Encoding UTF8; " +
-         "opencode.cmd run `$p; " +
+         "opencode.cmd run `$p 2>&1 | Tee-Object -FilePath '$proofLog' -Append; " +
          "`$codeSortie = `$LASTEXITCODE; " +
          "`$p1abs = @($P1Lit); " +
          "`$manquants = @(foreach (`$f in `$p1abs) { if (-not (Test-Path -LiteralPath `$f)) { `$f } }); " +
@@ -175,10 +258,17 @@ $inner = "Set-Location -LiteralPath '$WorktreePath'; " +
          "  foreach (`$f in `$manquants) { Write-Host ('  - ABSENT : ' + `$f) -ForegroundColor Red } " +
          "  Write-Host '[nouvelle-lane] un exit 0 sans livrable n''est pas une completion (I-281) - code sortie force a 3.' -ForegroundColor Red; " +
          "  `$codeSortie = 3 } " +
+         "`$sortiePreuve = Get-Content -LiteralPath '$proofLog' -Raw -ErrorAction SilentlyContinue; " +
+         "if ((`$codeSortie -ne 0) -and (`$sortiePreuve -match 'finish[_-]?[Rr]eason.{0,24}network[_-]?error')) { " +
+         "  Set-Content -LiteralPath '$marqueExt' -Value ('fiche=$FicheLit|horodatage=' + (Get-Date -Format o) + '|preuve=$proofLog') -Encoding UTF8; " +
+         "  Write-Host '[nouvelle-lane] [INFO] echec externe (finish_reason: network_error, fournisseur) consigne au veilleur : ce mort n''est pas une faute de fiche (I-287)' -ForegroundColor Yellow } " +
          "Remove-Item -LiteralPath '$promptFile' -ErrorAction SilentlyContinue; " +
          "if (`$codeSortie -ne 0) { " +
          "  Write-Host ''; Write-Host ('[nouvelle-lane] lane en echec (code sortie ' + `$codeSortie + ') - fenetre laissee ouverte (D-192 : fermeture a completion seulement)' ) -ForegroundColor Red; " +
          "  Read-Host 'Appuyez sur Entree pour fermer'; exit `$codeSortie } "
+# I-287 livrable 2 : la fenetre TEE la sortie du run vers la preuve, et si le run meurt sur
+# finish_reason: network_error (mort FOURNISSEUR), pose une marque echec-externe-*.flag dans
+# le poste - posee SEULEMENT si le run a echoue (un run survecu a une coupure ne marque rien).
 $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
 Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $b64)
 Write-Host "[nouvelle-lane] session opencode lancee dans une nouvelle fenetre (worktree : $WorktreePath ; fermeture automatique a completion - D-192)" -ForegroundColor Cyan
