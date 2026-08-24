@@ -344,6 +344,11 @@ if (-not $state.PSObject.Properties['reveilsLances']) { $state | Add-Member -Not
 # fois jusqu'a correction, ecole I-289) - liste de noms de fichiers. Tolerant un state
 # anterieur qui ne le porte pas encore.
 if (-not $state.PSObject.Properties['derivesConsignees']) { $state | Add-Member -NotePropertyName 'derivesConsignees' -NotePropertyValue @() -Force }
+# D-204 : memoire des fiches dont l'ecart « bloquee » a DEJA ete consigne ([INFO] emis UNE
+# seule fois au changement, meme ecole que dejaLanceesConsignees/I-289). Jetee silencieusement
+# au deblocage (retrait du mot de la cellule) ou quand la ligne quitte le tableau. Tolerant un
+# state anterieur qui ne le porte pas encore.
+if (-not $state.PSObject.Properties['bloqueesConsignees']) { $state | Add-Member -NotePropertyName 'bloqueesConsignees' -NotePropertyValue @() -Force }
 
 function Save-State {
     # I-275 livrable 3 : une fiche que l'appelant VIENT DE RETIRER (echec constate de
@@ -783,6 +788,9 @@ function Get-Lancables {
     }
     $lignes = Get-Content -LiteralPath $E3E2Path -Encoding UTF8
     $resultats = @()
+    # D-204 : fiches vues et resolues CE tour, tout statut confondu (y compris ecartees) -
+    # sert a l'entretien de bloqueesConsignees en fin de fonction.
+    $pathsVus = @()
     foreach ($l in $lignes) {
         if ($l -notmatch '^\|') { continue }
         # v1.1 : les cellules sont examinees INDIVIDUELLEMENT. L'ancienne exclusion
@@ -816,6 +824,7 @@ function Get-Lancables {
             Write-VeilLog "fiche lanable introuvable sur disque : $cible - ignoree" 'WARN'
             continue
         }
+        $pathsVus += $resolve.Path
         $leaf = [System.IO.Path]::GetFileNameWithoutExtension($resolve.Path)
         $nom = ($leaf -replace '^FICHE-', '' -replace '-\d{4}-\d{2}-\d{2}$', '').ToLower()
         $nom = ($nom -replace '[^a-z0-9]+', '-').Trim('-')
@@ -823,7 +832,43 @@ function Get-Lancables {
             Write-VeilLog "nom de lane invalide deriverait de '$leaf' - fiche ignoree : $($resolve.Path)" 'WARN'
             continue
         }
+        # ---- D-204 : le sequencement devient un MARQUEUR MACHINE. Apres le test des marqueurs
+        # de cloture (leur priorite est inchangee) : une cellule d'etat contenant « bloquee »
+        # ecarte la ligne de la file. Insensible a la casse ET aux accents ('bloquee' doit
+        # matcher aussi : ne pas reproduire I-296 ou le filtre des marqueurs n'entendait que
+        # les formes accentuees) ; bornes de mot des deux cotes (« debloquee » ne matche pas).
+        # L'ecart est journalise [INFO] UNE SEULE FOIS au changement (memoire
+        # bloqueesConsignees, meme ecole que dejaLanceesConsignees du merge 99b95d2), citant la
+        # lane et la cellule. Place APRES la resolution de la fiche : c'est son chemin resolu
+        # qui sert de cle et son nom de lane qui est cite au journal. Le motif couvre les deux
+        # graphies du feminin : accent+e (« bloquee » accorde) ET e-double non accentue.
+        if ($celluleEtat -match '(?i)\bbloqu[\u00E9]?e{1,2}s?\b') {
+            if (@($state.bloqueesConsignees) -notcontains $resolve.Path) {
+                $state.bloqueesConsignees = @($state.bloqueesConsignees) + $resolve.Path
+                Save-State
+                Write-VeilLog ("fiche lanable ECARTEE : statut bloquee dans la cellule d'etat ('{0}') - lane '{1}' sortie de file jusqu'a deblocage (D-204)" -f $celluleEtat, $nom) 'INFO'
+            }
+            continue
+        }
+        # D-204 (suite) : DEBLOCAGE = retrait du mot. La memoire d'annonce est jetee
+        # SILENCIEUSEMENT (aucun log : le changement a deja ete dit a l'annonce, le retour a
+        # l'etat normal se voit au lancement) et la ligne redevient lanzable ci-dessous.
+        if (@($state.bloqueesConsignees) -contains $resolve.Path) {
+            $state.bloqueesConsignees = @($state.bloqueesConsignees | Where-Object { $_ -ne $resolve.Path })
+            Save-State
+        }
         $resultats += [pscustomobject]@{ Nom = $nom; Fiche = $resolve.Path }
+    }
+    # ---- D-204 (entretien, meme ecole que la detection de livraison I-289) : une memoire
+    # d'ecart dont la fiche n'a plus ETE VUE ce tour (ligne livree/fermee/retiree du tableau)
+    # est jetee silencieusement, pour qu'un retour ulterieur du marqueur sur cette fiche soit
+    # reconsigne comme un NOUVEAU changement. Une fiche bloquee, justement, n'apparait jamais
+    # dans les lanzables : le critere est « vue resolue ce tour », pas « presente en file ».
+    foreach ($b in @($state.bloqueesConsignees)) {
+        if (-not (@($pathsVus) -contains $b)) {
+            $state.bloqueesConsignees = @($state.bloqueesConsignees | Where-Object { $_ -ne $b })
+            Save-State
+        }
     }
     return $resultats
 }
