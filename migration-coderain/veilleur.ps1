@@ -415,13 +415,16 @@ function Invoke-EvenementMeta {
     #     et y demande la lecture en direct. Aucun budget consomme, aucun verrou touche.
     #   - drapeau absent => reveil classique d'une session meta VISIBLE (fenetre normale).
     # D-197 : le mode (instruction | producteur) voyage avec l'evenement jusqu'au template.
+    # I-292 : il voyage JUSQU'AU BOUT du tuyau - transmis a Invoke-WakeMeta (qui retombait
+    # sur son defaut 'instruction', preuve : eveil-meta-20260824-113132.md) et consigne au
+    # digest sur le chemin TUI vivant, pour que la fenetre permanente sache aussi quel fil.
     param([string]$Motif, [string]$Rapport, [string]$Mode = 'instruction')
     if (Test-MetaVivant) {
         Write-VeilLog "TUI meta vivant (drapeau present) - aucune session fantome : evenement consigne au digest" 'INFO'
-        Add-Digest ("reveil META ({0}) - {1} - A TRAITER DANS TA FENETRE META (TUI vivant, aucune session fantome lancee)" -f $Motif, $Rapport)
+        Add-Digest ("reveil META ({0}) - {1} - Mode du fil : {2} - A TRAITER DANS TA FENETRE META (TUI vivant, aucune session fantome lancee)" -f $Motif, $Rapport, $Mode)
         return $true
     }
-    return (Invoke-WakeMeta -Motif $Motif -Rapport $Rapport)
+    return (Invoke-WakeMeta -Motif $Motif -Rapport $Rapport -Mode $Mode)
 }
 
 function Invoke-WakeMeta {
