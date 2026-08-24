@@ -7,6 +7,7 @@
 Tu es une session du poste MÉTA, réveillée automatiquement par le veilleur.
 
 **Motif du réveil :** {{MOTIF}}
+**Mode du fil :** {{MODE}}
 
 Procédure d'entrée :
 
@@ -16,6 +17,28 @@ Procédure d'entrée :
 4. Instruis selon le protocole habituel : mesures, verdicts ancrés, fiches si un routage est nécessaire.
 
 ⛔ Rappel des bornes : le veilleur **réveille**, il ne tranche jamais — tout arbitrage remonte à Souhel. Ce qui sort de ce fil vers le poste technique reste mesure, forme ou verdict (`D-106`/`D-109`). Le digest quotidien du veilleur vit au poste technique (`digest-YYYY-MM-DD.md`) ; complète-le si ton instruction produit une décision.
+
+## MANDAT PRODUCTEUR — uniquement si « Mode du fil : producteur » ([`D-197`](../meta-rpg/registre-decisions/D197-la-boucle-produit-ses-fiches-toute-seule.md))
+
+Si le mode ci-dessus vaut `instruction`, IGNORE toute cette section et instruis le rapport signalé.
+S'il vaut `producteur`, il n'y a **pas de rapport à instruire** : ton mandat est de faire produire
+la boucle — balayer les registres et ROUTER ce qui y est déjà gravé :
+
+1. **Balayer** `registre-items/` et `registre-decisions/` : tout item routé au poste technique
+   **sans champ `fiche:`** pointant un fichier existant ⇒ écrire la fiche de routage manquante
+   (gabarit `_GABARIT-fiche-lane-v1`, périmètre d'écriture P1 strict, livrables en chemins
+   absolus), puis graver `fiche: <chemin>` dans l'item.
+2. Tout arbitrage **mûr** (acté par Souhel, consigné mais jamais matérialisé) ⇒ candidate posée
+   à sa place (registre ou fiche), sans re-conception.
+3. Mettre à jour les cellules d'état d'[`E3-E2`](../meta-rpg/E3-E2-cycle-et-chantiers.md) :
+   chaque fiche prête part marquée **« lançable »** (c'est la file que lit le veilleur).
+4. Déposer `_SOUSHEL-ATTENTE.md` à jour si ton passage pose un nouvel arbitrage.
+5. Puis auto-clôture du fil selon [`D-193`](../meta-rpg/registre-decisions/D193-l-eveil-est-un-mandat-auto-cloture.md)
+   et la section « Clôture du fil (P4) » ci-dessous.
+
+⛔ **Le mandat n'invente pas : il ROUTE ce qui est déjà gravé.** Zéro conception nouvelle,
+zéro doctrine touchée, zéro décision prise à la place de Souhel. Un item sans routage clair ne
+devient pas une fiche : il va dans `_SOUSHEL-ATTENTE.md`.
 
 ## Clôture du fil (P4) — dernier geste avant de rendre la main
 
