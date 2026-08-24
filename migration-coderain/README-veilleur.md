@@ -76,10 +76,17 @@ Détails v2 :
    indépendamment à chaque tour — slot libre (< 3 actives) ∧ budget > 0 ⇒ lancement via
    `nouvelle-lane.ps1 -Nom <dérivé de la fiche> -Fiche <chemin>` ; sinon elle reste en file et
    repart au tour suivant sa libération. L'empreinte (`lanesEmpreinte`) ne sert plus qu'au
-   journal. Le filtrage est **par cellule** : le marqueur de clôture (`livr|ferm|merg`) ne
-   compte que dans la cellule d'état (dernière colonne) — un « mergé » ailleurs ne rend plus
-   une fiche invisible, et toute fiche écartée malgré « lançable » produit un `[WARN]` citant
-   la cause. Le code sortie de `nouvelle-lane.ps1` est vérifié : échec ⇒ ni `lanesLancees` ni
+   journal. Le filtrage est **par cellule** et **par marqueurs bornés** (v1.5, défaut 4a) :
+   le marqueur de clôture ne compte que dans la **cellule d'état** (dernière colonne) et
+   n'attrape que les formes fléchées exactes `livré(e)(s)` / `fermé(e)(s)` / `mergé(e)(s)`
+   bornées de mot — « 15 livrables », « fermeture », « en-cours-de-relecture » n'écartent
+   plus une fiche ; « livré », « FERMÉE », « mergé » oui. Toute fiche écartée malgré
+   « lançable » produit un `[WARN]` citant la cause. Les trois listes de garde sont
+   **relues du disque sous verrou au début de chaque tour** (`Sync-GardesDepuisDisque`,
+   I-277/I-280) : `lanesLancees` est *remplacée* par sa valeur disque intégrale — un
+   `-Deban` pendant qu'une instance vit est pris en compte au tour suivant, sans
+   redémarrage, et ne peut plus être ressuscité par une fusion qui ne sait qu'ajouter.
+   Le code sortie de `nouvelle-lane.ps1` est vérifié : échec ⇒ ni `lanesLancees` ni
    `sessionsJour` incrémentés, `[WARN]` au journal + ligne au digest ; nouvelle tentative au
    tour suivant si la cause disparaît.
 3. **CI rouge** — dernier run de `souhelmeskache/ttrpg-mvp` lu via `gh run list`.
@@ -100,6 +107,7 @@ Chaque action est tracée dans `veilleur.log` et résumée dans `digest-YYYY-MM-
 | **Anti-instance multiple — deux couches (I-275 livrable 10)** | mutex nommé `Global\MRPG-Veilleur` **+ verrou PID** `veilleur-instance.lock`. Un mutex abandonné par une instance morte est **repris** sans échec ; un verrou PID dont le processus n'existe plus est écrasé ; un second démarrage tant qu'une instance vit sort avec `[WARN] instance deja active` |
 | **Borne anti-boucle par fiche (I-275 livrable 3)** | compteur d'échecs consécutifs PAR fiche (`echecsParFiche`) ; après **N = 2** échecs consécutifs de `nouvelle-lane.ps1`, la fiche entre dans `fichesBannies` et sort de la file avec `[WARN]` au digest, **jusqu'à intervention** — déban OFFICIEL : `.\veilleur.ps1 -Deban <chemin-de-fiche>`, geste méta/Souhel. ⛔ Ne JAMAIS retirer un ban en éditant `veilleur-state.json` à la main : c'est exactement le lost update qui a motivé la garde ([I-277](../meta-rpg/registre-items/MRPG-I-277-le-bannissement-v13-ne-tient-pas-en-reel.md)) — l'outil officiel relit le state frais sous verrou |
 | **Baseline sans réveil rétroactif** | au tout premier tour réel, l'état existant (rapports, empreinte des lanes, CI) est **consigné sans aucun réveil** — le veilleur ne se réveille pas sur le passé |
+| **State frais blindé (v1.6, I-282)** | à la lecture du state, tout champ de garde manquant est posé via `Add-Member` (`lanesLancees`, `fichesBannies`, `echecsParFiche`, `rapportsAttente` depuis I-275/I-278 ; `baselineFait` et `lanesEmpreinte` depuis v1.6) : un state reconstruit — corruption + `.bak` perdu, poste neuf, bac à sable — se répare au premier tour au lieu de crasher en boucle |
 
 ## Post-incident I-275 (2026-08-23) — ce qui a changé
 
@@ -120,8 +128,12 @@ et le state a été remis à zéro deux fois par des instances à mémoire péri
    erreur de tour n'arrête plus la boucle (catch par tour).
 3. **Fusion anti-écrasement du state (livrable 5, mitigation)** — avant chaque sauvegarde, le
    fichier est relu : `lanesLancees`, `fichesBannies`, `echecsParFiche` (max) et
-   `sessionsJour` du jour (max) ne peuvent plus **rétrograder** sous la plume d'une instance
-   dont la mémoire est périmée.
+   `sessionsJour` du jour (max) ne peuvent plus **rétrograder** sous la plume d'une
+   instance dont la mémoire est périmée. **Complété en v1.4/v1.5 (I-277/I-280)** :
+   ces trois listes sont de plus *relues du disque sous verrou au début de chaque tour*
+   (`Sync-GardesDepuisDisque`) — `lanesLancees` y est *remplacée* par sa valeur disque
+   intégrale, car la fusion ne sait qu'ajouter et ressuscitait exactement ce qu'un
+   `-Deban` venait de retirer (séquence stop → deban → start exigée avant ; plus aucune).
 4. **File qui continue (livrable 9)** — un échec de lane est spécifique à sa fiche :
    `continue` au lieu de `break` (l'échec de `veille-srd-relance` à 15:40–15:41 empêchait
    `catalogue-relance` de partir).
@@ -165,11 +177,6 @@ n'est automatisée ; les arbitrages restent à Souhel via le méta.
 - Le compteur journalier compte des **lancements**, pas des sessions terminées.
 - La détection des rapports est **temporelle** (mtime), pas sémantique : le veilleur ne lit
   jamais le contenu d'aucun rapport.
-- **Défaut constaté non corrigé (hors livrables d'I-275, à signaler)** — le marqueur de clôture
-  de cellule (`livr|ferm|merg`, `veilleur.ps1` §Get-Lancables) attrape les SUB-chaînes : le mot
-  « **livr**ables » dans une cellule d'état écarte la fiche de la file (cas réel 15:57 du
-  2026-08-23 sur la fiche incident elle-même, `[WARN] fiche lanable ECARTEE`). Une fiche dédiée
-  devra borner ces motifs (mots entiers / formes fléchées exactes).
 - **Journal des tâches planifiées désactivé** sur cette machine
   (`Microsoft-Windows-TaskScheduler/Operational` : IsEnabled=False) : la chronologie fine des
   instances du 2026-08-23 n'a pu être établie que par recoupement log/digest.

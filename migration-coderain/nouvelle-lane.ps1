@@ -55,9 +55,17 @@ Write-Host ("[nouvelle-lane] controle 1 OK - perimetre P1 ({0} fichiers) : {1}" 
 # (une ligne de prose du type « miroir ... » ne designe aucun fichier et est ignoree).
 # La liste sert APRES le run : un exit 0 d'opencode sans livrable sur disque n'est pas une
 # completion (lane disparue sans trace, I-281) - voir le controle dans la fenetre lancee.
+# ---- I-285 : controle 1b DURCI - un P1 sans AUCUN chemin absolu testable est REFUSE a
+# l'armement (plus un simple avertissement vert). Un recu de livraison qui ne teste rien
+# n'est pas un recu : lane audit-dnd5e-engine du 24/08, fiche a P1 relatif => recu
+# « non verifiable » annonce en VERT, lane auto-nettoiee AVANT depot, exit 0 « honnete ».
+# Toute fiche doit desormais designer ses livrables P1 par des chemins ABSOLUS.
 $P1Absolus = @($P1Files | Where-Object { [System.IO.Path]::IsPathRooted($_) })
+if ($P1Absolus.Count -eq 0) {
+    Fail ("controle 1b (I-285) : aucun chemin ABSOLU testable dans le perimetre P1 ({0} entree(s)) - recu de livraison impossible, fiche refusee a l'armement. Corriger la fiche : chaque livrable P1 doit porter son chemin complet." -f $P1Files.Count)
+}
 $P1Lit = (@($P1Absolus | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ', ')
-Write-Host ("[nouvelle-lane] controle 1b OK - recu de livraison (I-281), livrables verifiables : {0}" -f $(if ($P1Absolus.Count -gt 0) { $P1Absolus -join ', ' } else { '(aucun chemin absolu dans le P1 - recu non verifiable)' })) -ForegroundColor Green
+Write-Host ("[nouvelle-lane] controle 1b OK - recu de livraison (I-281/I-285), livrables verifiables : {0}" -f ($P1Absolus -join ', ')) -ForegroundColor Green
 
 # ---- Controle 2 : main propre
 $Status = @(& git -C $RepoRoot status --porcelain)

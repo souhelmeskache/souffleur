@@ -234,6 +234,14 @@ if (-not $state.PSObject.Properties['echecsParFiche']){ $state | Add-Member -Not
 # I-278 : recus provisoires - rapports deja livres dont la stabilite du mtime n'est pas
 # encore confirmee (voir section 1 du tour). Tolerant un state anterieur qui ne le porte pas.
 if (-not $state.PSObject.Properties['rapportsAttente']) { $state | Add-Member -NotePropertyName 'rapportsAttente' -NotePropertyValue ([pscustomobject]@{}) -Force }
+# I-282 : un state FRAIS (reconstruction apres corruption + .bak perdu, poste neuf, bac a
+# sable) sans baselineFait/lanesEmpreinte faisait crasher CHAQUE tour - affectation par
+# point sur une propriete absente d'un PSCustomObject (« La propriete ... est introuvable »),
+# la baseline ne se posait jamais et l'erreur se repetait au tour suivant. Meme ecole et
+# meme emplacement que les champs I-275/I-278 ci-dessus : poses DES LA lecture s'ils manquent,
+# pour que les affectations ulterieures (baseline, empreinte) trouvent toujours la propriete.
+if (-not $state.PSObject.Properties['baselineFait'])  { $state | Add-Member -NotePropertyName 'baselineFait'  -NotePropertyValue $false -Force }
+if (-not $state.PSObject.Properties['lanesEmpreinte']) { $state | Add-Member -NotePropertyName 'lanesEmpreinte' -NotePropertyValue '' -Force }
 
 function Save-State {
     # I-275 livrable 3 : une fiche que l'appelant VIENT DE RETIRER (echec constate de
