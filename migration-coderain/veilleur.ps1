@@ -13,7 +13,13 @@ param(
     # I-277 : procedure OFFICIELLE de deban - chemin d'une fiche a sortir de 'fichesBannies'
     # (compteur d'echecs et marque du deja-lance retires). Remplace l'edition manuelle du
     # state, qui a efface des bans de tiers par lost update le 2026-08-23.
-    [string]$Deban
+    [string]$Deban,
+    # CANAL DE DEPLOIEMENT FIDELE (fiche canal-deploiement-fidele du 24/08) : deploie les
+    # copies DEPOT des DEUX scripts attestes vers le poste (.bak date AVANT ecrasement, hash
+    # avant/apres journalises), puis SORT volontairement (code 0) APRES journalisation - le
+    # gardien MRPG-Veilleur-Gardien relance l'instance sur le nouveau code en <= 5 min
+    # (I-284 : l'instance ne se redemarre JAMAIS elle-meme).
+    [switch]$Deployer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +42,9 @@ $CI_REPO            = 'souhelmeskache/ttrpg-mvp'
 # I-277 : verrou d'ecriture du STATE, partage par toute voie qui touche veilleur-state.json
 # (boucle du veilleur ET outil officiel -Deban). Voir Enter-StateLock.
 $STATE_MUTEX        = 'Global\MRPG-Veilleur-State'
+# CANAL DE DEPLOIEMENT FIDELE : les DEUX seuls scripts du canal. La detection de derive
+# (chaque tour) et le mode -Deployer ne connaissent JAMAIS un troisieme chemin.
+$SCRIPTS_FIDELES    = @('veilleur.ps1', 'nouvelle-lane.ps1')
 
 # ---- Chemins (declares, jamais supposes)
 $PostRoot = [System.IO.Path]::GetDirectoryName($PSCommandPath)
@@ -104,6 +113,16 @@ function Fail {
     exit 1
 }
 
+function Get-Sha256Fidele {
+    # Hash SHA256 tolerant : renvoie $null si le fichier manque ou est illisible - les
+    # appelants (detection de derive au tour, mode -Deployer) traitent ce cas NOMMEMENT.
+    param([string]$Chemin)
+    try {
+        if (-not (Test-Path -LiteralPath $Chemin)) { return $null }
+        return (Get-FileHash -LiteralPath $Chemin -Algorithm SHA256 -ErrorAction Stop).Hash
+    } catch { return $null }
+}
+
 # ---- I-275 livrable 6 : ECRITURE TOLERANTE AUX VERROUS.
 # La cause de mort capturee en direct le 2026-08-23 a 15:43 : Add-Content vers le digest en
 # IOException (« fichier en cours d'utilisation par un autre processus ») avec
@@ -163,6 +182,62 @@ if ($Deban) {
     Write-Host "[veilleur] pris en compte au prochain tour du veilleur. Ne jamais editer veilleur-state.json a la main." -ForegroundColor Green
     exit 0
 }
+
+# ---- CANAL DE DEPLOIEMENT FIDELE : mode -Deployer (fiche canal-deploiement-fidele 24/08).
+# Deploie les copies DEPOT -> POSTE des deux scripts attestes, octet-fidele par nature
+# (Copy-Item), avec .bak date de chaque fichier remplace AVANT ecrasement et hash avant/apres
+# journalises. Refus NOMME si : depot sale (status --porcelain non vide), hash illisible, ou
+# chemin hors des DEUX attestes - jamais un troisieme chemin. Termine par une SORTIE
+# VOLONTAIRE (code 0) APRES journalisation : le gardien (MRPG-Veilleur-Gardien) relance
+# l'instance sur le nouveau code en <= 5 min ; l'instance ne se redemarre JAMAIS elle-meme
+# (I-284). Chaine complete : merge -> derive detectee au tour -> -Deployer explicite ->
+# sortie -> gardien. Ce mode s'execute AVANT tout verrou d'instance : il n'ouvre pas de slot,
+# il ne touche ni state ni PID lock - seulement les deux scripts, leur .bak et le journal.
+if ($Deployer) {
+    if (-not (Test-Path -LiteralPath (Join-Path $RepoMoteur '.git'))) { Fail "depot moteur introuvable : $RepoMoteur" }
+    $statusCanal = @(& git -C $RepoMoteur status --porcelain | Where-Object { $_ -ne '' })
+    if ($LASTEXITCODE -ne 0) { Fail "git status a echoue sur $RepoMoteur - depot illisible, deploiement refuse" }
+    if ($statusCanal.Count -gt 0) {
+        Fail ("depot SALE (git status --porcelain non vide : {0} entree(s), premiere : '{1}') - deploiement refuse : ne jamais deployer du travail non commite" -f $statusCanal.Count, ($statusCanal[0]).Trim())
+    }
+    # Les DEUX chemins attestes, construits ici une fois. Aucun autre chemin n'est jamais ni
+    # iterate ni tolere ; l'attestation ci-dessous juge chaque couple source/destination
+    # AVANT toute action (garde contre une future extension accidentelle de la file).
+    $attestesDepot = @($SCRIPTS_FIDELES | ForEach-Object { Join-Path (Join-Path $RepoMoteur 'migration-coderain') $_ })
+    $attestesPoste = @($SCRIPTS_FIDELES | ForEach-Object { Join-Path $PostRoot $_ })
+    $horodatageCanal = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $deploys = @()
+    foreach ($nomCanal in $SCRIPTS_FIDELES) {
+        $srcCanal = Join-Path (Join-Path $RepoMoteur 'migration-coderain') $nomCanal
+        $dstCanal = Join-Path $PostRoot $nomCanal
+        if (($attestesDepot -notcontains $srcCanal) -or ($attestesPoste -notcontains $dstCanal)) {
+            Fail "chemin hors des deux attestes - deploiement refuse, jamais un troisieme chemin : $srcCanal -> $dstCanal"
+        }
+        $deploys += [pscustomobject]@{ Nom = $nomCanal; Source = $srcCanal; Destination = $dstCanal }
+    }
+    foreach ($d in $deploys) {
+        $hSource = Get-Sha256Fidele $d.Source
+        if (-not $hSource) { Fail "hash illisible (source depot) : $($d.Source) - deploiement refuse" }
+        $hAvant = $null
+        $bakPose = ''
+        if (Test-Path -LiteralPath $d.Destination) {
+            $hAvant = Get-Sha256Fidele $d.Destination
+            if (-not $hAvant) { Fail "hash illisible (copie poste existante) : $($d.Destination) - deploiement refuse" }
+            $bakPose = "$($d.Destination).bak-$horodatageCanal"
+            Copy-Item -LiteralPath $d.Destination -Destination $bakPose -Force   # .bk pose AVANT ecrasement
+        }
+        Copy-Item -LiteralPath $d.Source -Destination $d.Destination -Force
+        $hApres = Get-Sha256Fidele $d.Destination
+        if (-not $hApres) { Fail "hash illisible (copie poste apres copie) : $($d.Destination)" }
+        if ($hApres -ne $hSource) { Fail "deploiement NON octet-fidele pour $($d.Nom) (sha256 poste apres=$hApres, depot=$hSource) - verifier le disque" }
+        Write-VeilLog ("-Deployer '{0}' : copie octet-fidele depot->poste verifiee ; sha256 depot={1} poste avant={2} poste apres={3}{4}" -f `
+            $d.Nom, $hSource, $(if ($hAvant) { $hAvant } else { '(absent)' }), $hApres, `
+            $(if ($bakPose) { " ; .bak pose avant ecrasement : $bakPose" } else { ' ; aucune copie anterieure, pas de .bak' })) 'INFO'
+    }
+    Write-Host ("[veilleur] deploiement fidele termine : {0} fichier(s) - sortie VOLONTAIRE (code 0) ; le gardien relance l'instance sur le nouveau code en <= 5 min (I-284)." -f $deploys.Count) -ForegroundColor Green
+    exit 0
+}
+
 
 # ---- -Install : enregistre la tache planifiee Windows (geste de Souhel, ses autorisations)
 if ($Install) {
@@ -260,6 +335,10 @@ if (-not $state.PSObject.Properties['dejaLanceesConsignees']) { $state | Add-Mem
 # I-291 : trace des reveils meta reellement lances (« horodatage|motif|mode », meme ecole
 # que lanesLancees) - un reveil mort SANS historisation devient detectable au tour suivant.
 if (-not $state.PSObject.Properties['reveilsLances']) { $state | Add-Member -NotePropertyName 'reveilsLances' -NotePropertyValue @() -Force }
+# CANAL DE DEPLOIEMENT FIDELE : memoire des derives DEJA consignees ([WARN] emis UNE seule
+# fois jusqu'a correction, ecole I-289) - liste de noms de fichiers. Tolerant un state
+# anterieur qui ne le porte pas encore.
+if (-not $state.PSObject.Properties['derivesConsignees']) { $state | Add-Member -NotePropertyName 'derivesConsignees' -NotePropertyValue @() -Force }
 
 function Save-State {
     # I-275 livrable 3 : une fiche que l'appelant VIENT DE RETIRER (echec constate de
@@ -534,6 +613,33 @@ function Get-MarquesEchecExterne {
     return $trouvees
 }
 
+function Test-DeriveScriptsFideles {
+    # CANAL DE DEPLOIEMENT FIDELE (livrables 1+4) : a CHAQUE tour, SHA256 des copies POSTE
+    # des deux scripts compares aux copies DEPOT ($RepoMoteur). Egal => silence total (zero
+    # bruit de log, ecole I-289). Differ (ou hash illisible) => [WARN] nommant le fichier et
+    # les DEUX hash, UNE seule fois jusqu'a correction (memoire derivesConsignees persistee,
+    # meme ecole que dejaLanceesConsignees). Le tour NE deploie JAMAIS seul : il detecte et
+    # consigne ; le deploiement reste le geste explicite 'veilleur.ps1 -Deployer' (livrable 4).
+    foreach ($nom in $SCRIPTS_FIDELES) {
+        $hPoste = Get-Sha256Fidele (Join-Path $PostRoot $nom)
+        $hDepot = Get-Sha256Fidele (Join-Path (Join-Path $RepoMoteur 'migration-coderain') $nom)
+        if ($hPoste -and $hDepot -and ($hPoste -eq $hDepot)) {
+            if (@($state.derivesConsignees) -contains $nom) {
+                # correction observee : retour au silence SANS log - la memoire est jetee et
+                # une REderive sera reconsignee normalement (le WARN est « jusqu'a correction »).
+                $state.derivesConsignees = @($state.derivesConsignees | Where-Object { $_ -ne $nom })
+                Save-State
+            }
+            continue
+        }
+        if (@($state.derivesConsignees) -contains $nom) { continue }
+        Write-VeilLog ("[WARN] derive detectee '{0}' : sha256 poste={1} depot={2} - corriger par 'veilleur.ps1 -Deployer' (le tour ne deploie jamais seul)" -f `
+            $nom, $(if ($hPoste) { $hPoste } else { 'ILLISIBLE' }), $(if ($hDepot) { $hDepot } else { 'ILLISIBLE' })) 'WARN'
+        $state.derivesConsignees = @($state.derivesConsignees) + $nom
+        Save-State
+    }
+}
+
 function Invoke-LaunchLane {
     param([string]$Nom, [string]$Fiche)
     if ((Get-BudgetRestant) -le 0) {
@@ -743,6 +849,10 @@ function Invoke-TourCorps {
             }
         }
     }
+    # ---- CANAL DE DEPLOIEMENT FIDELE (livrables 1+4) : detection de derive a chaque tour.
+    # Silence total si egalite (I-289), [WARN] unique nommant fichier et deux hash sinon.
+    # Ne deploie JAMAIS seule : le deploiement reste le geste explicite -Deployer.
+    Test-DeriveScriptsFideles
     # D-197 : observe ce tour-ci ? $null = depot moteur illisible (file lanes non lue)
     # => le declencheur producteur ne compte aucun tour sans observation reelle.
     $lancables = $null
@@ -851,6 +961,34 @@ function Invoke-TourCorps {
                     if (@($state.fichesBannies) -contains $c.Fiche) {
                         Write-VeilLog ("fiche bannie (echecs consecutifs), ignoree jusqu'a intervention : {0}" -f $c.Fiche) 'WARN'
                         continue
+                    }
+                    # ---- I-299 : consommation des marques d'echec externe AU SCAN, AVANT de
+                    # sauter une fiche « deja lancee ». Une lane morte reseau laisse parfois sa
+                    # marque fraiche (< 24 h) pendant que la fiche porte encore la marque du
+                    # deja-lance : sans ce passage elle restait « ignoree » en boucle pour
+                    # toujours - la consultation I-287 ne s'y retrouve jamais, elle vit dans
+                    # Invoke-LaunchLane et n'est atteinte qu'APRES une relance echouee. On
+                    # consomme la marque, on retire la fiche du deja-lance (Save-State
+                    # -Exclure, meme ecole que I-287 : la fusion anti-ecrasement ressusciterait
+                    # sinon la marque retiree), et le flux NORMAL ci-dessous la relance CE tour.
+                    # DryRun : rien n'est consomme ni supprime.
+                    if (-not $DryRun) {
+                        $marquesScan = @(Get-MarquesEchecExterne -FicheCible $c.Fiche)
+                        if ($marquesScan.Count -gt 0) {
+                            foreach ($m in $marquesScan) { Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue }
+                            $retireeDuDejaLance = $false
+                            if (@($state.lanesLancees) -contains $c.Fiche) {
+                                $state.lanesLancees = @($state.lanesLancees | Where-Object { $_ -ne $c.Fiche })
+                                $retireeDuDejaLance = $true
+                            }
+                            # La memoire d'annonce I-289 eventuelle part avec : c'est CE log qui
+                            # annonce le changement - le bloc deja-lancee n'a plus rien a dire
+                            # (sinon consigner un etat obsolete au tour suivant).
+                            $state.dejaLanceesConsignees = @($state.dejaLanceesConsignees | Where-Object { $_ -ne $c.Fiche })
+                            Save-State -Exclure @($c.Fiche)
+                            Write-VeilLog ("[I-299] marque d'echec externe fraiche CONSOMMEE au scan - lane '{0}'{1} - fiche reexaminee ce tour ({2})" -f `
+                                $c.Nom, $(if ($retireeDuDejaLance) { ', retiree du deja-lance' } else { ', fiche non marquee lancee' }), (($marquesScan | ForEach-Object { $_.Name }) -join ', ')) 'INFO'
+                        }
                     }
                     if (@($state.lanesLancees) -contains $c.Fiche) {
                         # I-275 livrable 1 : la memoire du deja-lance rend le refus VISIBLE
