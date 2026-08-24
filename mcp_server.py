@@ -1739,6 +1739,19 @@ def _module_partition() -> Path:
 
 
 @mcp.tool()
+def module_index() -> dict:
+    """Index of the loaded save's converted module — the discovery
+    primitive (SPEC-P4 §8): ids/types of nodes, records, tables and
+    secrets ({id, statut} only — bodies stay out) + aventure summary.
+    Read-only, no path argument: sealed to the loaded save."""
+    try:
+        from coderain.converter.aval import load_partition
+        return load_partition(_module_partition())
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+
+@mcp.tool()
 def module_list_nodes() -> list[dict]:
     """List every node of the loaded save's converted module (id/type/altitude)."""
     try:
