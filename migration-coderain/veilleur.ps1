@@ -31,13 +31,17 @@ $LOCK_STALE_HEURES  = 6
 # I-275 livrable 3 : borne anti-boucle — apres N echecs consecutifs d'une meme fiche,
 # elle sort de la file jusqu'a intervention.
 $MAX_ECHECS_CONSECUTIFS = 2
-# D-197 (lane boucle-productive-v2) : declencheur du reveil PRODUCTEUR - configurable ici.
-# $PRODUCTEUR_N_TOIRS : tours consecutifs sans AUCUNE fiche lanable observee qui declenchent
-#                       l'eveil producteur si un slot technique est libre (12 tours x 300 s = 1 h).
-# $PRODUCTEUR_HEURE   : heure du jour a partir de laquelle la fenetre quotidienne s'ouvre
-#                       (premier tour apres 09:00 sans eveil producteur deja fait ce jour).
-$PRODUCTEUR_N_TOIRS = 12
-$PRODUCTEUR_HEURE   = 9
+# D-203 (production pilotee par le besoin) : le declencheur du reveil PRODUCTEUR devient un
+# declencheur d'ETAT evalue a chaque tour (section 2bis) : file sans rien de lanzable + travail
+# restant a router + slot libre. Fin de la borne 1/jour (producteurJour), de la fenetre 9 h
+# ($PRODUCTEUR_HEURE) et du seuil $PRODUCTEUR_N_TOIRS - toursSansLancable redevient un simple
+# signal de famine journalise, sans valeur-seuil declenchante. Gardes INTACTES (slots, volume,
+# N=2, verrous) : c'est un changement de DECLENCHEMENT, pas de gardes.
+# $FAMILLES_TECHNIQUES : familles d'items de registre-items reconnues comme « piste de routage
+# technique » pour la condition « travail restant » (constat du 24/08 : la totalite des items
+# deja routes au poste par un champ fiche: sont de la famille boucle ; convertisseur est
+# l'autre famille du projet de migration).
+$FAMILLES_TECHNIQUES = @('boucle', 'convertisseur')
 $CI_REPO            = 'souhelmeskache/ttrpg-mvp'
 # I-277 : verrou d'ecriture du STATE, partage par toute voie qui touche veilleur-state.json
 # (boucle du veilleur ET outil officiel -Deban). Voir Enter-StateLock.
@@ -324,9 +328,10 @@ if (-not $state.PSObject.Properties['rapportsAttente']) { $state | Add-Member -N
 # pour que les affectations ulterieures (baseline, empreinte) trouvent toujours la propriete.
 if (-not $state.PSObject.Properties['baselineFait'])  { $state | Add-Member -NotePropertyName 'baselineFait'  -NotePropertyValue $false -Force }
 if (-not $state.PSObject.Properties['lanesEmpreinte']) { $state | Add-Member -NotePropertyName 'lanesEmpreinte' -NotePropertyValue '' -Force }
-# D-197 : memoire du reveil PRODUCTEUR - dernier jour ou il a eu lieu (borne 1/jour)
-# et compteur de tours consecutifs sans fiche lanable observee.
-if (-not $state.PSObject.Properties['producteurJour'])    { $state | Add-Member -NotePropertyName 'producteurJour'    -NotePropertyValue '' -Force }
+# D-203 : compteur de tours consecutifs sans fiche lanable observee - SIGNAL de famine
+# journalise, sans valeur-seuil declenchante. La borne producteurJour (1 reveil/jour, D-197)
+# disparaît : le declencheur est l'ETAT de la file (section 2bis), plus calendaire. Un state
+# ancien peut encore porter producteurJour - il y reste, jamais lu, sans effet.
 if (-not $state.PSObject.Properties['toursSansLancable']) { $state | Add-Member -NotePropertyName 'toursSansLancable' -NotePropertyValue 0  -Force }
 # I-289 : memoire des annonces « fiche deja lancee » - l'etat n'est logge qu'AU CHANGEMENT
 # (premiere observation, perte de marque, livraison) ; entre deux changements, muet.
@@ -823,6 +828,50 @@ function Get-Lancables {
     return $resultats
 }
 
+function Test-TravailRestant {
+    # ---- D-203 condition 2 : « il existe au moins un sujet a router ». Detection MECANIQUE
+    # et declarative des deux sources nommees par la decision :
+    #   (a) ITEM OUVERT A FICHISER : item de registre-items au statut « ouvert », portant une
+    #       piste de routage technique (famille declaree dans $FAMILLES_TECHNIQUES), SANS
+    #       champ fiche: pointant un fichier EXISTANT - meme definition que l'etape 1 du
+    #       MANDAT PRODUCTEUR d'eveil-meta.md (« sans champ fiche: pointant un fichier
+    #       existant ») ; un champ fiche: perime (fichier introuvable) ne route rien.
+    #   (b) RAPPORT LIVRE NON INSTRUIT : rapport-*.md present au poste SANS recu, ni final
+    #       ($state.rapports) ni provisoire ($state.rapportsAttente). Frontiere honnete : le
+    #       veilleur sait LIVRER (recu pose quand le reveil part), il ne juge pas la
+    #       profondeur de l'instruction d'une session deja reveillee.
+    # Lecture pure, sure (try par fichier), arret au premier sujet trouve. Ne jette jamais :
+    # registre-items absent/illisible => « pas de travail constate », conservateur.
+    $trouve = [pscustomobject]@{ Restant = $false; Detail = '' }
+    $itemsDir = Join-Path $MetaDir 'registre-items'
+    foreach ($f in @(Get-ChildItem -LiteralPath $itemsDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+        try { $lignes = @(Get-Content -LiteralPath $f.FullName -TotalCount 20 -Encoding UTF8) } catch { continue }
+        $dansFrontiere = $false
+        $statut = ''; $famille = ''; $champFiche = ''
+        foreach ($l in $lignes) {
+            if ($l -match '^---\s*$') { if ($dansFrontiere) { break } else { $dansFrontiere = $true; continue } }
+            if (-not $dansFrontiere) { continue }
+            if     ($l -match '^statut:\s*(.+?)\s*$') { $statut = $Matches[1].ToLower() }
+            elseif ($l -match '^famille:\s*(.+?)\s*$') { $famille = $Matches[1].Trim().ToLower() }
+            elseif ($l -match '^fiche:\s*(.+?)\s*$')   { $champFiche = $Matches[1].Trim().Trim('"').Trim("'") }
+        }
+        if ($statut -ne 'ouvert') { continue }
+        if (@($FAMILLES_TECHNIQUES) -notcontains $famille) { continue }
+        if ($champFiche -and (Test-Path -LiteralPath $champFiche)) { continue }   # deja route
+        $trouve.Restant = $true
+        $trouve.Detail  = "item a fichiser : $($f.Name)"
+        return $trouve
+    }
+    foreach ($r in @(Get-ChildItem -LiteralPath $PostRoot -Filter 'rapport-*.md' -File -ErrorAction SilentlyContinue)) {
+        if ($state.rapports.PSObject.Properties[$r.Name]) { continue }
+        if ($state.rapportsAttente.PSObject.Properties[$r.Name]) { continue }
+        $trouve.Restant = $true
+        $trouve.Detail  = "rapport livre sans recu : $($r.Name)"
+        return $trouve
+    }
+    return $trouve
+}
+
 function Invoke-Tour {
     try {
         Invoke-TourCorps
@@ -1038,15 +1087,14 @@ function Invoke-TourCorps {
         }
     }
 
-    # ---- 2bis. Reveil PRODUCTEUR (D-197, lane boucle-productive-v2)
-    # Declencheur : (>= 1 slot technique libre ET aucune fiche lanable observee pendant
-    # $PRODUCTEUR_N_TOIRS tours consecutifs) OU (premier tour apres $PRODUCTEUR_HEURE h
-    # sans eveil producteur deja fait ce jour). Borne : UN producteur par jour maximum,
-    # pose seulement quand l'eveil est reellement parti - un refus (verrou meta, budget)
-    # ne consomme rien et retente au tour suivant. Le mandat vit dans eveil-meta.md
-    # (section MANDAT PRODUCTEUR) ; le mode passe dans le prompt instancie ({{MODE}}),
-    # par fichier comme l'existant. TUI vivant : meme routage que les autres evenements
-    # (consigne au digest, aucune session fantome).
+    # ---- 2bis. Reveil PRODUCTEUR (D-203, production pilotee par le besoin ; amende D-197)
+    # Declencheur d'ETAT, plus calendaire (fin de la borne producteurJour 1/jour et de la
+    # fenetre 9 h) : file vide ET travail restant ET slot libre => production. L'anti-tempete
+    # EST le critere : du travail lanzable => pas de producteur (il ne doublonne pas la file) ;
+    # « autant que necessaire » reste borne par les gardes INTACTES : verrou meta, volume
+    # journalier, slots < D-192. toursSansLancable reste tenu comme signal de FAMINE
+    # journalise, sans valeur-seuil declenchante ; le champ producteurJour n'est plus ni lu
+    # ni ecrit. TUI vivant : meme routage que les autres evenements (digest, session fantome).
     if ($null -ne $lancables) {
         if (@($lancables).Count -gt 0) { $state.toursSansLancable = 0 }
         else                           { $state.toursSansLancable = [int]$state.toursSansLancable + 1 }
@@ -1054,24 +1102,26 @@ function Invoke-TourCorps {
         # instance relancee repartirait de zero et l'etat idle ne serait jamais atteint.
         Save-State
         $dispoProd = Get-LanesActives
-        $slotLibre      = ($dispoProd.Disponible -and (@($dispoProd.Lanes).Count -lt $MAX_LANES_ACTIVES))
-        $dejaFaitCeJour = ([string]$state.producteurJour -eq (Get-Date -Format 'yyyy-MM-dd'))
-        $idleProuve     = ([int]$state.toursSansLancable -ge $PRODUCTEUR_N_TOIRS)
-        $fenetreDuJour  = ((Get-Date).Hour -ge $PRODUCTEUR_HEURE) -and (-not $dejaFaitCeJour)
-        Write-VeilLog ("producteur : slotLibre={0} toursSansLancable={1}/{2} fenetre9h={3} dejaFait={4}" -f $slotLibre, $state.toursSansLancable, $PRODUCTEUR_N_TOIRS, $fenetreDuJour, $dejaFaitCeJour) 'INFO'
-        # Borne 1/jour portee par TOUT le declencheur : sans elle, l'etat idle persistant
-        # re-declencherait chaque tour suivant le premier reveil producteur.
-        if ((-not $dejaFaitCeJour) -and (($slotLibre -and $idleProuve) -or $fenetreDuJour)) {
-            $issue = Invoke-EvenementMeta -Motif 'reveil producteur (D-197)' `
+        $slotLibre = ($dispoProd.Disponible -and (@($dispoProd.Lanes).Count -lt $MAX_LANES_ACTIVES))
+        # Condition 1 (file vide) : aucune fiche lanzable non marquee du deja-lance et non
+        # bannie au tour courant - une fiche bannie est sortie de file jusqu'a intervention,
+        # elle n'occupe pas plus la file qu'une fiche deja lancee.
+        $enFile = @($lancables | Where-Object {
+                        (@($state.fichesBannies) -notcontains $_.Fiche) -and
+                        (@($state.lanesLancees) -notcontains $_.Fiche) })
+        $fileVide = ($enFile.Count -eq 0)
+        # Condition 2 (travail restant a router) : detection mecanique declarative (D-203).
+        $travail = Test-TravailRestant
+        Write-VeilLog ("producteur : fileVide={0} travailRestant={1}{2} slotLibre={3} toursSansLancable={4} (signal de famine, sans seuil declenchant)" -f `
+            $fileVide, $travail.Restant, $(if ($travail.Restant) { " ({0})" -f $travail.Detail } else { '' }), $slotLibre, $state.toursSansLancable) 'INFO'
+        if ($fileVide -and $travail.Restant -and $slotLibre) {
+            $issue = Invoke-EvenementMeta -Motif 'reveil producteur (D-203)' `
                                           -Rapport '(pas de rapport : balayage registre-items / registre-decisions, voir MANDAT PRODUCTEUR dans ce prompt)' `
                                           -Mode 'producteur'
             if ($issue) {
-                # Evenement consomme (session lancee OU capte par un TUI vivant) : borne du jour posee.
-                $state.producteurJour = Get-Date -Format 'yyyy-MM-dd'
-                Save-State
-                Write-VeilLog "eveil PRODUCTEUR parti - borne 1/jour posee"
+                Write-VeilLog "eveil PRODUCTEUR parti - declencheur d'etat D-203 (file vide + travail restant + slot libre)"
             } else {
-                Write-VeilLog "eveil producteur refuse ce tour (verrou/budget) - retente au tour suivant, borne non consommee" 'WARN'
+                Write-VeilLog "eveil producteur refuse ce tour (verrou/budget) - retente au tour suivant, rien consomme" 'WARN'
             }
         }
     }
