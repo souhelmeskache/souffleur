@@ -22,6 +22,7 @@ from fastmcp import FastMCP
 
 from coderain.memory import Library, MemoryStore
 from coderain import validator as validator_mod
+from coderain.rules_engine import get_bridge
 from coderain.sidecar import DEFAULT_CFG as _DEFAULT_RPG
 
 mcp = FastMCP("coderain-engine")
@@ -1794,6 +1795,80 @@ def module_get_aventure() -> dict:
         return {"error": "cette partition ne porte pas d'étage aventure"}
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------
+# Rules engine — dnd5e-engine appelé via coderain.rules_engine (D-200).
+# L'état de combat vit DANS la bibliothèque pendant un combat ; ces
+# endpoints soumettent des intentions et miroient les résultats en
+# lecture. Les IntentRejectedError remontent telles quelles : c'est le
+# moteur qui refuse, le pont ne traduit pas. modules/rpg.py garde les
+# jets simples hors combat (coexistence v0).
+
+@mcp.tool()
+async def resolve_check(spec: dict, seed: int | None = None) -> dict:
+    """Résout un jet 5e isolé (skill/ability/saving_throw) par dnd5e-engine.
+
+    `spec` = CheckSpec du moteur : kind ("skill"|"ability"|"saving_throw"),
+    ability_scores {str:int}, proficiency_bonus, et selon le cas skill,
+    ability, dc, proficient_skills, proficient_saves, advantage,
+    disadvantage. `seed` amorce le RNG pour un jet reproductible.
+    Retour : natural_roll, modifier, roll_total, success.
+    """
+    from coderain.rules_engine import resolve_check as _resolve
+    return _resolve(spec, seed=seed)
+
+
+@mcp.tool()
+async def start_combat(session_id: str, party: list[dict],
+                       encounter: list[dict], rng_seed: int,
+                       zones: list[str] | None = None) -> dict:
+    """Ouvre un combat détenu par dnd5e-engine ; retourne handle_id.
+
+    party/encounter = specs du moteur (PartyMemberSpec / EncounterMemberSpec :
+    entity_id, name, initiative, hp_current, hp_max, ac, zone_id... ; un monstre
+    jouable porte monster_template_slug ex. "goblin-warrior"). rng_seed rend le
+    combat déterministe : mêmes graines ⇒ mêmes dés.
+    """
+    return await get_bridge().start_combat(
+        session_id=session_id, party=party, encounter=encounter,
+        rng_seed=rng_seed, zones=zones)
+
+
+@mcp.tool()
+async def submit_intent(handle_id: str, actor_id: str, intent: dict) -> dict:
+    """Soumet l'intention du personnage dont c'est le tour (PlayerIntent).
+
+    intent = {"intent_type": "attack"|"move"|"pass"|..., target_id?,
+    weapon_id?, target_zone_id?, ...}. Une attaque exige weapon_id résolvable
+    du corpus. Refus du moteur (mauvais tour...) => IntentRejectedError brute.
+    """
+    return await get_bridge().submit_intent(handle_id, actor_id, intent)
+
+
+@mcp.tool()
+async def monster_turn(handle_id: str) -> dict:
+    """Fait jouer par l'IA du moteur le tour du monstre courant."""
+    return await get_bridge().monster_turn(handle_id)
+
+
+@mcp.tool()
+async def end_combat(handle_id: str) -> dict:
+    """Clôt le combat : issue du moteur (ended_reason victory|defeat_tpk|
+    flee|forced, morts, XP). Le handle est ensuite invalidé côté pont."""
+    return await get_bridge().end_combat(handle_id)
+
+
+@mcp.tool()
+async def narration_events(handle_id: str) -> dict:
+    """Événements de combat pendants depuis le dernier fetch (drain non
+    bloquant). Même file que l'itérateur narration_events du moteur : premier
+    arrivé premier servi ; MCP étant requête/réponse, on ne bloque jamais sur
+    une file vide — rappeler après chaque action.
+    """
+    bridge = get_bridge()
+    return {"events": bridge.drain_events(handle_id),
+            "live": bridge.live(handle_id)}
 
 
 if __name__ == "__main__":

@@ -12,3 +12,21 @@ python-multipart>=0.0.9
 # desktop app (build.py / desktop.py) — not needed to run the web server
 # pywebview>=5    # native window (uses Edge WebView2 on Windows)
 # pyinstaller>=6  # frozen build
+
+# deterministic 5e rules engine (D-200) — STRICT pinning imposed by the
+# audit-dnd5e-engine-2026-08-24 (bus factor 1, 0.x): exact versions only.
+# Wheel sha256 (PyPI 0.3.0, verified against the audit):
+#   dnd5e_engine-0.3.0-py3-none-any.whl
+#   7d817eac818108ee46f0cbb560d8f916d48f0eaf35831a104c337bf05efc14ff
+# (no inline --hash here: one hash flips pip into --require-hashes mode,
+# which would force pinning the >= runtime section above too.)
+dnd5e-engine==0.3.0
+dnd5e-srd-data==0.3.0
+d20==1.1.2
+lark-parser==0.9.0
+cachetools==7.1.7
+pydantic==2.13.4
+pydantic_core==2.46.4
+annotated-types==0.8.0
+typing_extensions==4.16.0
+typing-inspection==0.4.4
