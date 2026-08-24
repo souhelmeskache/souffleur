@@ -253,6 +253,13 @@ if (-not $state.PSObject.Properties['lanesEmpreinte']) { $state | Add-Member -No
 # et compteur de tours consecutifs sans fiche lanable observee.
 if (-not $state.PSObject.Properties['producteurJour'])    { $state | Add-Member -NotePropertyName 'producteurJour'    -NotePropertyValue '' -Force }
 if (-not $state.PSObject.Properties['toursSansLancable']) { $state | Add-Member -NotePropertyName 'toursSansLancable' -NotePropertyValue 0  -Force }
+# I-289 : memoire des annonces « fiche deja lancee » - l'etat n'est logge qu'AU CHANGEMENT
+# (premiere observation, perte de marque, livraison) ; entre deux changements, muet.
+# Tolerant un state anterieur qui ne le porte pas encore.
+if (-not $state.PSObject.Properties['dejaLanceesConsignees']) { $state | Add-Member -NotePropertyName 'dejaLanceesConsignees' -NotePropertyValue @() -Force }
+# I-291 : trace des reveils meta reellement lances (« horodatage|motif|mode », meme ecole
+# que lanesLancees) - un reveil mort SANS historisation devient detectable au tour suivant.
+if (-not $state.PSObject.Properties['reveilsLances']) { $state | Add-Member -NotePropertyName 'reveilsLances' -NotePropertyValue @() -Force }
 
 function Save-State {
     # I-275 livrable 3 : une fiche que l'appelant VIENT DE RETIRER (echec constate de
@@ -287,6 +294,12 @@ function Save-State {
                 if ($Exclure.Count -gt 0) { $state.lanesLancees = @($state.lanesLancees | Where-Object { @($Exclure) -notcontains $_ }) }
                 foreach ($f in @($auDisque.fichesBannies)) {
                     if ($f -and (@($state.fichesBannies) -notcontains $f)) { $state.fichesBannies = @($state.fichesBannies) + $f }
+                }
+                # I-291 : la trace des reveils lances ne retrograde jamais non plus (meme ecole
+                # que lanesLancees ci-dessus) - une instance demarree avant un reveil d'une autre
+                # voie ne doit pas l'effacer en reecrivant.
+                foreach ($r in @($auDisque.reveilsLances)) {
+                    if ($r -and (@($state.reveilsLances) -notcontains $r)) { $state.reveilsLances = @($state.reveilsLances) + $r }
                 }
                 if ($auDisque.echecsParFiche) {
                     foreach ($p in $auDisque.echecsParFiche.PSObject.Properties) {
@@ -472,8 +485,19 @@ function Invoke-WakeMeta {
              "Remove-Item -LiteralPath '$LockPath' -ErrorAction SilentlyContinue"
     $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
     Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Normal', '-EncodedCommand', $b64)
+    # I-291 : le reveil parti est TRACE dans le state IMMEDIATEMENT (meme ecole que la marque
+    # du deja-lance ecrite avant lancement, I-275 livrable 1 : si le processus meurt entre
+    # lancement et prochaine sauvegarde, la trace survit). Format « horodatage|motif|mode » :
+    # un reveil mort SANS historisation devient detectable au tour suivant au lieu d'etre
+    # invisible (plus jamais un trou noir comme eveil-meta-20260824-113132.md). Un REFUS ne
+    # consigne rien (verrou/budget : les retours $false ci-dessus sortent avant cette ligne).
+    $state.reveilsLances = @($state.reveilsLances) + ("{0}|{1}|{2}" -f (Get-Date -Format o), $Motif, $Mode)
+    Save-State
     $state.sessionsJour = [int]$state.sessionsJour + 1
-    Write-VeilLog ("session meta lancee - motif : {0} - budget journalier : {1}/{2}" -f $Motif, $state.sessionsJour, $MAX_SESSIONS_JOUR)
+    # I-286 : l'affichage respecte le regime -SessionsIllimitees (meme format conditionnel que
+    # la ligne « tour termine » d'Invoke-Tour) - plus jamais un « n/6 » menteur en mode illimite.
+    $budget = if ($SessionsIllimitees) { "{0}/illimite" -f $state.sessionsJour } else { "{0}/{1}" -f $state.sessionsJour, $MAX_SESSIONS_JOUR }
+    Write-VeilLog ("session meta lancee - motif : {0} - budget journalier : {1}" -f $Motif, $budget)
     Add-Digest ("reveil META ({0}) - rapport : {1}" -f $Motif, $Rapport)
     return $true
 }
@@ -832,14 +856,45 @@ function Invoke-TourCorps {
                         # I-275 livrable 1 : la memoire du deja-lance rend le refus VISIBLE
                         # (avant : continue silencieux, l'incident n'a pu etre compris qu'en
                         # reconstruisant l'historique).
-                        Write-VeilLog ("fiche deja lancee, ignoree : {0}" -f $c.Fiche) 'WARN'
+                        # I-289 : VISIBLE ne veut pas dire REPETE - le [WARN] par tour decrivait
+                        # l'etat NORMAL (fiche lancee, session en cours) et noyait les vrais
+                        # signaux. Desormais INFO, consigne seulement AU CHANGEMENT : premiere
+                        # observation de la fiche lancee ici ; la perte de sa marque et sa
+                        # livraison (sortie de file) sont consignees aux deux blocs suivants.
+                        if (@($state.dejaLanceesConsignees) -notcontains $c.Fiche) {
+                            Write-VeilLog ("fiche deja lancee, ignoree (premiere observation - muet aux tours suivants tant que l'etat ne change pas) : {0}" -f $c.Fiche) 'INFO'
+                            $state.dejaLanceesConsignees = @($state.dejaLanceesConsignees) + $c.Fiche
+                            if (-not $DryRun) { Save-State }
+                        }
                         continue
+                    }
+                    # I-289 (suite) : CHANGEMENT symetrique - la marque du deja-lance a disparu
+                    # (deban officiel I-277 ou retrait apres echec) alors que l'etat « ignoree »
+                    # avait ete annonce : on le dit UNE fois, puis la fiche est reexaminee
+                    # normalement ci-dessous.
+                    if (@($state.dejaLanceesConsignees) -contains $c.Fiche) {
+                        $state.dejaLanceesConsignees = @($state.dejaLanceesConsignees | Where-Object { $_ -ne $c.Fiche })
+                        if (-not $DryRun) { Save-State }
+                        Write-VeilLog ("changement pour '{0}' : marque du deja-lance disparue - fiche de nouveau examinable" -f $c.Nom) 'INFO'
                     }
                     $ok = Invoke-LaunchLane -Nom $c.Nom -Fiche $c.Fiche
                     # I-275 livrable 9 : PAS de break. Un echec est SPECIFIQUE a une fiche ;
                     # la file CONTINUE (l'echec de 'veille-srd-relance' de 15:40-15:41 empechait
                     # 'catalogue-relance' de partir a deux tours successifs). La fiche en echec
                     # est retee au tour suivant, ou bannie apres N echecs consecutifs (livrable 3).
+                }
+                # ---- I-289 (entretien) : LIVRAISON DETECTEE. Une fiche annoncee « deja lancee »
+                # qui quitte la file des lanables est livree/classee : changement consigne UNE
+                # fois, memoire d'annonce nettoyee. Garde E3-E2 present : un tableau illisible
+                # ou absent ne fait pas une livraison (Get-Lancables n'a peut-etre rien vu).
+                if (Test-Path -LiteralPath $E3E2Path) {
+                    foreach ($d in @($state.dejaLanceesConsignees)) {
+                        if (-not (@($lancables | ForEach-Object { $_.Fiche }) -contains $d)) {
+                            $state.dejaLanceesConsignees = @($state.dejaLanceesConsignees | Where-Object { $_ -ne $d })
+                            if (-not $DryRun) { Save-State }
+                            Write-VeilLog ("fiche lancee livree ou sortie de file : {0} - memoire d'annonce nettoyee" -f $d) 'INFO'
+                        }
+                    }
                 }
             }
         }
