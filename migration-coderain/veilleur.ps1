@@ -674,6 +674,13 @@ function Invoke-LaunchLane {
     if (@($state.lanesLancees) -notcontains $Fiche) { $state.lanesLancees = @($state.lanesLancees) + $Fiche }
     Save-State
     Write-VeilLog "lane '${Nom}' : lancement via nouvelle-lane.ps1 (fiche : $Fiche)"
+    # ---- I-298 : MEMOIRE LOCALE DU TOUR — le hash SHA256 de la fiche est capture AVANT le
+    # lancement. Le vault est cloud-backed (ARCH-F-021) : une fiche corrigee peut n'arriver
+    # SUR DISQUE qu'apres coup, et le controle d'armement juge alors la version MORTE (cas
+    # reel du 24/08 a 15:43 : FICHE-relance-mcp corrigee ~15:41, relance de 15:43:22 exit 1
+    # sur controle 1b, echec no 2/2 + sortie de file enregistres sur la version perimee).
+    # L'echec sera rattache a CETTE version jugee, pas au nom du fichier.
+    $hashFicheAuLancement = Get-Sha256Fidele $Fiche
     # I-277 (diagnostic lane Q) : le -RepoMoteur doit etre PROPAGE - sans lui, nouvelle-lane
     # retombe sur son defaut (~\coderain) et peut viser un AUTRE depot que celui surveille
     # (constate en bac a sable le 2026-08-23 : worktree cree dans le depot reel).
@@ -693,6 +700,21 @@ function Invoke-LaunchLane {
             Save-State -Exclure @($Fiche)
             Write-VeilLog ("echec externe, compteur intact - lane '{0}' (code sortie {1}) : mort reseau precedente (finish_reason: network_error) prouvee par {2} ; borne N=2 jugee sur fautes propres seulement (I-287) - retee au prochain tour" -f $Nom, $LASTEXITCODE, ($marquesExterne | ForEach-Object { $_.Name }) -join ', ') 'INFO'
             Add-Digest ("lane '{0}' : echec EXTERNE (reseau fournisseur, I-287) - compteur intact, fiche retee" -f $Nom)
+            return $false
+        }
+        # ---- I-298 (suite) : l'echec vient-il d'etre JUGE SUR UNE VERSION PERIMEE ? La fiche
+        # est RELUE et son hash recalcule : different => la version que le controle d'armement
+        # vient de juger n'est plus la version courante du disque => cet echec ne dit rien
+        # d'elle => NON COMPTE (compteur intact, pas de ban), marque retiree comme pour un
+        # echec externe (I-287), fiche retee au tour suivant sur sa version courante.
+        # Hash illisible (fiche disparue/illisible) ou identique => comportement actuel :
+        # l'echec est PROPRE et coute (compteur ++, ban a N=2).
+        $hashFicheCourante = Get-Sha256Fidele $Fiche
+        if ($hashFicheAuLancement -and $hashFicheCourante -and ($hashFicheAuLancement -ne $hashFicheCourante)) {
+            $state.lanesLancees = @($state.lanesLancees | Where-Object { $_ -ne $Fiche })
+            Save-State -Exclure @($Fiche)
+            Write-VeilLog ("echec juge sur version perimee - non compte : lane '{0}' (code sortie {1}) - sha256 juge={2}, sha256 courant={3} ; marque retiree, fiche retee au prochain tour (I-298)" -f $Nom, $LASTEXITCODE, $hashFicheAuLancement, $hashFicheCourante) 'INFO'
+            Add-Digest ("lane '{0}' : echec juge sur VERSION PERIMEE de la fiche (I-298) - non compte, retee" -f $Nom)
             return $false
         }
         # Verification du code sortie (v1.1) : un echec enfant ne tue pas le parent. La marque
