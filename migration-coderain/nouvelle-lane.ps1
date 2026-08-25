@@ -116,6 +116,38 @@ if ($brancheExiste -or $cheminExiste) {
         Write-Host "[nouvelle-lane] [INFO] I-303 residu de CETTE lane : branche '$Nom' enregistree en worktree a '$WorktreePath' - REPRISE, arbre reelu tel quel (ni nettoye ni juge)" -ForegroundColor Cyan
     }
     if (-not $repriseLane) {
+        # ---- I-312 T2 : residu « dossier VIDE non enregistre » - le cas chronologie I-312
+        # (25/08, readmes-sync) : la fenetre d'une lane achevee tient le dossier comme cwd ;
+        # apres sa clôture P4 (worktree deregistre, branche supprimee), le dossier vide
+        # reste un instant sur disque. Aujourd'hui ce residu tombait dans le Fail aveugle
+        # « chemin existe mais n'est pas un worktree enregistre » -> exit 1 -> compteur
+        # d'echecs -> bannissement 2/2 d'une fiche SAINTE. Desormais :
+        #   - dossier VIDE + non enregistre => tentative de retrait (rien de perdable dans
+        #     un dossier vide) ; retrait REUSSI => la lane part normalement ;
+        #   - retrait IMPOSSIBLE (dossier detenu comme repertoire courant d'un processus
+        #     vivant) => message NOMME + CODE SORTIE 4 dedie - AUCUN echec compte (le
+        #     veilleur traite le code 4 hors compteur), relance possible au tour suivant ;
+        #   - dossier NON vide / etrange => comportement INCHANGE (Fail nomme, exit 1,
+        #     compteur) : un vrai conflit de lane compte toujours.
+        $residuVideTraite = $false
+        if ($cheminExiste -and -not $enregistre) {
+            $dossierVide = $false
+            try {
+                $dossierVide = (@(Get-ChildItem -LiteralPath $WorktreePath -Force -ErrorAction Stop).Count -eq 0)
+            } catch { $dossierVide = $false }   # illisible => traitement standard ci-dessous
+            if ($dossierVide) {
+                Write-Host ("[nouvelle-lane] [INFO] I-312 : dossier VIDE non enregistre comme worktree ('{0}') - residu de fenetre de lane (cwd detain par un processus acheve) ; tentative de retrait du dossier vide" -f $WorktreePath) -ForegroundColor Yellow
+                try {
+                    Remove-Item -LiteralPath $WorktreePath -ErrorAction Stop
+                    $residuVideTraite = $true
+                    Write-Host "[nouvelle-lane] [INFO] I-312 : dossier vide supprime - la lane peut partir normalement" -ForegroundColor Yellow
+                } catch {
+                    Write-Host ("[nouvelle-lane] RESIDU VIDE DETENU (code sortie 4) : '{0}' est un dossier vide, non enregistre comme worktree, retenu comme repertoire courant d'un processus vivant (fenetre de lane vraisemblablement encore ouverte) - AUCUN echec compte, aucune session lancee ; retenter apres fermeture de la fenetre. Cause du retrait impossible : {1}" -f $WorktreePath, $_.Exception.Message) -ForegroundColor Yellow
+                    exit 4
+                }
+            }
+        }
+        if (-not $residuVideTraite) {
         # Diagnostic sous garde : toute surprise git (worktree corrompu, depot illisible...)
         # degrade vers ' non nettoyable ' - Fail conserve, jamais de suppression a l'aveugle.
         try {
@@ -167,6 +199,7 @@ if ($brancheExiste -or $cheminExiste) {
                      else { "etat du residu non reconnu - intervention requise" }
             Fail ("residu existant non nettoyable pour la lane '{0}' : {1}" -f $Nom, $cause)
         }
+        }   # ---- fin I-312 T2 : if (-not $residuVideTraite) - le diagnostic/Fail standard ne court que si le residu vide n'a pas ete traite
     }
 }
 

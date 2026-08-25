@@ -647,6 +647,49 @@ function Get-MarquesEchecExterne {
     return $trouvees
 }
 
+function Test-LivraisonConstatable {
+    # ---- I-312 T1 : la livraison de cette fiche est-elle CONSTATABLE sur le poste ?
+    # Une marque d'echec externe raconte un run mort AVANT tout travail ; si la livraison
+    # est pourtant constatable, la marque ment (cas reel I-312 du 25/08 : readmes-sync
+    # livree a 03:28 - commit pousse, rapport depose, P4 execute - declaree morte a 03:32
+    # par une marque fraiche, retiree du deja-lance, relancee deux fois exit 1, BANNIE 2/2).
+    # Deux preuves nommees par l'item :
+    #   (a) un rapport-*.md au disque AVEC recu (final $state.rapports ou provisoire
+    #       $state.rapportsAttente) dont le CONTENU cite le fichier fiche - le nom seul ne
+    #       suffit pas : le rapport du cas reel portait un nom derive ('rapport-readmes-*'
+    #       pour la lane 'readmes-sync') ; son texte, lui, cite la fiche ;
+    #   (b) la ligne E3-E2 de cette fiche porte une cellule d'etat CLOSE - meme motif que
+    #       Get-Lancables (livree/fermee/mergee, accents et pluriels, bornes de mot des
+    #       deux cotes contre les sous-chaines 'livrables', 'fermeture' etc.).
+    # LECTURE PURE : aucune ecriture, aucun log, aucun effet de bord.
+    param([string]$Fiche, [string]$Nom)
+    if (-not $Fiche -or -not $Nom) { return $false }
+    $feuilleFiche = [System.IO.Path]::GetFileName($Fiche)
+    foreach ($r in @(Get-ChildItem -LiteralPath $PostRoot -Filter 'rapport-*.md' -File -ErrorAction SilentlyContinue)) {
+        if (-not $state.rapports.PSObject.Properties[$r.Name] -and -not $state.rapportsAttente.PSObject.Properties[$r.Name]) { continue }
+        $texte = ''
+        try { $texte = Get-Content -LiteralPath $r.FullName -Raw -Encoding UTF8 } catch { }
+        if ($texte -and $texte.Contains($feuilleFiche)) { return $true }
+    }
+    try {
+        if (Test-Path -LiteralPath $E3E2Path) {
+            foreach ($l in @(Get-Content -LiteralPath $E3E2Path -Encoding UTF8)) {
+                if ($l -notmatch '^\|') { continue }
+                $ciblesLigne = @([regex]::Matches($l, '\]\(([^)]+)\)') |
+                                 ForEach-Object { [uri]::UnescapeDataString($_.Groups[1].Value) } |
+                                 Where-Object { [System.IO.Path]::GetFileName($_) -ieq $feuilleFiche })
+                if ($ciblesLigne.Count -eq 0) { continue }
+                $cellulesLigne = @($l.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+                if ($cellulesLigne.Count -eq 0) { continue }
+                $celluleEtatLigne = $cellulesLigne[$cellulesLigne.Count - 1]
+                if ($celluleEtatLigne -match '(?i)\b(livr[\u00E9]e?s?|ferm[\u00E9]e?s?|merg[\u00E9]e?s?)\b') { return $true }
+                return $false
+            }
+        }
+    } catch { }
+    return $false
+}
+
 function Test-DeriveScriptsFideles {
     # CANAL DE DEPLOIEMENT FIDELE (livrables 1+4) : a CHAQUE tour, SHA256 des copies POSTE
     # des deux scripts compares aux copies DEPOT ($RepoMoteur). Egal => silence total (zero
@@ -709,6 +752,19 @@ function Invoke-LaunchLane {
     # retombe sur son defaut (~\coderain) et peut viser un AUTRE depot que celui surveille
     # (constate en bac a sable le 2026-08-23 : worktree cree dans le depot reel).
     & (Join-Path $PostRoot 'nouvelle-lane.ps1') -Nom $Nom -Fiche $Fiche -RepoRoot $RepoMoteur
+    # ---- I-312 T2 : CODE SORTIE 4 = refus NOMME sans aucune faute de fiche (residu vide,
+    # non enregistre, DETENU comme repertoire courant d'un processus vivant - fenetre de
+    # lane vraisemblablement encore ouverte). Ce n'est NI une erreur externe reseau, NI une
+    # faute de fiche : AUCUN echec compte, pas de ban ; la marque du deja-lance est retiree
+    # pour que la fiche soit REEXAMINEE au prochain tour (quand la fenetre aura ferme, le
+    # retrait du dossier vide reussira et la lane partira normalement).
+    if ($LASTEXITCODE -eq 4) {
+        $state.lanesLancees = @($state.lanesLancees | Where-Object { $_ -ne $Fiche })
+        Save-State -Exclure @($Fiche)
+        Write-VeilLog ("lane '{0}' : relance refusee NOMMEMENT (code 4 - residu vide detenu par une fenetre encore ouverte, I-312) - compteur INTACT, fiche retee au prochain tour" -f $Nom) 'INFO'
+        Add-Digest ("lane '{0}' : relance bloquee par residu vide detenu (I-312, code 4) - compteur intact, retee" -f $Nom)
+        return $false
+    }
     if ($LASTEXITCODE -ne 0) {
         # ---- I-287 livrable 2 : ERREUR EXTERNE, PAS UNE FAUTE DE FICHE. Une marque d'echec externe
         # FRAICHE (< 24 h) portant cette fiche prouve que le run precedent est mort reseau
@@ -719,6 +775,18 @@ function Invoke-LaunchLane {
         # 08:56 comptee 1/2 - une seconde panne eut BANNI la fiche).
         $marquesExterne = @(Get-MarquesEchecExterne -FicheCible $Fiche)
         if ($marquesExterne.Count -gt 0) {
+            # ---- I-312 T1 (site 2 : consultation post-echec de relance) : meme garde que le
+            # scan. Si la livraison est CONSTATABLE, l'echec de relance vient d'heriter d'une
+            # marque MENSONGERE (la lane avait deja livre) : marques consommees, compteur
+            # INTACT, et la fiche RESTE dans le deja-lance - pas de nouvelle tentative sur du
+            # travail deja livre (readmes-sync, I-312).
+            if (Test-LivraisonConstatable -Fiche $Fiche -Nom $Nom) {
+                foreach ($m in $marquesExterne) { Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue }
+                Write-VeilLog ("echec externe mais LIVRAISON CONSTATABLE - lane '{0}' (code sortie {1}) : marques consommees ({2}), compteur INTACT, fiche MAINTENUE dans le deja-lance - pas de nouvelle tentative (I-312)" -f `
+                    $Nom, $LASTEXITCODE, (($marquesExterne | ForEach-Object { $_.Name }) -join ', ')) 'INFO'
+                Add-Digest ("lane '{0}' : echec externe ignore - LIVRAISON CONSTATABLE (I-312), fiche maintenue dans le deja-lance" -f $Nom)
+                return $false
+            }
             foreach ($m in $marquesExterne) { Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue }
             $state.lanesLancees = @($state.lanesLancees | Where-Object { $_ -ne $Fiche })
             Save-State -Exclure @($Fiche)
@@ -1217,6 +1285,21 @@ function Invoke-TourCorps {
                     if (-not $DryRun) {
                         $marquesScan = @(Get-MarquesEchecExterne -FicheCible $c.Fiche)
                         if ($marquesScan.Count -gt 0) {
+                            # ---- I-312 T1 (site 1 : scan) : AVANT de retirer la fiche du
+                            # deja-lance, la livraison est-elle CONSTATABLE ? Un run mort
+                            # avant tout travail n'ecrit ni rapport recu, ni cellule close :
+                            # si l'un des deux existe, la marque ment et la chaine
+                            # mort-declaree -> relancee -> bannie ne doit pas repartir (cas
+                            # reel readmes-sync du 25/08, ban 2/2 d'une livraison reelle).
+                            # La marque est consommee (elle a servi), mais la fiche RESTE dans
+                            # le deja-lance et N'EST PAS reexaminee ce tour : pas de relance.
+                            if (Test-LivraisonConstatable -Fiche $c.Fiche -Nom $c.Nom) {
+                                foreach ($m in $marquesScan) { Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue }
+                                Write-VeilLog ("[I-312] marque d'echec externe fraiche CONSOMMEE mais LIVRAISON CONSTATABLE - lane '{0}' MAINTENUE dans le deja-lance : PAS de retrait, PAS de relance ({1})" -f `
+                                    $c.Nom, (($marquesScan | ForEach-Object { $_.Name }) -join ', ')) 'INFO'
+                                Add-Digest ("lane '{0}' : marque d'echec externe ignoree - LIVRAISON CONSTATABLE (I-312), fiche non relancee" -f $c.Nom)
+                                continue
+                            }
                             foreach ($m in $marquesScan) { Remove-Item -LiteralPath $m.FullName -ErrorAction SilentlyContinue }
                             $retireeDuDejaLance = $false
                             if (@($state.lanesLancees) -contains $c.Fiche) {
