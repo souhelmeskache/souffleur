@@ -1,0 +1,89 @@
+FIXTURE DE STRUCTURE — SYNTHÉTIQUE À 100 % (aucun contenu réel de module)
+=========================================================================
+Forme relevée par la lane ingestion-dks-analyse (passe analyse v0, 2026-08-25)
+sur la classe « gamebook DM-less à entrées nommées + booklet de cartes » :
+entrées en CAPS reliées par des renvois « go to entry X », statblock inline
+non canonique, pointeurs de tilepage, section maps en images.
+
+Cette fixture sert de cible de structure pour une future route déterministe
+S2 « entrées nommées ». Les noms, nombres et textes sont INVENTÉS.
+
+--- 8< --- début du module factice -----------------------------------------
+
+THE SILVER BADGER'S LANTERN: A SOLO TEST MODULE (FIXTURE)
+
+INTRODUCTION
+This fixture mimics the shape of a named-entry solo gamebook. Read one
+entry, pick an option, go to the named entry. Nothing here is real.
+
+MOVING BETWEEN MAPS
+At the edge of each tilepage are numbers and arrows. Move your token to
+the adjoining tilepage indicated by the arrow you crossed.
+
+D100 CHANCE ROLLS
+Occasionally you will be told to make a d100 roll. Roll twice on the
+table below and combine both results if the moon is waxing.
+
+D100 TABLE (FIXTURE)
+01-40: Nothing happens tonight.
+41-80: A stray lantern drifts past the hedge row.
+81-00: The badger demands a toll of two copper sparks.
+
+BACKSTORY (FIXTURE)
+The Warden of Amber Hollow vanished three nights ago. You promised the
+lampwright you would look for the silver badger's lantern before dawn.
+
+ADVENTUREBEGINS
+You wake at the edge of Amber Hollow with damp boots and a dull ache.
+* Follow the lamplight north? Go to entry NORTHGATE
+* Search the reeds first? Go to entry REEDBANK
+
+REEDBANK
+The reeds whisper though there is no wind. A tin badge glints in the
+mud.
+* Take the badge? Add a Tin Badge to your inventory. Go to entry NORTHGATE
+* Leave it. Go to entry NORTHGATE
+
+NORTHGATE
+A crooked gate leans over the path. Make a perception check, DC 11.
+Make a dexterity save, DC 12 if you decide to climb it instead.
+
+BADGERBATTLE
+Place three tokens on the map within melee range of your token.
+Roll initiative!
+
+Badger Sentinel (FIXTURE STATS - SHAPE ONLY)
+Small Beast, Neutral
+Armour Class 11
+Hit Points 7
+Speed 20 ft., Burrow 5 ft.
+
+STR 8 (-1)
+DEX 12 (+1)
+CON 10 (0)
+INT 2 (-4)
+WIS 12 (+1)
+CHA 6 (-2)
+
+ATTACKS
+Snap: +3 melee, Hit 3 (1d4+1) piercing damage.
+
+* If you win, go to entry LANTERNFOUND
+* If you lose, make a d100 roll, then go to entry RETREATPATH
+
+LANTERNFOUND
+The lantern hums like a sleepy wasp. Your quest ends here, for now.
+
+TILEPAGE 1
+Find tilepage 1 in the Maps Booklet.
+Place your token on the square nearest the gate.
+OPTIONS:
+* Checking for traps?: Go to entry TRAPCHECK
+* When ready, move toward the green marker to go to entry NORTHGATE
+
+MAPS BOOKLET (pages image uniquement - jamais lues comme texte)
+1 MAPS BOOKLET (cover)
+2 TILEPAGE 1
+3 SUB-MAP 1
+
+--- >8 --- fin du module factice --------------------------------------------
