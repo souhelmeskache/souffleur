@@ -56,13 +56,13 @@ if ($P1Files.Count -eq 0) { Fail "section PERIMETRE D'ECRITURE trouvee mais aucu
 Write-Host ("[nouvelle-lane] controle 1 OK - perimetre P1 ({0} fichiers) : {1}" -f $P1Files.Count, ($P1Files -join ', ')) -ForegroundColor Green
 
 # ---- I-281 : recu de livraison VERIFIE - seuls les chemins ABSOLUS du P1 sont testables
-# (une ligne de prose du type « miroir ... » ne designe aucun fichier et est ignoree).
+# (une ligne de prose du type ' miroir ... ' ne designe aucun fichier et est ignoree).
 # La liste sert APRES le run : un exit 0 d'opencode sans livrable sur disque n'est pas une
 # completion (lane disparue sans trace, I-281) - voir le controle dans la fenetre lancee.
 # ---- I-285 : controle 1b DURCI - un P1 sans AUCUN chemin absolu testable est REFUSE a
 # l'armement (plus un simple avertissement vert). Un recu de livraison qui ne teste rien
 # n'est pas un recu : lane audit-dnd5e-engine du 24/08, fiche a P1 relatif => recu
-# « non verifiable » annonce en VERT, lane auto-nettoiee AVANT depot, exit 0 « honnete ».
+# ' non verifiable ' annonce en VERT, lane auto-nettoiee AVANT depot, exit 0 ' honnete '.
 # Toute fiche doit desormais designer ses livrables P1 par des chemins ABSOLUS.
 $P1Absolus = @($P1Files | Where-Object { [System.IO.Path]::IsPathRooted($_) })
 if ($P1Absolus.Count -eq 0) {
@@ -88,7 +88,7 @@ Write-Host "[nouvelle-lane] controle 2 OK - main propre" -ForegroundColor Green
 #       sans branche nommee, le HEAD reellement checkout du residu fait foi).
 # Sinon Fail CONSERVE avec la cause NOMMEE : on ne supprime JAMAIS du travail non commite ni
 # du travail non integre. Cas reel I-287 du 24/08 : inventaire-saves morte reseau a 08:50,
-# relance 08:56 code 1 (« chemin existe deja »), compteur d'echecs 1/2, ban evite de justesse.
+# relance 08:56 code 1 (' chemin existe deja '), compteur d'echecs 1/2, ban evite de justesse.
 $brancheExiste = $false
 $null = & git -C $RepoRoot rev-parse --verify --quiet "refs/heads/$Nom"
 if ($LASTEXITCODE -eq 0) { $brancheExiste = $true }
@@ -117,7 +117,7 @@ if ($brancheExiste -or $cheminExiste) {
     }
     if (-not $repriseLane) {
         # Diagnostic sous garde : toute surprise git (worktree corrompu, depot illisible...)
-        # degrade vers « non nettoyable » - Fail conserve, jamais de suppression a l'aveugle.
+        # degrade vers ' non nettoyable ' - Fail conserve, jamais de suppression a l'aveugle.
         try {
             $propre = $false
             if ($enregistre) {
@@ -244,40 +244,61 @@ if ($DryRun) {
 }
 
 # ---- Lancement de la session opencode dediee au poste technique
-# Le prompt voyage par FICHIER, jamais en positionnel : le premier positionnel d'opencode
-# est un CHEMIN DE PROJET ('opencode [project]') - bug du 2026-08-23, corrige comme cote
-# reveil (Invoke-WakeMeta de veilleur.ps1). Invocation directe de opencode.cmd : PowerShell
-# preferait le shim opencode.ps1, qui habillait la premiere ligne stderr de l'exe en
-# NativeCommandError rouge. Console passee en UTF8 AVANT l'appel : fleches et accents
-# sinon mojibake (fenetres du 2026-08-23).
+# Le prompt voyage par FICHIER puis PAR STDIN, jamais en positionnel : le premier
+# positionnel d'opencode est un CHEMIN DE PROJET ('opencode [project]' - bug du
+# 2026-08-23), et meme en position suivante un texte multiligne traverse le shim .cmd
+# TRONQUE a la premiere ligne (I-307 : chaque fil eveille ne recevait que la ligne de
+# titre ; sonde reelle du 25/08 : argument => le modele ne recoit que la ligne 1 sur 6).
+# Le stdin passe par REDIRECTION NATIVE de handles (Start-Process
+# -RedirectStandardInput fichier) et NON par un pipe PowerShell : constat matrice du
+# 25/08, PS 5.1 DOUBLE-ENCODE toute chaine pipee vers un natif des que le texte porte
+# un accent (l'octet-pair UTF-8 du 'o circumflexe' arrive en C3 83 C2 B4, c'est-a-dire
+# re-code comme si les octets UTF-8 etaient des caracteres Latin-1), quel que soit le
+# preambule essaye ($OutputEncoding UTF8 avec ou sans BOM, chcp, Console::OutputEncoding) ;
+# 'cmd /c type fichier |' et '< fichier' quote par cmd echouent pareillement. La
+# redirection de handles est BYTE-PERFECT
+# (prouve au bac a sable : octets du fichier == octets recus). Le texte du prompt reste
+# ecrit dans le fichier temporaire par Set-Content -Encoding UTF8, relu par opencode
+# directement depuis son stdin : plus aucun transcodage PS sur le chemin.
+# Invocation directe de opencode.cmd : PowerShell preferait le shim opencode.ps1, qui
+# habillait la premiere ligne stderr de l'exe en NativeCommandError rouge. Console passee
+# en UTF8 AVANT l'appel : fleches et accents sinon mojibake (fenetres du 2026-08-23).
 #
-# I-275 livrable 13 : le prompt porte desormais la cloture P4 — si le terminal se ferme a
+# I-275 livrable 13 : le prompt porte desormais la cloture P4 - si le terminal se ferme a
 # completion, plus personne ne peut retirer le worktree apres coup ; c'est DONC a la lane de
 # nettoyer elle-meme, en DERNIER geste.
 #
 # I-299 livrable 6 : la fenetre pose la marque echec-externe-* sur TOUTE erreur fournisseur
 # avant tout livrable - plus seulement finish_reason: network_error. Le cas reel du 24/08
-# 17:55 (« Upstream request failed: Endpoint is unavailable ») est passe AU TRAVERS : mort
+# 17:55 (' Upstream request failed: Endpoint is unavailable ') est passe AU TRAVERS : mort
 # silencieuse, ni marque, ni compteur, stall invisible. Critere, du plus precis au plus large :
 #   1. finish_reason: network_error (signature I-287 d'origine) ;
-#   2. « Upstream request failed » (signature I-299 §2) ;
+#   2. ' Upstream request failed ' (signature I-299 par.2) ;
 #   3. IDEAL : toute sortie non nulle SANS aucun travail d'outil constate dans la preuve -
 #      un run qui meurt avant d'avoir lu/ecrit/execute quoi que ce soit n'a aucune faute de
 #      fiche a porter (les marqueurs d'outil sont juges APRES retrait des sequences ANSI).
 # La marque reste posee SEULEMENT si le run a echoue ; elle nomme desormais sa cause.
+# Accents construits au RUNTIME ([char]) : ce fichier est SANS BOM, PowerShell 5.1 lit donc
+# le source en ANSI - un literal non-ASCII y serait mal lu et le prompt instancie partirait
+# mojibake (constat bac a sable du 25/08 : 'cloture'/'depot' arrives deformes). Meme ecole
+# que Test-TravailRestant (b28f564 / I-296) : texte construit sans accent litteral.
+$oAcc = [string][char]0x00F4 # o circumflexe
+$eAcc = [string][char]0x00E9 # e aigu
 $Prompt = "Execute $Fiche. Branche et worktree deja en place. Commit avant rapport, hash inclus. " +
-          "Puis clôture P4 : git worktree remove de ton worktree + suppression de ta branche depuis le dépôt principal, " +
+          "Puis cl${oAcc}ture P4 : git worktree remove de ton worktree + suppression de ta branche depuis le d${eAcc}p${oAcc}t principal, " +
           "selon README-nouvelle-lane - DERNIER geste avant de rendre la main."
 $horodatage = Get-Date -Format 'yyyyMMdd-HHmmss'
 $promptFile = Join-Path ([System.IO.Path]::GetTempPath()) ("lane-{0}-{1}.md" -f $Nom, $horodatage)
-# I-287 livrable 2 : la sortie du run est TEE'ee vers une preuve sur disque (meme ecole que
-# les preuves de session meta). Si le run meurt (codeSortie <> 0) sur une erreur FOURNISSEUR,
+# I-287 livrable 2 : la sortie du run est redirigee vers une preuve sur disque
+# (stdout dans $proofLog, stderr dans $errLog fusionne dedans juste apres le run - meme
+# ecole que les preuves de session meta). Si le run meurt (codeSortie <> 0) sur une erreur FOURNISSEUR,
 # une MARQUE echec-externe-*.flag est posee dans le poste - voir le critere elargi I-299
 # detaille plus bas. Le veilleur la lit au tour suivant : echec non compte dans
-# echecsParFiche, journal « [INFO] echec externe, compteur intact ». Sans elle, la mort
+# echecsParFiche, journal ' [INFO] echec externe, compteur intact '. Sans elle, la mort
 # reseau du run precedent faisait porter a la RELANCE (et donc a la fiche) la responsabilite
 # d'une panne exterieure : c'est exactement I-287, et son stall invisible I-299.
 $proofLog   = Join-Path $PostRoot ("preuve-session-lane-{0}-{1}.log" -f $Nom, $horodatage)
+$errLog     = Join-Path $PostRoot ("preuve-session-lane-{0}-{1}.err.log" -f $Nom, $horodatage)
 $marqueExt  = Join-Path $PostRoot ("echec-externe-{0}-{1}.flag" -f $Nom, $horodatage)
 $FicheLit   = $Fiche -replace "'", "''"
 Set-Content -LiteralPath $promptFile -Value $Prompt -Encoding UTF8
@@ -293,13 +314,16 @@ Set-Content -LiteralPath $promptFile -Value $Prompt -Encoding UTF8
 # signature carree par la trieuse ('LANE *') ; et '-WindowStyle Normal' sur le
 # Start-Process ci-dessous : plus aucun heritage du contexte cache de l'instance.
 # NOTE fiche : elle ecrit '$host.UI.RawTitle', propriete INEXISTANTE (constat bac a sable,
-# erreur « RawTitle introuvable ») - l'API reelle du titre console est RawUI.WindowTitle ;
+# erreur 'RawTitle introuvable') - l'API reelle du titre console est RawUI.WindowTitle ;
 # l'intention est honoree avec l'API qui marche.
 $inner = "`$host.UI.RawUI.WindowTitle = 'LANE $Nom'; Set-Location -LiteralPath '$WorktreePath'; " +
          "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null; " +
-         "`$p = Get-Content -LiteralPath '$promptFile' -Raw -Encoding UTF8; " +
-         "opencode.cmd run `$p 2>&1 | Tee-Object -FilePath '$proofLog' -Append; " +
-         "`$codeSortie = `$LASTEXITCODE; " +
+         "`$procLane = Start-Process -FilePath 'opencode.cmd' -ArgumentList @('run') -NoNewWindow -Wait -PassThru " +
+         "-RedirectStandardInput '$promptFile' -RedirectStandardOutput '$proofLog' -RedirectStandardError '$errLog'; " +
+         "`$codeSortie = `$procLane.ExitCode; " +
+         "`$errTxt = Get-Content -LiteralPath '$errLog' -Raw -Encoding UTF8 -ErrorAction SilentlyContinue; " +
+         "if (`$errTxt) { Add-Content -LiteralPath '$proofLog' -Value `$errTxt -Encoding UTF8 }; " +
+         "Get-Content -LiteralPath '$proofLog' -Encoding UTF8 -ErrorAction SilentlyContinue | Write-Host; " +
          "`$p1abs = @($P1Lit); " +
          "`$manquants = @(foreach (`$f in `$p1abs) { if (-not (Test-Path -LiteralPath `$f)) { `$f } }); " +
          "if (`$manquants.Count -gt 0) { " +
@@ -308,7 +332,7 @@ $inner = "`$host.UI.RawUI.WindowTitle = 'LANE $Nom'; Set-Location -LiteralPath '
          "  foreach (`$f in `$manquants) { Write-Host ('  - ABSENT : ' + `$f) -ForegroundColor Red } " +
          "  Write-Host '[nouvelle-lane] un exit 0 sans livrable n''est pas une completion (I-281) - code sortie force a 3.' -ForegroundColor Red; " +
          "  `$codeSortie = 3 } " +
-         "`$sortiePreuve = Get-Content -LiteralPath '$proofLog' -Raw -ErrorAction SilentlyContinue; " +
+         "`$sortiePreuve = Get-Content -LiteralPath '$proofLog' -Raw -Encoding UTF8 -ErrorAction SilentlyContinue; " +
          "`$mortFournisseur = `$false; `$causeExterne = ''; " +
          "if (-not `$sortiePreuve) { `$mortFournisseur = `$true; `$causeExterne = 'preuve vide ou illisible (mort avant toute sortie)' } " +
          "elseif (`$sortiePreuve -match 'finish[_-]?[Rr]eason.{0,32}network[_-]?error') { `$mortFournisseur = `$true; `$causeExterne = 'finish_reason: network_error' } " +
