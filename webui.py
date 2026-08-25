@@ -226,10 +226,10 @@ class _Handler(BaseHTTPRequestHandler):
         if not text:
             self._json({"error": "empty"}, 400)
             return
-    seq = _append("joueur", text)
-    _pending_inc()
-    _inbox.put(text)
-    self._json({"ok": True, "id": seq})
+        seq = _append("joueur", text)
+        _pending_inc()
+        _inbox.put(text)
+        self._json({"ok": True, "id": seq})
 
 
 def start(port: int = 8787) -> dict:
