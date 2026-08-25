@@ -24,6 +24,7 @@ from coderain.memory import Library, MemoryStore
 from coderain import validator as validator_mod
 from coderain.rules_engine import get_bridge
 from coderain.sidecar import DEFAULT_CFG as _DEFAULT_RPG
+from coderain.config import load_config
 
 mcp = FastMCP("coderain-engine")
 
@@ -43,12 +44,49 @@ _engine = None
 _store: MemoryStore | None = None
 _slug: str = ""
 _rpg_cfg: dict = dict(_DEFAULT_RPG)
+class InstructionsRootError(RuntimeError):
+    """config.yaml sets instructions_root but that folder does not exist.
+
+    Raised where the rule masters are about to be wired, so the server stays
+    up and every tool fails with an error naming the misconfiguration instead
+    of silently reading empty rules (or seeding a copy) in the wrong place."""
+
+
+def _resolve_instructions_root() -> tuple[Path, bool]:
+    """The governing-masters folder: config.yaml's `instructions_root` when set,
+    else the historic ROOT / "instructions". Returns (path, from_config).
+    Any config problem falls back to the default — a broken or missing
+    config.yaml must not kill server startup; the misconfiguration surfaces as
+    a named error when rules are actually read."""
+    default = ROOT / "instructions"
+    try:
+        raw = str(load_config().raw.get("instructions_root") or "").strip()
+    except Exception as exc:
+        print(f"[mcp_server] [WARN] config.yaml unreadable ({exc}) - "
+              f"instructions root stays {default}", file=sys.stderr)
+        return default, False
+    if not raw:
+        return default, False
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return path.resolve(), True
+
+
 _saves_root: Path = ROOT / "saves"
 # Sentinel: "this pipeline resolved the mechanics before the narrator wrote".
 # See _assemble_text — it is what selects the engine's quad-mode sheet.
 _RESOLVED_BEFORE_NARRATION = object()
-_instructions_root: Path = ROOT / "instructions"
+_instructions_root, _instructions_from_config = _resolve_instructions_root()
 _scenarios_root: Path = ROOT / "scenarios"
+
+_instructions_source = ("config.yaml instructions_root"
+                        if _instructions_from_config else "default")
+print(f"[mcp_server] instructions root: {_instructions_root}"
+      f"  ({_instructions_source})", file=sys.stderr)
+if _instructions_from_config and not _instructions_root.is_dir():
+    print(f"[mcp_server] [ERROR] instructions_root points to a missing "
+          f"folder: {_instructions_root}", file=sys.stderr)
 
 
 def _require_store() -> MemoryStore:
@@ -69,7 +107,20 @@ def _require_engine():
 def _library() -> Library:
     global _lib
     if _lib is None:
-        _lib = Library(ROOT)
+        lib = Library(ROOT)
+        if _instructions_from_config:
+            if not _instructions_root.is_dir():
+                raise InstructionsRootError(
+                    "config.yaml sets instructions_root to "
+                    f"'{_instructions_root}' but that folder does not exist")
+            # Library pins its masters dir to root/"instructions" internally;
+            # re-point all three layers instead of duplicating its wiring.
+            # No re-seed on purpose: a configured masters folder is read,
+            # never written — the external source stays the single source.
+            lib.instructions_dir = _instructions_root
+            lib.scenarios.instructions_dir = _instructions_root
+            lib.saves.instructions_dir = _instructions_root
+        _lib = lib
     return _lib
 
 
