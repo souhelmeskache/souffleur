@@ -31,6 +31,14 @@ $LOCK_STALE_HEURES  = 6
 # I-275 livrable 3 : borne anti-boucle — apres N echecs consecutifs d'une meme fiche,
 # elle sort de la file jusqu'a intervention.
 $MAX_ECHECS_CONSECUTIFS = 2
+# FICHE reveils-surveilles (I-276/I-305) : seuil de MORT d'un reveil trace - une entree de
+# reveilsLances agee de plus de 30 minutes sans aucune suite visible est declaree morte
+# probable ([WARN] UNE fois, pour re-examen humain ; jamais de re-feu automatique).
+$REVEIL_MORT_MINUTES = 30
+# ... et TOLERANCE separant la LIGNE DE LANCEMENT d'une vraie suite : le digest recoit
+# « reveil META (...) » quelques secondes APRES la trace I-291 (meme fonction) - sans cette
+# fenetre, chaque entree se prouverait sa propre activite et aucun mort ne serait jamais vu.
+$REVEIL_TRACE_TOLERANCESEC = 120
 # D-203 (production pilotee par le besoin) : le declencheur du reveil PRODUCTEUR devient un
 # declencheur d'ETAT evalue a chaque tour (section 2bis) : file sans rien de lanzable + travail
 # restant a router + slot libre. Fin de la borne 1/jour (producteurJour), de la fenetre 9 h
@@ -349,6 +357,12 @@ if (-not $state.PSObject.Properties['derivesConsignees']) { $state | Add-Member 
 # au deblocage (retrait du mot de la cellule) ou quand la ligne quitte le tableau. Tolerant un
 # state anterieur qui ne le porte pas encore.
 if (-not $state.PSObject.Properties['bloqueesConsignees']) { $state | Add-Member -NotePropertyName 'bloqueesConsignees' -NotePropertyValue @() -Force }
+# FICHE reveils-surveilles (I-276/I-305) : memoire des entrees de reveilsLances dont le
+# [WARN] « reveil mort probable » a DEJA ete consigne ([WARN] emis UNE seule fois par
+# entree, ecole I-289). Jetee silencieusement si l'entree quitte reveilsLances (entretien
+# en section 1bis, meme ecole que bloqueesConsignees) : un state reconstruit re-arme la
+# detection, une entree toujours presente n'est jamais re-consignee.
+if (-not $state.PSObject.Properties['reveilsMortsConsignees']) { $state | Add-Member -NotePropertyName 'reveilsMortsConsignees' -NotePropertyValue @() -Force }
 
 function Save-State {
     # I-275 livrable 3 : une fiche que l'appelant VIENT DE RETIRER (echec constate de
@@ -939,6 +953,34 @@ function Test-TravailRestant {
     return $trouve
 }
 
+function Get-HorodatagesMetaDigest {
+    # FICHE reveils-surveilles (I-276/I-305) : horodatages des lignes [META] du digest
+    # (« - HH:mm:ss - reveil META ... » posee par Invoke-WakeMeta/Invoke-EvenementMeta,
+    # « eveil PRODUCTEUR » par la section 2bis) sous forme de DateTimeOffset, pour
+    # confrontation aux traces de reveilsLances. Couvre les digests du jour de la trace a
+    # aujourd'hui (un mort peut enjamber minuit) ; ligne/date illisible => sautee, jamais
+    # fatal. LECTURE PURE : aucun effet de bord, aucun log.
+    param([DateTimeOffset]$Depuis)
+    $trouve = @()
+    $prefixeMin = "digest-{0}" -f $Depuis.ToString('yyyy-MM-dd')
+    foreach ($d in @(Get-ChildItem -LiteralPath $PostRoot -Filter 'digest-*.md' -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.BaseName -ge $prefixeMin })) {
+        foreach ($l in @(Get-Content -LiteralPath $d.FullName -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+            if ($l -notmatch '^\s*-\s*\d{2}:\d{2}:\d{2}\s*-\s*(reveil META|eveil PRODUCTEUR)(\s|\()') { continue }
+            if ($l -notmatch '^\s*-\s*(\d{2}:\d{2}:\d{2})\s*-') { continue }
+            try {
+                $trouve += [DateTimeOffset]::ParseExact(
+                    ("{0} {1}" -f $d.BaseName.Substring('digest-'.Length), $Matches[1]),
+                    'yyyy-MM-dd HH:mm:ss',
+                    [System.Globalization.CultureInfo]::InvariantCulture)
+            } catch { }
+        }
+    }
+    # NB : retour PLAT (pas de virgule protective) - l'appelant emballe deja dans @() ; un
+    # emballage double ferait iterer la boucle sur un TABLEAU (crash op_Subtraction).
+    return $trouve
+}
+
 function Invoke-Tour {
     try {
         Invoke-TourCorps
@@ -1047,6 +1089,53 @@ function Invoke-TourCorps {
             if (-not $issue) { break }
         }
         if ($nouveaux.Count -eq 0) { Write-VeilLog ("tour : rien a signaler ({0} rapports surveilles)" -f $rapports.Count) }
+    }
+
+    # ---- 1bis. REVEILS MORTS PROBABLES (fiche reveils-surveilles du 24/08 ; I-276/I-305).
+    # Chaque entree de reveilsLances (« horodatage|motif|mode », posee par I-291 au moment
+    # du lancement) agee de plus de $REVEIL_MORT_MINUTES est confrontee a ses suites
+    # VISIBLES :
+    #   - une ligne [META] du digest POSTERIEURE au lancement AU-DELA de la tolerance
+    #     (l'activite meta a continue apres ce reveil - la ligne du lancement lui-meme,
+    #     ecrite quelques secondes apres la trace, est exclue par la tolerance) ;
+    #   - une historisation nouvelle dans registre-historisation posterieure au lancement
+    #     (le travail reveille a abouti quelque part).
+    # Les DEUX absentes => le reveil est parti dans le vide : [WARN] nommant le motif et
+    # l'horodatage de la trace, consigne UNE SEULE FOIS par entree (memoire
+    # reveilsMortsConsignees persistee, ecole I-289). AUCUN re-feu ici (anti-tempete) : le
+    # rapport concerne reste soumis a la detection normale I-278 (section 1 ci-dessus), qui
+    # pourra le reveiller quand le verrou meta tombera. L'horodatage du WARN sert de trace
+    # de l'evenement pour Souhel.
+    $histDirReveils = Join-Path $MetaDir 'registre-historisation'
+    foreach ($entree in @($state.reveilsLances)) {
+        if (-not $entree) { continue }
+        if (@($state.reveilsMortsConsignees) -contains $entree) { continue }
+        $partsReveil = @($entree -split '\|', 3)
+        if ($partsReveil.Count -lt 3) { continue }
+        try { $tTrace = [DateTimeOffset]::Parse($partsReveil[0]) } catch { continue }
+        if ((([DateTimeOffset]::Now) - $tTrace).TotalMinutes -lt $REVEIL_MORT_MINUTES) { continue }
+        $suiteVisible = $false
+        foreach ($h in @(Get-HorodatagesMetaDigest -Depuis $tTrace)) {
+            if (($h - $tTrace).TotalSeconds -gt $REVEIL_TRACE_TOLERANCESEC) { $suiteVisible = $true; break }
+        }
+        if (-not $suiteVisible) {
+            foreach ($hf in @(Get-ChildItem -LiteralPath $histDirReveils -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+                if ($hf.LastWriteTimeUtc -gt $tTrace.UtcDateTime) { $suiteVisible = $true; break }
+            }
+        }
+        if ($suiteVisible) { continue }
+        Write-VeilLog ("reveil mort probable : {0} ({1}) - rapport/event a re-examiner" -f $partsReveil[1], $partsReveil[0]) 'WARN'
+        $state.reveilsMortsConsignees = @($state.reveilsMortsConsignees) + $entree
+        if (-not $DryRun) { Save-State }
+    }
+    # entretien : memoires dont l'entree a quitte reveilsLances jetees silencieusement
+    # (meme ecole que bloqueesConsignees) - jamais re-consignee tant que l'entree vit,
+    # re-armee si le state a ete reconstruit sans elle.
+    foreach ($m in @($state.reveilsMortsConsignees)) {
+        if (@($state.reveilsLances) -notcontains $m) {
+            $state.reveilsMortsConsignees = @($state.reveilsMortsConsignees | Where-Object { $_ -ne $m })
+            if (-not $DryRun) { Save-State }
+        }
     }
 
     # ---- 2. Fiches lanables : DECLENCHEMENT PAR DISPONIBILITE (v1.1)
