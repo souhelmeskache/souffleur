@@ -579,16 +579,21 @@ function Invoke-WakeMeta {
     Write-Tolerant ({ Set-Content -LiteralPath $LockPath -Value ("{0} {1}" -f $PID, (Get-Date -Format o)) -Encoding ASCII }) 'verrou meta'
     # Fenetre VISIBLE (fenetre normale, jamais cachee) et titree : Souhel voit la session
     # travailler et peut la fermer sans dommage - tout vit sur disque.
-    # I-307 : le prompt voyage PAR STDIN, plus en argument. En argument a travers le shim
-    # .cmd (cmd.exe re-analyse %*), un texte multiligne arrive TRONQUE a la session - cinq
-    # occurrences consécutives la nuit du 24 au 25/08 (chaque fil eveille ne recevait que
-    # la ligne de titre et reconstruisait son mandat depuis le disque). Passe par stdin
-    # (piping PowerShell -> opencode run), le texte traverse ENTIER : prouve au bac a sable
-    # le 25/08 (argument => fragment recu ; stdin => trois lignes + consigne recues).
+    # I-307 : le prompt voyage PAR STDIN, plus en argument (le shim .cmd tronquait le
+    # multiligne a sa premiere ligne - cinq occurrences la nuit du 24 au 25/08).
+    # Remontee lane transport-lane-stdin (d501eb5, rapport §5.2) : le PIPE PowerShell
+    # (`Get-Content | opencode.cmd run`, correctif PP b28f564) DOUBLE-ENCODE les accents en
+    # PS 5.1 (« é » arrive « Ã© ») - texte entier mais mojibake. Solution byte-perfect
+    # prouvee par la lane : REDIRECTION DE HANDLES natives via Start-Process, les octets du
+    # fichier arrivent tels quels. La preuve de session est le stdout redirige (un log par
+    # reveil, pas de Tee) ; stderr va dans un .err.log frere ; le code sortie est journalise.
+    $errLog = Join-Path $PostRoot ("preuve-session-meta-{0}.err.log" -f $horodatage)
     $inner = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null; " +
              "`$host.UI.RawUI.WindowTitle = 'META - reveil du veilleur'; " +
              "Set-Location -LiteralPath '$MetaDir'; " +
-             "Get-Content -LiteralPath '$promptFile' -Raw -Encoding UTF8 | opencode.cmd run 2>&1 | Tee-Object -FilePath '$proofLog' -Append; " +
+             "`$proc = Start-Process -FilePath 'opencode.cmd' -ArgumentList @('run') -NoNewWindow -Wait -PassThru " +
+             "-RedirectStandardInput '$promptFile' -RedirectStandardOutput '$proofLog' -RedirectStandardError '$errLog'; " +
+             "Write-Host ('[meta] fin de session - code sortie : ' + `$proc.ExitCode); " +
              "Remove-Item -LiteralPath '$promptFile' -ErrorAction SilentlyContinue; " +
              "Remove-Item -LiteralPath '$LockPath' -ErrorAction SilentlyContinue"
     $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
