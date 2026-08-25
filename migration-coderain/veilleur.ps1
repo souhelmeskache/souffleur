@@ -39,6 +39,13 @@ $REVEIL_MORT_MINUTES = 30
 # « reveil META (...) » quelques secondes APRES la trace I-291 (meme fonction) - sans cette
 # fenetre, chaque entree se prouverait sa propre activite et aucun mort ne serait jamais vu.
 $REVEIL_TRACE_TOLERANCESEC = 120
+# FICHE allocataire-ids (I-310, lane du 25/08) : taille de la borne d'ids H allouee a CHAQUE
+# reveil meta. Trois collisions cette nuit (H-165/H-166/H-167) : chaque fil lisait le meme
+# "prochains ids" du dernier relais - info perimee des qu'un second fil demarre. Remede
+# mecanique : un compteur sur disque avance SOUS VERROU EXCLUSIF a chaque reveil ; le reveil
+# repart avec une borne NON-RECOUVRABLE gravee dans son prompt. Les ids non consommes laissent
+# des trous - accepte : l'unicite prime sur la contiguite (la renumerotation d'hier est pire).
+$ALLOC_IDS_PAR_REVEIL = 20
 # D-203 (production pilotee par le besoin) : le declencheur du reveil PRODUCTEUR devient un
 # declencheur d'ETAT evalue a chaque tour (section 2bis) : file sans rien de lanzable + travail
 # restant a router + slot libre. Fin de la borne 1/jour (producteurJour), de la fenetre 9 h
@@ -117,6 +124,95 @@ function Backup-State {
             Copy-Item -LiteralPath $StatePath -Destination ($StatePath + '.bak') -Force
         }
     } catch { Write-VeilLog ("backup du state impossible (non fatal) : {0}" -f $_.Exception.Message) 'WARN' }
+}
+
+# ---- FICHE allocataire-ids (I-310) : ALLOCATAIRE D'IDS H SUR DISQUE.
+# Instruction (paragraphe 1 de la fiche) : seule la piste "compteur sur disque sous verrou
+# exclusif" est portable par veilleur.ps1 SEUL - le mutex Global\MRPG-Veilleur-State existe
+# (I-277) et le canal prompt par fichier/stdin existe (PP b28f564, redirection handles
+# dab6552). Les deux autres pistes de I-310 ("prefixe par fil" : change le format des ids ;
+# "drapeau META-VIVANT" : change QUAND les fils ecrivent) sont de la doctrine d'ecriture des
+# registres, hors portee d'une lane - arbitrage Souhel. Portee exacte du remede ici : les fils
+# ECRIVENT leurs entrees eux-memes, le veilleur ne peut pas intercepter creation par creation ;
+# il peut en revanche garantir qu'aucun fil revele ne demarre sans une plage d'ids que nul
+# autre ne recevra jamais. TUI vivant : aucune session lancee => aucune borne consommee.
+# NB fichier SANS BOM : literals 100% ASCII, bloc injecte sans accent literal (ecole
+# I-296/b28f564/d501eb5).
+function Get-RegistreHistDir { Join-Path $MetaDir 'registre-historisation' }
+function Get-CompteurHPath   { Join-Path (Get-RegistreHistDir) '.compteur-h' }
+
+function Get-ProchainHDepuisRegistre {
+    # Amorce deterministe : plus grand id H porte par un nom de fichier du registre, + 1.
+    # Registre absent/vide/illisible => 1. Lecture pure, aucun effet de bord.
+    $max = 0
+    foreach ($f in @(Get-ChildItem -LiteralPath (Get-RegistreHistDir) -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+        foreach ($m in [regex]::Matches($f.BaseName, 'H-(\d+)')) {
+            $v = 0
+            if ([int]::TryParse($m.Groups[1].Value, [ref]$v) -and ($v -gt $max)) { $max = $v }
+        }
+    }
+    return ($max + 1)
+}
+
+function Get-ProchainHActuel {
+    # Lecture PURE (apercu DryRun) : valeur du compteur si lisible, sinon amorce registre.
+    # Sans verrou ni ecriture : un DryRun ne consomme jamais rien.
+    $brut = ''
+    try {
+        if (Test-Path -LiteralPath (Get-CompteurHPath)) {
+            $brut = Get-Content -LiteralPath (Get-CompteurHPath) -Raw -Encoding UTF8
+        }
+    } catch { $brut = '' }
+    if ($brut -match '^\s*(\d+)\s*$') { return [int]$Matches[1] }
+    return (Get-ProchainHDepuisRegistre)
+}
+
+function Format-BornePromptH {
+    # Bloc grave a la fin du prompt d'eveil : la borne fait foi, le relais perime ne compte plus.
+    param([int]$Debut, [int]$Fin, [switch]$Simulation)
+    $titre = "## BORNE D'IDS H ALLOUEE (I-310)"
+    if ($Simulation) { $titre = "## BORNE D'IDS H - SIMULATION DRYRUN (rien consomme)" }
+    return (($titre + "`n`n" +
+        "Cette session part avec une plage EXCLUSIVE d'ids d'historisation, allouee sous verrou au moment du reveil : H-{0} a H-{1}.`n" +
+        "- Toute entree creee dans registre-historisation/ prend ses ids DANS CETTE PLAGE, dans l'ordre croissant.`n" +
+        "- Ne derive JAMAIS un id d'un << prochains ids >> lu dans un relais anterieur : ces numeros sont obsoletes. Ta borne fait foi ; aucun autre fil ne recoit jamais ces valeurs.`n" +
+        "- Plage epuisee avant la fin du travail : arrete l'historisation a H-{1}, signale l'epuisement dans ton rapport. Ne depasse JAMAIS H-{1}.`n") -f $Debut, $Fin)
+}
+
+function Reserve-BorneIdsH {
+    # Coeur de l'allocataire (I-310 piste disque) : LIRE-INCREMENTER-ECRIRE en section
+    # critique unique (Enter-StateLock). Renvoie [pscustomobject]@{ Debut ; Fin }, ou $null si
+    # le verrou n'est pas acquis en 5 s : l'appelant refuse alors le reveil SANS rien consommer
+    # (rete au tour suivant, meme ecole qu'un refus verrou meta) - JAMAIS de borne emise hors
+    # section critique, c'est exactement la course que I-310 ferme.
+    param([int]$Nombre = $ALLOC_IDS_PAR_REVEIL)
+    if ($Nombre -lt 1) { $Nombre = 1 }
+    $mutexAlloc = Enter-StateLock -DelaiMs 5000
+    if ($null -eq $mutexAlloc) { return $null }
+    try {
+        $brut = ''
+        try {
+            if (Test-Path -LiteralPath (Get-CompteurHPath)) {
+                $brut = Get-Content -LiteralPath (Get-CompteurHPath) -Raw -Encoding UTF8
+            }
+        } catch { $brut = '' }
+        if ($brut -match '^\s*(\d+)\s*$') {
+            $debut = [int]$Matches[1]
+        } else {
+            # Amorce (premier lancement, compteur perdu ou corrompu) : le registre fait foi.
+            # Cas degrade documente : si le fichier disparait PENDANT des bornes en vol, les ids
+            # non encore ecrits de ces bornes pourraient etre re-emis - [WARN] nomme ; fenetre
+            # de risque bornee a cet incident de perte, jamais au fonctionnement normal.
+            $debut = Get-ProchainHDepuisRegistre
+            Write-VeilLog ("allocataire ids : compteur '{0}' absent ou illisible - amorce depuis le registre a H-{1}" -f (Get-CompteurHPath), $debut) 'WARN'
+        }
+        $fin = $debut + $Nombre - 1
+        $prochain = $fin + 1
+        Write-Tolerant ({ Set-Content -LiteralPath (Get-CompteurHPath) -Value ("" + $prochain) -Encoding ASCII }) 'compteur ids H (.compteur-h)'
+        return [pscustomobject]@{ Debut = $debut; Fin = $fin }
+    } finally {
+        Exit-StateLock $mutexAlloc
+    }
 }
 
 function Fail {
@@ -557,14 +653,28 @@ function Invoke-WakeMeta {
     # il voyage par FICHIER comme le reste du prompt, jamais par la ligne de commande.
     $template = Get-Content -LiteralPath $EveilTemplate -Raw -Encoding UTF8
     $prompt = $template.Replace('{{MOTIF}}', $Motif).Replace('{{RAPPORT}}', $Rapport).Replace('{{MODE}}', $Mode)
+    # ---- FICHE allocataire-ids (I-310) : TOUT reveil part avec sa borne d'ids H non-recouvrable,
+    # allouee SOUS VERROU avant tout effet de bord (fichier prompt, verrou meta pose plus bas).
+    # Refus propre si le verrou n'est pas acquis : l'evenement N'EST PAS consomme, rete au tour
+    # suivant (meme ecole que le garde verrou meta ci-dessus) ; jamais de reveil sans borne.
     if ($DryRun) {
+        $apercuDebut = Get-ProchainHActuel
         Write-Host "[veilleur][DRYRUN] lancerais une session meta VISIBLE (motif : $Motif ; mode : $Mode) avec le prompt :" -ForegroundColor Magenta
         Write-Host "--- debut prompt ---"
-        Write-Host $prompt
+        Write-Host ($prompt + "`n" + (Format-BornePromptH -Debut $apercuDebut -Fin ($apercuDebut + $ALLOC_IDS_PAR_REVEIL - 1) -Simulation))
         Write-Host "--- fin prompt ---"
         Write-Host "[veilleur][DRYRUN] commande equivalente : prompt instancie dans un fichier VISIBLE du poste, puis 'opencode run' depuis $MetaDir avec le contenu du fichier en message (fenetre normale non cachee, verrou $LockPath)" -ForegroundColor Magenta
         return $true
     }
+    $borneReveil = Reserve-BorneIdsH
+    if ($null -eq $borneReveil) {
+        Write-VeilLog "garde allocataire ids : verrou d'etat non acquis en 5 s - reveil refuse SANS consommation (aucune trace, aucun fichier), rete au tour suivant" 'GARDE'
+        return $false
+    }
+    $prompt += "`n" + (Format-BornePromptH -Debut $borneReveil.Debut -Fin $borneReveil.Fin)
+    # Trace du jet au journal du veilleur (audit de l'allocataire) - les traces I-291
+    # (reveilsLances) restent INCHANGEES, contrainte non negociable de la fiche.
+    Write-VeilLog ("allocataire ids : borne H-{0} a H-{1} allouee a ce reveil (motif : {2}) - plage exclusive gravee dans le prompt" -f $borneReveil.Debut, $borneReveil.Fin, $Motif) 'INFO'
     # Le prompt voyage par FICHIER, jamais par la ligne de commande : le premier
     # positionnel d'opencode est un CHEMIN DE PROJET ('opencode [project]') - coller
     # le prompt en argument faisait echouer le changement de repertoire (bug du
@@ -708,6 +818,11 @@ function Invoke-LaunchLane {
     # I-277 (diagnostic lane Q) : le -RepoMoteur doit etre PROPAGE - sans lui, nouvelle-lane
     # retombe sur son defaut (~\coderain) et peut viser un AUTRE depot que celui surveille
     # (constate en bac a sable le 2026-08-23 : worktree cree dans le depot reel).
+    # ---- FICHE allocataire-ids (I-310) : PAS de borne d'ids pour un lancement de LANE. Une
+    # lane ecrit du code et des rapports, jamais d'entrees H ; l'historisation de son travail
+    # est produite par des sessions meta, reveillees AVEC borne (Invoke-WakeMeta). Le seul canal
+    # vers le prompt d'une lane passerait par nouvelle-lane.ps1 ou la fiche - tous deux hors
+    # perimetre P1 de cette lane.
     & (Join-Path $PostRoot 'nouvelle-lane.ps1') -Nom $Nom -Fiche $Fiche -RepoRoot $RepoMoteur
     if ($LASTEXITCODE -ne 0) {
         # ---- I-287 livrable 2 : ERREUR EXTERNE, PAS UNE FAUTE DE FICHE. Une marque d'echec externe
