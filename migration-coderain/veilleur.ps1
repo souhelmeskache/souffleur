@@ -579,11 +579,16 @@ function Invoke-WakeMeta {
     Write-Tolerant ({ Set-Content -LiteralPath $LockPath -Value ("{0} {1}" -f $PID, (Get-Date -Format o)) -Encoding ASCII }) 'verrou meta'
     # Fenetre VISIBLE (fenetre normale, jamais cachee) et titree : Souhel voit la session
     # travailler et peut la fermer sans dommage - tout vit sur disque.
+    # I-307 : le prompt voyage PAR STDIN, plus en argument. En argument a travers le shim
+    # .cmd (cmd.exe re-analyse %*), un texte multiligne arrive TRONQUE a la session - cinq
+    # occurrences consécutives la nuit du 24 au 25/08 (chaque fil eveille ne recevait que
+    # la ligne de titre et reconstruisait son mandat depuis le disque). Passe par stdin
+    # (piping PowerShell -> opencode run), le texte traverse ENTIER : prouve au bac a sable
+    # le 25/08 (argument => fragment recu ; stdin => trois lignes + consigne recues).
     $inner = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null; " +
              "`$host.UI.RawUI.WindowTitle = 'META - reveil du veilleur'; " +
              "Set-Location -LiteralPath '$MetaDir'; " +
-             "`$p = Get-Content -LiteralPath '$promptFile' -Raw -Encoding UTF8; " +
-             "opencode.cmd run `$p 2>&1 | Tee-Object -FilePath '$proofLog' -Append; " +
+             "Get-Content -LiteralPath '$promptFile' -Raw -Encoding UTF8 | opencode.cmd run 2>&1 | Tee-Object -FilePath '$proofLog' -Append; " +
              "Remove-Item -LiteralPath '$promptFile' -ErrorAction SilentlyContinue; " +
              "Remove-Item -LiteralPath '$LockPath' -ErrorAction SilentlyContinue"
     $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
@@ -921,6 +926,25 @@ function Test-TravailRestant {
     #       ($state.rapports) ni provisoire ($state.rapportsAttente). Frontiere honnete : le
     #       veilleur sait LIVRER (recu pose quand le reveil part), il ne juge pas la
     #       profondeur de l'instruction d'une session deja reveillee.
+    #   (c) I-306 : item deja EN ATTENTE SOUHEL — un item technique ouvert dont l'identifiant
+    #       figure dans le champ lie: d'un bloc d'entree de _SOUSHEL-ATTENTE.md (blocs
+    #       « --- »…« --- », champ lie: uniquement - un id cite dans la prose d'une entree ne
+    #       compte pas) n'est plus compte « a fichiser » : son routage est l'arbitrage Souhel,
+    #       pas une fiche de lane (I-301 : 5 eveils producteur en 50 min sur un arbitrage en
+    #       cours). Tolerance accents ecole I-296 (li + accent construit au runtime, car ce
+    #       fichier est SANS BOM : un littéral non-ASCII serait mal lu par PowerShell 5.1) ;
+    #       fichier absent/illisible => chaine vide => comportement conservateur INCHANGE.
+    $attenteLie = ''
+    try {
+        $attenteTexte = Get-Content -LiteralPath (Join-Path $MetaDir '_SOUSHEL-ATTENTE.md') -Raw -Encoding UTF8
+        if ($attenteTexte) {
+            $regexLie = '(?m)^li[' + [char]0xE9 + 'e]:\s*(.+)$'
+            $champsLie = foreach ($bloc in @($attenteTexte -split '(?m)^---\s*$')) {
+                if ($bloc -match $regexLie) { $Matches[1] }
+            }
+            $attenteLie = (@($champsLie) -join ' ')
+        }
+    } catch { $attenteLie = '' }
     # Lecture pure, sure (try par fichier), arret au premier sujet trouve. Ne jette jamais :
     # registre-items absent/illisible => « pas de travail constate », conservateur.
     $trouve = [pscustomobject]@{ Restant = $false; Detail = '' }
@@ -939,6 +963,7 @@ function Test-TravailRestant {
         if ($statut -ne 'ouvert') { continue }
         if (@($FAMILLES_TECHNIQUES) -notcontains $famille) { continue }
         if ($champFiche -and (Test-Path -LiteralPath $champFiche)) { continue }   # deja route
+        if ($attenteLie -and $attenteLie.Contains($f.BaseName)) { continue }      # I-306 : en attente Souhel
         $trouve.Restant = $true
         $trouve.Detail  = "item a fichiser : $($f.Name)"
         return $trouve
