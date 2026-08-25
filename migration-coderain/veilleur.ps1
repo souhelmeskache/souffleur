@@ -874,24 +874,31 @@ function Get-Lancables {
             continue
         }
         # ---- D-204 : le sequencement devient un MARQUEUR MACHINE. Apres le test des marqueurs
-        # de cloture (leur priorite est inchangee) : une cellule d'etat contenant « bloquee »
-        # ecarte la ligne de la file. Insensible a la casse ET aux accents ('bloquee' doit
-        # matcher aussi : ne pas reproduire I-296 ou le filtre des marqueurs n'entendait que
-        # les formes accentuees) ; bornes de mot des deux cotes (« debloquee » ne matche pas).
+        # de cloture (leur priorite est inchangee) : une cellule d'etat dont la TETE porte le
+        # marqueur « bloquee » ecarte la ligne de la file.
+        # ANCRAGE EN TETE (I-308) : le motif ne teste plus TOUTE la cellule. Un marqueur machine
+        # qui lit de la prose lit aussi les MENTIONS de ce marqueur - la documentation vivante
+        # des cellules devenait dangereuse a ecrire (cas reel OO : fiche lanable ECARTEE du
+        # 24/08 au 25/08 pour avoir CITE le mot en prose). Desormais seul compte le marqueur en
+        # premiere position, EVENTUELLEMENT precede de caracteres non-mot (emoji d'etat, gras,
+        # ponctuation : ^\W*) ; une citation en pleine prose ne fait plus autorite. La borne de
+        # mot FINALE conserve l'exclusion de « debloquee ». Insensible a la casse ET aux accents
+        # ('bloquee' doit matcher aussi : ne pas reproduire I-296 ou le filtre des marqueurs
+        # n'entendait que les formes accentuees).
         # L'ecart est journalise [INFO] UNE SEULE FOIS au changement (memoire
         # bloqueesConsignees, meme ecole que dejaLanceesConsignees du merge 99b95d2), citant la
         # lane et la cellule. Place APRES la resolution de la fiche : c'est son chemin resolu
         # qui sert de cle et son nom de lane qui est cite au journal. Le motif couvre les deux
         # graphies du feminin : accent+e (« bloquee » accorde) ET e-double non accentue.
-        if ($celluleEtat -match '(?i)\bbloqu[\u00E9]?e{1,2}s?\b') {
+        if ($celluleEtat -match '(?i)^\W*bloqu[\u00E9]?e{1,2}s?\b') {
             if (@($state.bloqueesConsignees) -notcontains $resolve.Path) {
                 $state.bloqueesConsignees = @($state.bloqueesConsignees) + $resolve.Path
                 Save-State
-                Write-VeilLog ("fiche lanable ECARTEE : statut bloquee dans la cellule d'etat ('{0}') - lane '{1}' sortie de file jusqu'a deblocage (D-204)" -f $celluleEtat, $nom) 'INFO'
+                Write-VeilLog ("fiche lanable ECARTEE : statut bloquee EN TETE de la cellule d'etat ('{0}') - lane '{1}' sortie de file jusqu'a deblocage (D-204)" -f $celluleEtat, $nom) 'INFO'
             }
             continue
         }
-        # D-204 (suite) : DEBLOCAGE = retrait du mot. La memoire d'annonce est jetee
+        # D-204 (suite) : DEBLOCAGE = retrait du marqueur de la TETE. La memoire d'annonce est jetee
         # SILENCIEUSEMENT (aucun log : le changement a deja ete dit a l'annonce, le retour a
         # l'etat normal se voit au lancement) et la ligne redevient lanzable ci-dessous.
         if (@($state.bloqueesConsignees) -contains $resolve.Path) {
