@@ -7,11 +7,62 @@ is a new table revision, not an edit of history.
 """
 from __future__ import annotations
 
+import re
+
 TARGET_VERSIONS = ("2014", "2024")
 
 
 class ConversionException(Exception):
     """No conversion table covers this value — reported, never guessed."""
+
+
+# -- P-CONV-1 : filet anti-typo des statblocks ---------------------------------
+# Le dialecte du corpus (« Armour Class » britannique, « CR 1 (200XP) »,
+# « Hit 4 (1d8+3) », Proficiency Bonus explicite) est lu MÉCANIQUEMENT :
+# le noyau chiffré sert à prouver les records custom, jamais à improviser
+# un champ absent (I-111 : ce qui manque sort en exception signalée).
+_CA_RE = re.compile(r"Armo[u]?r Class\s*:?\s*(\d{1,2})", re.I)
+_PV_RE = re.compile(r"Hit Points\s*:?\s*(\d{1,3})", re.I)
+_SPEED_RE = re.compile(r"Speed\s*:?\s*([^\n]+)", re.I)
+_CR_RE = re.compile(
+    r"\bCR\s*(\d{1,2}(?:/\d{1,2})?)\s*\(\s*(\d{1,5})\s*XP", re.I)
+_ATTACK_RE = re.compile(
+    r"(?:^|\n)"
+    r"(?P<nom>[A-Za-z][A-Za-z'’\- ]{0,40}?(?:\s*\([^)\n]{1,40}\))?)"
+    r"\s*\+(?P<bonus>\d{1,2})(?![\d/])"
+    # le span bonus->dé traverse les retours à la ligne du PDF mais pas
+    # un autre '+' (les attaques s'enchaînent ligne à ligne)
+    r"[^+]{0,90}?"
+    r"(?P<des>\d{1,2}d\d{1,2}(?:\s*[+-]\s*\d{1,2})?)", re.I)
+
+
+def statblock_core(block: str) -> dict:
+    """Bloc source (dialecte ci-dessus) -> noyau chiffré {ca, pv, vitesse,
+    cr?, xp?, attaques[]}. Lève ConversionException sur un bloc sans
+    Armour Class ni Hit Points : un statblock qui n'en est pas un ne se
+    convertit pas en silence."""
+    text = str(block)
+    m_ca, m_pv = _CA_RE.search(text), _PV_RE.search(text)
+    if not m_ca or not m_pv:
+        missing = [name for name, m in (("Armour Class", m_ca),
+                                        ("Hit Points", m_pv)) if not m]
+        raise ConversionException(
+            f"statblock illisible — champ(s) absent(s): {missing}")
+    core: dict = {"ca": int(m_ca.group(1)), "pv": int(m_pv.group(1))}
+    m_sp = _SPEED_RE.search(text)
+    if m_sp:
+        core["vitesse"] = " ".join(m_sp.group(1).split())
+    m_cr = _CR_RE.search(text)
+    if m_cr:
+        core["cr"] = m_cr.group(1)
+        core["xp"] = int(m_cr.group(2))
+    attaques = []
+    for m in _ATTACK_RE.finditer(text):
+        attaques.append({"nom": " ".join(m.group("nom").split()),
+                         "bonus": int(m.group("bonus")),
+                         "des": " ".join(m.group("des").split())})
+    core["attaques"] = attaques
+    return core
 
 
 class RuleTables:

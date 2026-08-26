@@ -216,7 +216,22 @@ class Record:
     """Typed stat block, already converted to 5e.
 
     transverse (D-113/D-119, optional): {fonction, charge, agenda, portee} —
-    what the entity DOES stripped from its décor, and its reach."""
+    what the entity DOES stripped from its décor, and its reach.
+
+    Formes P-CONV-1 (E2/E3, fiche 2026-08-26) — clés RÉSERVÉES de stats_5e,
+    sorties du corps mécanique vers les attributs typés :
+    - ancre_srd   : slug `dnd5e-srd-data` (créature uniquement) — la
+      partition référence le dataset, elle n'en copie jamais les stats ;
+    - delta_vs_ancre : écart documenté vs l'ancre (variante SRD), jamais
+      orpheline ;
+    - tokens_initial : poses initiales E3 [{node_id, count, placement_md}] —
+      OÙ la rencontre pose ses jetons (le garde zéro-dangling vit dans emit) ;
+    - persistent  : attributs qui survivent aux frontières de combat (delta
+      persist `1b84258`) — déclarés côté auteur par la ligne 'persistent:'
+      côté moteur ; ici la liste des attrs DOIT exister dans les stats.
+    """
+
+    _RESERVED = ("ancre_srd", "delta_vs_ancre", "tokens_initial", "persistent")
 
     def __init__(self, rid: str, classe: str, nom: str, stats_5e: dict,
                  anchors: list[tuple[int, int]], tags: list[str] | None = None,
@@ -227,13 +242,18 @@ class Record:
             raise ValueError(f"record {rid}: classe {classe!r} not in {RECORD_CLASSES}")
         if not anchors:
             raise ValueError(f"record {rid}: no source anchor")
+        stats = {k: v for k, v in stats_5e.items() if k not in self._RESERVED}
+        self.ancre_srd = self._ancre(rid, classe, stats_5e)
+        self.delta_vs_ancre = self._delta(rid, stats_5e)
+        self.tokens_initial = self._tokens(rid, stats_5e)
+        self.persistent_attrs = self._persistent(rid, stats_5e, stats)
         required = annexe_a.required_fields(classe)
-        merged = {**stats_5e, "nom": nom}   # nom is first-class, not a stat
+        merged = {**stats, "nom": nom}   # nom is first-class, not a stat
         missing = [f for f in required if f not in merged]
         if missing:
             raise ValueError(f"record {rid} ({classe}): stats_5e missing {missing}")
         self.id, self.classe, self.nom = rid, classe, nom
-        self.stats_5e, self.tags = stats_5e, tags or []
+        self.stats_5e, self.tags = stats, tags or []
         # transverses D-113/D-119/D-120 §6 — explicites, jamais improvisés:
         # fonction = à quoi l'élément peut servir ; charge = ce qu'il doit
         # faire ressentir ; agenda/portee = acteurs (pnj|faction) ;
@@ -244,6 +264,82 @@ class Record:
                            if tr_in.get(k)}
         self.fonctions_aval = [str(x) for x in (fonctions_aval or [])]
         self.anchors = [(int(a), int(b)) for a, b in anchors]
+
+    def _ancre(self, rid, classe, raw) -> str | None:
+        ancre = raw.get("ancre_srd")
+        if ancre is None:
+            return None
+        if classe != "creature":
+            raise ValueError(f"record {rid} ({classe}): ancre_srd réservé à "
+                             "la classe creature")
+        a = str(ancre)
+        if not _SLUG_RE.match(a):
+            raise ValueError(f"record {rid}: ancre_srd doit être un slug "
+                             f"kebab minuscule du dataset, got {ancre!r}")
+        return a
+
+    def _delta(self, rid, raw) -> dict | None:
+        delta = raw.get("delta_vs_ancre")
+        if delta is None:
+            return None
+        if not raw.get("ancre_srd"):
+            raise ValueError(f"record {rid}: delta_vs_ancre sans ancre_srd — "
+                             "un delta est toujours relatif à son ancre")
+        if not isinstance(delta, dict) or not delta:
+            raise ValueError(f"record {rid}: delta_vs_ancre doit être un "
+                             "dict non vide (écart documenté, jamais orphelin)")
+        return {str(k): v for k, v in delta.items()}
+
+    def _tokens(self, rid, raw) -> list[dict]:
+        poses = raw.get("tokens_initial")
+        if poses is None:
+            return []
+        if not isinstance(poses, list) or not poses:
+            raise ValueError(f"record {rid}: tokens_initial doit être une "
+                             "liste non vide de poses")
+        out = []
+        for i, p in enumerate(poses):
+            what = f"record {rid} tokens_initial[{i}]"
+            if not isinstance(p, dict) or set(p) != {"node_id", "count",
+                                                     "placement_md"}:
+                raise ValueError(f"{what}: forme exacte exigée "
+                                 "{node_id, count, placement_md}, got "
+                                 f"{sorted(p) if isinstance(p, dict) else p!r}")
+            node_id = p["node_id"]
+            if not isinstance(node_id, str) or not _SLUG_RE.match(node_id):
+                raise ValueError(f"{what}: node_id doit être un slug kebab "
+                                 f"minuscule, got {node_id!r}")
+            count = p["count"]
+            if isinstance(count, bool) or not isinstance(count, int) \
+                    or count < 1:
+                raise ValueError(f"{what}: count doit être un entier >= 1, "
+                                 f"got {count!r}")
+            place = p["placement_md"]
+            if not isinstance(place, str) or not place.strip():
+                raise ValueError(f"{what}: placement_md requis (où la source "
+                                 "dit de poser le jeton)")
+            out.append({"node_id": node_id, "count": int(count),
+                        "placement_md": place.strip()})
+        return out
+
+    def _persistent(self, rid, raw, stats) -> list[str]:
+        decl = raw.get("persistent")
+        if decl is None:
+            return []
+        if not isinstance(decl, list) or not decl:
+            raise ValueError(f"record {rid}: persistent doit être une liste "
+                             "non vide d'attributs déclarés (delta persist "
+                             "1b84258)")
+        out = []
+        for a in decl:
+            attr = str(a)
+            if attr not in stats:
+                raise ValueError(f"record {rid}: attribut persistant "
+                                 f"{attr!r} absent des stats du record — "
+                                 "la déclaration 'persistent:' ne porte que "
+                                 "des attributs existants")
+            out.append(attr)
+        return out
 
 
 class RollTable:
