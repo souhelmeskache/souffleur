@@ -218,6 +218,24 @@ class Entry:
     def hidden(self) -> bool:
         return _attr_true(self.attrs.get("hidden"))
 
+    def persistent_attrs(self) -> list[str]:
+        """Attributes the author marked MUTABLE IN SESSION (D-216 §3) — names
+        from the optional `persistent:` header line, comma-separated:
+
+            ## The Death Knight  {#death-knight}
+            persistent: hp, morale
+            hp: 120
+
+        Only these may be written by the engine-tracked `persist` delta (the
+        rest of the attribute vocabulary stays closed); the value lives at the
+        top level of state.json under "persistent", so it survives scene and
+        combat boundaries by construction. Until the first in-session write,
+        the entry's own `attr: value` line IS the baseline. assemble() serves
+        the current value + the mutation history on every render of this entry.
+        """
+        return [p.strip().lower()
+                for p in self.attrs.get("persistent", "").split(",") if p.strip()]
+
     def links(self) -> list[str]:
         """Slugs of explicitly linked pieces (`links: slug, slug`)."""
         return [templates.slugify(p) for p in self.attrs.get("links", "").split(",")
@@ -1354,9 +1372,15 @@ class MemoryStore:
         premise = _premise_prose(self.read("premise.md"))
         if premise:
             sections.append((0, "Premise", premise))
+        # D-216 §3: persistent attributes are read ONCE per assembly and served
+        # on every rendered entry that declares them (current value + history).
+        pstate = self.world_state().get("persistent")
         player = self.entries("player.md")
         if player:
-            sections.append((0, "You", "\n\n".join(e.render() for e in player)))
+            sections.append(
+                (0, "You",
+                 "\n\n".join(e.render() + _persistent_suffix(e, pstate)
+                             for e in player)))
         clock = self.clock_str()
         loc = self.world_state().get("player", {}).get("location", "")
         if clock or loc:
@@ -1371,8 +1395,10 @@ class MemoryStore:
                         if e.attrs.get("status", "open").lower() != "resolved"
                         and not e.hidden()]
         if open_threads:
-            sections.append((1, "Open threads",
-                             "\n\n".join(e.render() for e in open_threads)))
+            sections.append(
+                (1, "Open threads",
+                 "\n\n".join(e.render() + _persistent_suffix(e, pstate)
+                             for e in open_threads)))
         arc = _strip_h1(self.read("memory/arc.md"))
         if arc:
             sections.append((1, "Story so far (arc)", arc))
@@ -1445,12 +1471,15 @@ class MemoryStore:
                 pr = 1 if any(e.pinned() or e.weight() == "critical"
                               for e in picked[rel]) else 2
                 sections.append((pr, label,
-                                 "\n\n".join(e.render() for e in picked[rel])))
+                                 "\n\n".join(e.render()
+                                             + _persistent_suffix(e, pstate)
+                                             for e in picked[rel])))
         if hidden_hits:
             sections.append((
                 2, "Secrets you know (NOT yet revealed to the player — "
                    "foreshadow, hint, let them discover; never state outright)",
-                "\n\n".join(e.render() for e in hidden_hits)))
+                "\n\n".join(e.render() + _persistent_suffix(e, pstate)
+                            for e in hidden_hits)))
 
         # related past episodes (Wave 2 hybrid retrieval): folds whose metadata
         # names an entity that just activated, plus their chronological
@@ -1588,6 +1617,40 @@ class MemoryIndex:
                 scored.append((score, rel, e))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [(rel, e) for _, rel, e in scored]
+
+
+def _persistent_suffix(e: Entry, pstate: dict | None) -> str:
+    """The live persistent-attribute block for one entry (D-216 §3): every
+    attribute declared `persistent:` is served with its CURRENT engine-tracked
+    value (state.json "persistent" block) followed by the recent mutation
+    history (who / when / value). Before the first in-session write the
+    entry's own baseline line is shown. '' when nothing live applies, so
+    entries without persistent state render exactly as before."""
+    decls = e.persistent_attrs()
+    if not decls:
+        return ""
+    recs = pstate.get(e.slug) if isinstance(pstate, dict) else None
+    recs = recs if isinstance(recs, dict) else {}
+    lines: list[str] = []
+    for attr in decls:
+        rec = recs.get(attr)
+        hist = None
+        if isinstance(rec, dict) and "value" in rec:
+            cur = rec["value"]
+            hist = rec.get("history") \
+                if isinstance(rec.get("history"), list) else []
+        elif str(e.attrs.get(attr, "")).strip():
+            cur = e.attrs[attr]
+        else:
+            continue
+        lines.append(f"- {attr}: {cur}")
+        for m in (hist or [])[-5:]:
+            lines.append(f"  - {m.get('when', '?')}: set to {m.get('value')} "
+                         f"(by {m.get('who', '?')})")
+    if not lines:
+        return ""
+    return ("\n\nPersistent state (live values tracked by the engine):\n"
+            + "\n".join(lines))
 
 
 def _masked_render(e: Entry) -> str:

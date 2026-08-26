@@ -32,6 +32,9 @@ DAY_CAP_SCENE_BREAK = 30
 NUM_CAP = 1000            # hp/mana/xp per envelope
 GOLD_CAP = 100_000        # gold per envelope
 QTY_CAP = 100             # per-item quantity
+# persist history cap (D-216 §3): the mutation trail kept per persistent
+# attribute — enough to reconstruct any arc, small enough to never bloat.
+PERSIST_HISTORY_CAP = 20
 
 # Envelope keys that live NEXT TO the deltas (not inside them).
 _TOP_KEYS = {"v", "scene_break", "check", "deltas"}
@@ -43,7 +46,7 @@ _MECHANICS = {"hp_delta", "mana_delta", "xp_delta",
               "status_add", "status_remove", "trust", "npc_state", "enemies",
               "ability_add", "title_add"}
 _WORLD = {"time_advance", "flag_set", "location", "gold_delta",
-          "quest_update", "beat_advance"}
+          "quest_update", "beat_advance", "persist"}
 # Wave 2/4: sanctioned Markdown mutations, applied by the engine so they can be
 # undone (reveal -> re-hide; event_fired -> un-consume).
 _LORE = {"reveal", "event_fired"}
@@ -162,6 +165,10 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
                 out[key] = got
         elif key == "flag_set":
             got = _valid_flags(value, state, rejected)
+            if got:
+                out[key] = got
+        elif key == "persist":
+            got = _valid_persist(value, store, state, rejected)
             if got:
                 out[key] = got
         elif key == "location":
@@ -289,8 +296,103 @@ def _valid_flags(value, state: dict, rejected: list) -> dict:
     return out
 
 
+def _md_scalar(raw: str):
+    """The natural scalar an authored attribute line carries ('true', '42',
+    '3.5', prose) — lets a `persist` write be type-checked against the entry's
+    Markdown baseline. Non-ASCII text is never coerced (int()/float() would
+    accept Unicode digits no author meant as a number)."""
+    s = str(raw or "").strip()
+    if not s.isascii():
+        return s
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        return s
+
+
+def _persist_current(state: dict, entry, attr: str):
+    """The current effective value of a persistent attribute: the engine-tracked
+    record when one exists, else the entry's Markdown baseline (None = never
+    set anywhere, so the first persist write is type-free)."""
+    recs = state.get("persistent")
+    if isinstance(recs, dict):
+        slot = recs.get(entry.slug)
+        if isinstance(slot, dict):
+            rec = slot.get(attr)
+            if isinstance(rec, dict) and "value" in rec:
+                return rec["value"]
+    raw = str(entry.attrs.get(attr, "") or "")
+    return _md_scalar(raw) if raw.strip() else None
+
+
+def _valid_persist(value, store, state: dict, rejected: list) -> dict:
+    """persist legality (D-216 §3): {slug: {attr: scalar}} where the slug must
+    exist and EVERY attr must be declared on its entry via a `persistent:` line.
+    The delta vocabulary stays closed for everything else — only attributes the
+    author explicitly marked may be mutated in session. Values are scalars,
+    int-clamped to NUM_CAP, and keep the kind of their current value once one
+    exists (same stability rule as flags)."""
+    if not isinstance(value, dict):
+        _reject(rejected, "persist", value, "must be {slug: {attr: scalar}}")
+        return {}
+    out: dict = {}
+    for raw, attrs in value.items():
+        slug = _slug(raw)
+        if not slug or not isinstance(attrs, dict):
+            _reject(rejected, f"persist:{raw}", attrs,
+                    "must be {slug: {attr: scalar}}")
+            continue
+        try:
+            entry = next((e for rel in store.index_files()
+                          for e in store.entries(rel) if e.slug == slug), None)
+        except AttributeError:
+            entry = None
+        if entry is None:
+            _reject(rejected, f"persist:{raw}", attrs, "no such entry")
+            continue
+        declared = entry.persistent_attrs()
+        got: dict = {}
+        for attr, val in attrs.items():
+            attr = str(attr).strip().lower()
+            if not attr:
+                continue
+            if attr not in declared:
+                _reject(rejected, f"persist:{slug}.{attr}", val,
+                        f"attribute not declared persistent on '{slug}' "
+                        f"(declared: {', '.join(declared) or 'none'})")
+                continue
+            if not isinstance(val, (bool, int, float, str)) or val is None:
+                _reject(rejected, f"persist:{slug}.{attr}", val,
+                        "value must be a scalar")
+                continue
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                iv = _as_int(val)
+                if iv is None:
+                    _reject(rejected, f"persist:{slug}.{attr}", val,
+                            "value must be a finite number")
+                    continue
+                val = max(-NUM_CAP, min(NUM_CAP, iv))
+            cur = _persist_current(state, entry, attr)
+            if cur is not None and _flag_kind(cur) != _flag_kind(val):
+                _reject(rejected, f"persist:{slug}.{attr}", val,
+                        f"type change ({_flag_kind(cur)} -> "
+                        f"{_flag_kind(val)}) not allowed")
+                continue
+            got[attr] = val
+        if got:
+            out[slug] = got
+    return out
+
+
 def _valid_items(key: str, value, rejected: list) -> list[dict]:
-    """Inventory add/remove items: plain name strings or {slug|name, qty}
+    """Inventory add/remove items: plain name strings or {slug, qty}
     objects (SPEC-V2 A.1, W3). Normalized to {slug, name, qty} dicts."""
     if not isinstance(value, list):
         _reject(rejected, key, value, "must be a list of names or {slug, qty}")
@@ -560,6 +662,30 @@ def apply_world(store, env: dict) -> list[str]:
         for slug, new in qu.items():
             quests[slug] = new
             events.append(f"quest: {slug} → {new}")
+
+    # persist (D-216 §3): engine-tracked durable attributes. Lives at the TOP
+    # level of state.json — deliberately outside the rpg block and outside any
+    # scene/combat reset — so the value survives scene breaks, combat
+    # boundaries, and everything else that recycles ephemeral pools.
+    pv = d.get("persist")
+    if isinstance(pv, dict) and pv:
+        pstate = state.get("persistent")
+        if not isinstance(pstate, dict):
+            pstate = state["persistent"] = {}
+        for slug, attrs in pv.items():
+            slot = pstate.setdefault(str(slug), {})
+            if not isinstance(slot, dict):
+                slot = pstate[str(slug)] = {}
+            for attr, val in attrs.items():
+                old = slot.get(attr)
+                hist = old.get("history") if isinstance(old, dict) else None
+                hist = list(hist) if isinstance(hist, list) else []
+                hist.append({"who": "director",
+                             "when": store_clock(state),
+                             "value": val})
+                slot[attr] = {"value": val,
+                              "history": hist[-PERSIST_HISTORY_CAP:]}
+                events.append(f"persist: {slug}.{attr} = {val}")
 
     steps = d.get("beat_advance")
     if steps:
