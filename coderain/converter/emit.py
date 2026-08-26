@@ -30,7 +30,13 @@ def write_partition(partition, out_dir: Path) -> Path:
                 raise ValueError(
                     f"record {r.id}: tokens_initial pose vers le node "
                     f"inconnu {pose['node_id']} — zéro dangling autorisé")
-    for sub in ("nodes", "records", "tables", "secrets", "patches"):
+    # garde zéro-dangling tensions : ancrage node_id existe
+    for t in getattr(partition, "tensions", []) or []:
+        if t.node_id not in node_ids:
+            raise ValueError(
+                f"tension {t.id}: node_id inconnu {t.node_id} — "
+                "zéro dangling autorisé (D-218 §1)")
+    for sub in ("nodes", "records", "tables", "secrets", "patches", "tensions"):
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
 
     (out_dir / "manifest.json").write_text(
@@ -95,6 +101,11 @@ def write_partition(partition, out_dir: Path) -> Path:
                             "anchors": s.anchors})
         (out_dir / "secrets" / f"{s.id}.md").write_text(fm + s.contenu_md + "\n",
                                                         encoding="utf-8")
+    for t in getattr(partition, "tensions", []) or []:
+        fm = _front_matter({"id": t.id, "categorie": t.categorie,
+                            "node_id": t.node_id, "anchors": t.anchors})
+        (out_dir / "tensions" / f"{t.id}.md").write_text(
+            fm + t.description_md + "\n", encoding="utf-8")
     if partition.patches:
         rows = [_front_matter({"cible_id": p.cible_id, "operation": p.operation,
                                "cause": p.cause}) + p.payload + "\n"
@@ -123,6 +134,8 @@ def write_partition(partition, out_dir: Path) -> Path:
                     for r in partition.records],
         "tables": [{"id": t.id, "de": t.de} for t in partition.tables],
         "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
+        "tensions": [{"id": t.id, "categorie": t.categorie, "node_id": t.node_id}
+                     for t in getattr(partition, "tensions", []) or []],
         "aventure": ({"etage": "adventure",
                       "trajectoire": len(av.trajectoire),
                       "conditions": len(av.conditions)}

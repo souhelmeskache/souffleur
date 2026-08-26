@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..llm import emit_json_ex
 from .schemas import (Node, Record, RollTable, Secret, Patch, Partition,
-                      Evenement, Aventure)
+                      Evenement, Aventure, Tension)
 
 SYSTEM = """You convert ONE unit of a tabletop RPG module into structured
 objects. Fidelity rules:
@@ -41,7 +41,7 @@ objects. Fidelity rules:
 - Hidden/DM-only information that can be burned: emit {"secrets": [...]} with
   statut public|suspect|secret, porteurs (entity ids), revelation
   {declencheur, node_cible}, consequence_si_brule.
-- Predetermined world events ("if the PCs do nothing, X happens by ..."),
+ - Predetermined world events ("if the PCs do nothing, X happens by ..."),
   deadlines, laws without spatial limit: emit {"evenements": [...]} with
   rubrique "trajectoire" or "condition", declencheur {type:
   delai|etat|date, valeur}, once:true, description_md, consequences:[md],
@@ -50,6 +50,10 @@ objects. Fidelity rules:
   another bearer, or abandoned), never merely delay it; if the source gives
   no perturbation condition, use [] — never invent one. CONVERT what the
   module states; NEVER create events the module does not contain.
+ - Tension elements (D-218): emit {"tensions": [...]} with categorie
+  menace|horloge|echeance|cout|choix|revelation, description_md, node_id
+  (anchor node), anchors. CONVERT what the source shows as threatening,
+  costly, branching or revealing — never invent one.
 Return ONLY a JSON object with any of those keys (empty object if nothing)."""
 
 
@@ -63,7 +67,7 @@ def _anchors(raw, uid) -> list[tuple[int, int]]:
 def _validate(obj: dict, unit, tables: "RuleTablesLike") -> dict:
     out: dict = {"nodes": [], "records": [], "tables": [], "secrets": [],
                  "patches": [], "raw_stats": [], "evenements": [],
-                 "exceptions": []}
+                 "tensions": [], "exceptions": []}
     for n in obj.get("nodes", []):
         cs = n.get("charniere_sortie")
         out["nodes"].append(Node(
@@ -141,6 +145,15 @@ def _validate(obj: dict, unit, tables: "RuleTablesLike") -> dict:
         except ValueError as ex:
             # garde anti-rail violée par la sortie LLM: signalé, jamais corrigé
             out["exceptions"].append(f"{unit.uid} evenement {e.get('id')}: {ex}")
+    for t in obj.get("tensions", []):
+        try:
+            out["tensions"].append(Tension(
+                tid=str(t["id"]), categorie=str(t["categorie"]),
+                description_md=str(t["description_md"]),
+                node_id=str(t["node_id"]),
+                anchors=_anchors(t, f"tension {t.get('id')}")))
+        except ValueError as ex:
+            out["exceptions"].append(f"{unit.uid} tension {t.get('id')}: {ex}")
     return out
 
 
@@ -156,6 +169,13 @@ def absorb_aventure(partition: Partition, evenements: list) -> None:
             partition.aventure.conditions.append(e)
         else:
             partition.aventure.trajectoire.append(e)
+
+
+def absorb_tensions(partition: Partition, tensions: list) -> None:
+    """Ajoute les tensions D-218 à la partition (traversant, même école que
+    persistent : inventaire servi au contexte)."""
+    for t in tensions or []:
+        partition.tensions.append(t)
 
 
 def convert_unit(llm, unit_text: str, unit, partition: Partition,

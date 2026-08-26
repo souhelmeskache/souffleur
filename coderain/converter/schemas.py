@@ -21,6 +21,8 @@ RECORD_CLASSES = ("creature", "pnj", "objet", "lieu", "faction")
 SECRET_STATUTS = ("public", "suspect", "secret")
 PATCH_OPS = ("append", "prepend", "replace", "delete")
 PREREQUIS_TYPES = ("entite_vivante", "flag", "quete_etat")   # fiche SCÉNARIO §2
+# D-218 tension traversante (P-CONV-2) : premier inventaire réel
+TENSION_CATEGORIES = ("menace", "horloge", "echeance", "cout", "choix", "revelation")
 NEGATION_TYPE = "non"   # D-187: non(<atome>), une seule profondeur
 DECLENCHEUR_TYPES = ("delai", "etat", "date")                # D-182
 ISSUES_PERTURBATION = ("transplantee", "abandonnee")         # D-120 §5.1
@@ -386,6 +388,44 @@ class Secret:
         self.anchors = [(int(a), int(b)) for a, b in anchors]
 
 
+class Tension:
+    """Inventaire de tension traversant (D-218 §1) — premier exemplaire réel.
+
+    Chaque entrée repère UN élément de tension du module avec son ancrage
+    node : menace, horloge/échéance, coût, choix, révélation.
+    Convertir, jamais créer : sans matière source, l'entrée n'existe pas.
+    """
+
+    def __init__(self, tid: str, categorie: str, description_md: str,
+                 node_id: str,
+                 anchors: list[tuple[int, int]] | list[int] | None = None):
+        check_id(tid, "tension")
+        if categorie not in TENSION_CATEGORIES:
+            raise ValueError(f"tension {tid}: categorie {categorie!r} not in "
+                             f"{TENSION_CATEGORIES}")
+        if not description_md or not str(description_md).strip():
+            raise ValueError(f"tension {tid}: description_md vide")
+        check_id(node_id, f"tension {tid} node_id")
+        if not anchors:
+            raise ValueError(f"tension {tid}: no source anchor — every tension "
+                             "cites what it translates (D-218 §1)")
+        norm = []
+        for a in anchors or []:
+            norm.append((int(a), int(a)) if isinstance(a, int) else
+                        (int(a[0]), int(a[1])))
+        self.id = tid
+        self.categorie = categorie
+        self.description_md = str(description_md).strip()
+        self.node_id = node_id
+        self.anchors = norm
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "categorie": self.categorie,
+                "description_md": self.description_md,
+                "node_id": self.node_id,
+                "ancres_sources": [list(a) for a in self.anchors]}
+
+
 class Patch:
     """Addressed incremental mutation (D-132) — never a full rewrite."""
 
@@ -563,7 +603,9 @@ class Partition:
         self.secrets: list[Secret] = []
         self.patches: list[Patch] = []
         self.aventure: Aventure | None = None   # D-178 — optional at v0.2
+        self.tensions: list["Tension"] = []    # D-218 — inventaire traversant
 
     def ids(self) -> set[str]:
         return ({n.id for n in self.nodes} | {r.id for r in self.records}
-                | {t.id for t in self.tables} | {s.id for s in self.secrets})
+                | {t.id for t in self.tables} | {s.id for s in self.secrets}
+                | {t.id for t in getattr(self, "tensions", [])})

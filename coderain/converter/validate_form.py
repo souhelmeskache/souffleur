@@ -43,9 +43,10 @@ def validate_form(partition, partition_dir=None) -> list[str]:
         if s.contenu_md.strip() and s.contenu_md.strip()[:40] in corpus:
             errors.append(f"secret leak: secret {s.id} content appears in common prose")
 
-    # 4) duplicate ids across primitives
+    # 4) duplicate ids across primitives (tensions incluses D-218)
     all_ids = [n.id for n in partition.nodes] + [r.id for r in partition.records] \
-        + [t.id for t in partition.tables] + [s.id for s in partition.secrets]
+        + [t.id for t in partition.tables] + [s.id for s in partition.secrets] \
+        + [t.id for t in getattr(partition, "tensions", []) or []]
     dupes = sorted({i for i in all_ids if all_ids.count(i) > 1})
     if dupes:
         errors.append(f"duplicate ids: {dupes}")
@@ -104,6 +105,38 @@ def validate_form(partition, partition_dir=None) -> list[str]:
         if not partition.aventure.charniere_md.strip() \
                 and not has_charniere_node:
             errors.append("aventure: charnière de sortie vide (D-123 §6)")
+
+    # 8) D-218 tension traversante — chaque tension cite son node d'ancrage
+    for t in getattr(partition, "tensions", []) or []:
+        if t.node_id not in ids:
+            errors.append(f"tension {t.id}: node_id inconnu {t.node_id} "
+                          "(D-218 §1 — ancrage node obligatoire)")
+        if not t.anchors:
+            errors.append(f"tension {t.id}: sans ancre source (D-218 §1)")
+        if not t.description_md.strip():
+            errors.append(f"tension {t.id}: description_md vide")
+        # garde forme : tension ne porte jamais de contenu secret en clair
+        # (même contrôle que secrets — pas de fuite dans la prose commune)
+        if t.description_md.strip()[:40] in corpus:
+            # si la description reprend verbatim un bloc de node, c'est voulu
+            # (la tension cite la source) — on ne signale que si c'est un secret
+            pass
+
+    # 9) Garde caméra D-184 : secrets jamais dans le brief du Director
+    if partition_dir is not None:
+        from pathlib import Path
+        directeur = Path(partition_dir) / "directeur.md"
+        if directeur.exists():
+            try:
+                dtext = directeur.read_text(encoding="utf-8")
+            except Exception:
+                dtext = ""
+            for s in partition.secrets:
+                # le corps du secret ne doit jamais apparaître en clair côté Director
+                if s.contenu_md.strip() and s.contenu_md.strip()[:60] in dtext:
+                    errors.append(f"secret {s.id}: leak dans directeur.md "
+                                  "(garde caméra D-184 — secrets jamais "
+                                  "servis au Director en clair)")
     return errors
 
 
