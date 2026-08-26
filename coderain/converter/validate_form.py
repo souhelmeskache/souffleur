@@ -43,10 +43,19 @@ def validate_form(partition, partition_dir=None) -> list[str]:
         if s.contenu_md.strip() and s.contenu_md.strip()[:40] in corpus:
             errors.append(f"secret leak: secret {s.id} content appears in common prose")
 
-    # 4) duplicate ids across primitives (tensions incluses D-218)
+    # 4) duplicate ids across primitives (tensions D-218 + ressources D-216 §2)
+    ress_list = (getattr(partition, "ressources", []) or []) + (getattr(partition, "resources", []) or [])
+    # déduplication par id pour l'alias (même objet deux fois)
+    seen = set()
+    uniq_ress_ids = []
+    for r in ress_list:
+        if r.id not in seen:
+            seen.add(r.id)
+            uniq_ress_ids.append(r.id)
     all_ids = [n.id for n in partition.nodes] + [r.id for r in partition.records] \
         + [t.id for t in partition.tables] + [s.id for s in partition.secrets] \
-        + [t.id for t in getattr(partition, "tensions", []) or []]
+        + [t.id for t in getattr(partition, "tensions", []) or []] \
+        + uniq_ress_ids
     dupes = sorted({i for i in all_ids if all_ids.count(i) > 1})
     if dupes:
         errors.append(f"duplicate ids: {dupes}")
@@ -122,7 +131,34 @@ def validate_form(partition, partition_dir=None) -> list[str]:
             # (la tension cite la source) — on ne signale que si c'est un secret
             pass
 
-    # 9) Garde caméra D-184 : secrets jamais dans le brief du Director
+    # 9) D-216 §2 ressource générique — ancrage node_id/page, type carte, ancres
+    #    Toute ressource cite sa matière ; si node_id présent il existe (zéro dangling).
+    ress_list = (getattr(partition, "ressources", []) or []) + (getattr(partition, "resources", []) or [])
+    seen = set()
+    uniq_ress = []
+    for r in ress_list:
+        if r.id not in seen:
+            seen.add(r.id)
+            uniq_ress.append(r)
+    for r in uniq_ress:
+        if getattr(r, "node_id", None) and r.node_id not in ids:
+            errors.append(f"ressource {r.id}: node_id inconnu {r.node_id} "
+                          "(D-216 §2 — ancrage node/page obligatoire)")
+        if not getattr(r, "anchors", []):
+            errors.append(f"ressource {r.id}: sans ancre source (D-216 §2)")
+        if getattr(r, "type_ressource", "") not in ("carte",):
+            errors.append(f"ressource {r.id}: type {getattr(r, 'type_ressource', '')!r} not in ('carte',)")
+        if not getattr(r, "node_id", None) and not getattr(r, "page", None):
+            errors.append(f"ressource {r.id}: ancrage manquant — node_id ou page requis (fiche P-CONV-3)")
+        if getattr(r, "page", None) is not None:
+            try:
+                pg = int(r.page)
+                if not (1 <= pg <= 500):
+                    errors.append(f"ressource {r.id}: page hors bornes {pg}")
+            except Exception:
+                errors.append(f"ressource {r.id}: page invalide {r.page!r}")
+
+    # 10) Garde caméra D-184 : secrets jamais dans le brief du Director
     if partition_dir is not None:
         from pathlib import Path
         directeur = Path(partition_dir) / "directeur.md"

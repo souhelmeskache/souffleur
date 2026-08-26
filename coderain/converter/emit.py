@@ -36,7 +36,19 @@ def write_partition(partition, out_dir: Path) -> Path:
             raise ValueError(
                 f"tension {t.id}: node_id inconnu {t.node_id} — "
                 "zéro dangling autorisé (D-218 §1)")
-    for sub in ("nodes", "records", "tables", "secrets", "patches", "tensions"):
+    # garde zéro-dangling ressources (D-216 §2) — liste unique dédupliquée par id (alias resources/ressources même objet)
+    seen_ress: set[str] = set()
+    uniq_ress: list = []
+    for r in (getattr(partition, "ressources", []) or []) + (getattr(partition, "resources", []) or []):
+        if r.id not in seen_ress:
+            seen_ress.add(r.id)
+            uniq_ress.append(r)
+    for r in uniq_ress:
+        if getattr(r, "node_id", None) and r.node_id not in node_ids:
+            raise ValueError(
+                f"ressource {r.id}: node_id inconnu {r.node_id} — "
+                "zéro dangling autorisé (D-216 §2)")
+    for sub in ("nodes", "records", "tables", "secrets", "patches", "tensions", "resources"):
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
 
     (out_dir / "manifest.json").write_text(
@@ -106,6 +118,13 @@ def write_partition(partition, out_dir: Path) -> Path:
                             "node_id": t.node_id, "anchors": t.anchors})
         (out_dir / "tensions" / f"{t.id}.md").write_text(
             fm + t.description_md + "\n", encoding="utf-8")
+    for r in uniq_ress:
+        fm = _front_matter({"id": r.id, "type": r.type_ressource,
+                            "node_id": r.node_id, "page": r.page,
+                            "fichier": r.fichier, "anchors": r.anchors})
+        body = r.description_md or f"Ressource {r.id} ({r.type_ressource})"
+        (out_dir / "resources" / f"{r.id}.md").write_text(
+            fm + body + "\n", encoding="utf-8")
     if partition.patches:
         rows = [_front_matter({"cible_id": p.cible_id, "operation": p.operation,
                                "cause": p.cause}) + p.payload + "\n"
@@ -136,6 +155,11 @@ def write_partition(partition, out_dir: Path) -> Path:
         "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
         "tensions": [{"id": t.id, "categorie": t.categorie, "node_id": t.node_id}
                      for t in getattr(partition, "tensions", []) or []],
+        "resources": [{"id": r.id, "type": r.type_ressource,
+                       **({"node_id": r.node_id} if getattr(r, "node_id", None) else {}),
+                       **({"page": r.page} if getattr(r, "page", None) else {}),
+                       **({"fichier": r.fichier} if getattr(r, "fichier", "") else {})}
+                      for r in uniq_ress],
         "aventure": ({"etage": "adventure",
                       "trajectoire": len(av.trajectoire),
                       "conditions": len(av.conditions)}

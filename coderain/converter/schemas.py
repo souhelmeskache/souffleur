@@ -23,6 +23,7 @@ PATCH_OPS = ("append", "prepend", "replace", "delete")
 PREREQUIS_TYPES = ("entite_vivante", "flag", "quete_etat")   # fiche SCÉNARIO §2
 # D-218 tension traversante (P-CONV-2) : premier inventaire réel
 TENSION_CATEGORIES = ("menace", "horloge", "echeance", "cout", "choix", "revelation")
+RESSOURCE_TYPES = ("carte",)  # D-216 §2 générique, premier cas = carte (D-217 poste uniquement)
 NEGATION_TYPE = "non"   # D-187: non(<atome>), une seule profondeur
 DECLENCHEUR_TYPES = ("delai", "etat", "date")                # D-182
 ISSUES_PERTURBATION = ("transplantee", "abandonnee")         # D-120 §5.1
@@ -426,6 +427,57 @@ class Tension:
                 "ancres_sources": [list(a) for a in self.anchors]}
 
 
+class Ressource:
+    """Primitive générique Ressource (D-216 §2, D-217 poste uniquement).
+
+    Premier cas d'usage = carte (maps booklet p99-117, tilepage/submap).
+    Générique par construction : `type` ∈ RESSOURCE_TYPES, ancrage par
+    `node_id` (node existant) OU `page` (numéro de page PDF, 1-based) — au
+    moins un des deux est requis — `fichier` est le chemin relatif côté poste
+    (corpus-modules/.../resources/, jamais dans git, jamais dans le vault
+    joueur), `anchors` cite la matière source (SPEC-P4 §3).
+    """
+
+    def __init__(self, rid: str, type_ressource: str,
+                 anchors: list[tuple[int, int]] | list[int] | None = None,
+                 node_id: str | None = None,
+                 page: int | None = None,
+                 fichier: str | None = None,
+                 description_md: str = ""):
+        check_id(rid, "ressource")
+        if type_ressource not in RESSOURCE_TYPES:
+            raise ValueError(f"ressource {rid}: type {type_ressource!r} not in "
+                             f"{RESSOURCE_TYPES} (D-216 §2 générique, premier cas carte)")
+        if node_id is not None:
+            check_id(node_id, f"ressource {rid} node_id")
+        if page is not None:
+            if not isinstance(page, int) or isinstance(page, bool) or not (1 <= page <= 500):
+                raise ValueError(f"ressource {rid}: page doit être un entier 1..500, got {page!r}")
+        if not node_id and not page:
+            raise ValueError(f"ressource {rid}: ancrage manquant — au moins node_id ou page requis (fiche P-CONV-3)")
+        if not anchors:
+            raise ValueError(f"ressource {rid}: no source anchor — every ressource "
+                             "cites what it translates (SPEC-P4 §3)")
+        norm = []
+        for a in anchors or []:
+            norm.append((int(a), int(a)) if isinstance(a, int) else
+                        (int(a[0]), int(a[1])))
+        self.id = rid
+        self.type_ressource = type_ressource
+        self.node_id = node_id
+        self.page = page
+        self.fichier = str(fichier).strip() if fichier else ""
+        self.description_md = str(description_md or "")
+        self.anchors = norm
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "type": self.type_ressource,
+                "node_id": self.node_id, "page": self.page,
+                "fichier": self.fichier,
+                "description_md": self.description_md,
+                "ancres_sources": [list(a) for a in self.anchors]}
+
+
 class Patch:
     """Addressed incremental mutation (D-132) — never a full rewrite."""
 
@@ -604,8 +656,13 @@ class Partition:
         self.patches: list[Patch] = []
         self.aventure: Aventure | None = None   # D-178 — optional at v0.2
         self.tensions: list["Tension"] = []    # D-218 — inventaire traversant
+        self.ressources: list["Ressource"] = []  # D-216 §2 — primitive générique (premier cas carte, D-217 poste uniquement)
+        # alias anglais pour les outils/emission : resources <-> ressources
+        self.resources = self.ressources
 
     def ids(self) -> set[str]:
         return ({n.id for n in self.nodes} | {r.id for r in self.records}
                 | {t.id for t in self.tables} | {s.id for s in self.secrets}
-                | {t.id for t in getattr(self, "tensions", [])})
+                | {t.id for t in getattr(self, "tensions", [])}
+                | {r.id for r in getattr(self, "ressources", [])}
+                | {r.id for r in getattr(self, "resources", [])})
