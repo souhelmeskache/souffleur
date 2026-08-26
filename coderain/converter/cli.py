@@ -53,6 +53,8 @@ def _segment(text: str, mode: str, llm=None):
     has_markers = len(s1_local.MARKER.findall(text)) >= 3
     if mode == "s1" or (mode == "auto" and has_markers):
         return s1_local.segment_s1(text), None
+    if mode == "gamebook":
+        return s1_local.scan_gamebook(text)["units"], None
     if llm is None:
         raise SystemExit(
             "matériau libre détecté (pas de marqueurs #N en nombre): la "
@@ -65,25 +67,37 @@ def _segment(text: str, mode: str, llm=None):
 def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
                 mode: str = "auto", llm=None) -> dict:
     text = _extract_text(src)
-    units, seg_errors = _segment(text, mode, llm)
+    scan = None
+    if mode == "gamebook":
+        scan = s1_local.scan_gamebook(text)
+        units, seg_errors = scan["units"], None
+    else:
+        units, seg_errors = _segment(text, mode, llm)
     if seg_errors:
         raise SystemExit(f"segmentation: {seg_errors}")
     cov0 = validate_fidelity.coverage_report(units, [], len(text))
     assert not cov0["gaps"] and not cov0["overlaps"], cov0
     manifest = Manifest(
         titre=titre or src.stem.replace("_", "-").replace("-", " ").strip().title(),
-        corpus_source="5e", corpus_cible="5e", structures=["S1"],
+        corpus_source="5e", corpus_cible="5e",
+        structures=["S1", "S2"] if mode == "gamebook" else ["S1"],
         hash_source=__import__("hashlib").sha256(
             text.encode("utf-8")).hexdigest(),
         date_conversion=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        version_convertisseur="0.3.0+local")  # D-178: étage aventure
+        version_convertisseur=("0.4.0+gamebook-local" if mode == "gamebook"
+                               else "0.3.0+local"))  # D-178: étage aventure
 
     partition = Partition(manifest)
-    tables_rule = RuleTables("5e")
-    id_by_num = {int(u.titre[1:]): u.uid for u in units
-                 if u.uid.startswith("para-")}
-    for u in units:
-        partition.nodes.append(s1_local.node_for_unit(u, text, id_by_num))
+    gamebook_mesures: dict | None = None
+    if scan is not None:
+        gamebook_mesures = s1_local.build_gamebook_partition(scan, text,
+                                                             partition)
+    else:
+        tables_rule = RuleTables("5e")
+        id_by_num = {int(u.titre[1:]): u.uid for u in units
+                     if u.uid.startswith("para-")}
+        for u in units:
+            partition.nodes.append(s1_local.node_for_unit(u, text, id_by_num))
 
     # authored records: judgment supplied as records-auteur.json in the corpus
     # home (or next to the source); anchors computed here by locating the
@@ -197,11 +211,15 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
     rp = write_report(report, out_dir / "rapport-conversion.json")
     (out_dir / "rapport-conversion.md").write_text(render_md(report),
                                                    encoding="utf-8")
-    return {"verdict": report["verdict"], "nodes": len(partition.nodes),
-            "scenarios": scen["mesures"]["noeuds_scenario"],
-            "records": len(partition.records), "checks": sum(len(v) for v in
-                                                             checks.values()),
-            "out": str(out_dir)}
+    res = {"verdict": report["verdict"], "nodes": len(partition.nodes),
+           "scenarios": scen["mesures"]["noeuds_scenario"],
+           "records": len(partition.records), "checks": sum(len(v) for v in
+                                                            checks.values()),
+           "tables": len(partition.tables),
+           "out": str(out_dir)}
+    if gamebook_mesures is not None:
+        res["route_gamebook"] = gamebook_mesures
+    return res
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -214,6 +232,10 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("source")
         p.add_argument("--titre")
         p.add_argument("--out", default=None)
+        p.add_argument("--segmenter", default="auto",
+                       choices=("auto", "s1", "gamebook"),
+                       help="route de segmentation (gamebook = entrées "
+                            "nommées déterministes, zéro LLM)")
     sub.add_parser("install").add_argument("partition")
     d = sub.add_parser("doctor")
     d.add_argument("partition")
@@ -229,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         titre = a.titre
         out = Path(a.out) if a.out else (
             CORPUS / f"partition-{_slug(titre or src.stem)}")
-        res = cmd_convert(src, out, titre)
+        res = cmd_convert(src, out, titre, mode=a.segmenter)
         print(json.dumps(res, ensure_ascii=False, indent=1))
         if res["verdict"] != "VERT":
             return 1
