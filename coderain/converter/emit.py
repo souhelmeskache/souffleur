@@ -30,6 +30,14 @@ def write_partition(partition, out_dir: Path) -> Path:
                 raise ValueError(
                     f"record {r.id}: tokens_initial pose vers le node "
                     f"inconnu {pose['node_id']} — zéro dangling autorisé")
+    # garde D-218 contrat traversant : toute tension hors codes ⇒ erreur emit
+    from coderain.converter.schemas import TENSION_CODES
+    for t in getattr(partition, "tensions", []) or []:
+        if getattr(t, "categorie", None) not in TENSION_CODES:
+            raise ValueError(
+                f"tension {t.id}: categorie {getattr(t, 'categorie', None)!r} "
+                f"tension_code_invalide — hors {TENSION_CODES} "
+                "(D-218 contrat traversant, emit non silencieux)")
     # garde zéro-dangling tensions : ancrage node_id existe
     for t in getattr(partition, "tensions", []) or []:
         if t.node_id not in node_ids:

@@ -117,7 +117,11 @@ def validate_form(partition, partition_dir=None) -> list[str]:
             errors.append("aventure: charnière de sortie vide (D-123 §6)")
 
     # 8) D-218 tension traversante — chaque tension cite son node d'ancrage
+    from coderain.converter.schemas import TENSION_CODES
     for t in getattr(partition, "tensions", []) or []:
+        if getattr(t, "categorie", None) not in TENSION_CODES:
+            errors.append(f"tension {t.id}: categorie {getattr(t, 'categorie', None)!r} "
+                          f"tension_code_invalide — hors {TENSION_CODES} (D-218 contrat traversant)")
         if t.node_id not in ids:
             errors.append(f"tension {t.id}: node_id inconnu {t.node_id} "
                           "(D-218 §1 — ancrage node obligatoire)")
