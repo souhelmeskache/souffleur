@@ -48,7 +48,22 @@ def write_partition(partition, out_dir: Path) -> Path:
             raise ValueError(
                 f"ressource {r.id}: node_id inconnu {r.node_id} — "
                 "zéro dangling autorisé (D-216 §2)")
-    for sub in ("nodes", "records", "tables", "secrets", "patches", "tensions", "resources"):
+    # garde zéro-dangling personnages (I-341/D-219) : tout rattachement de jalon
+    # pointe un id existant de la partition (node/tension/ressource/personnage)
+    all_ids = node_ids | {r.id for r in partition.records} \
+              | {t.id for t in partition.tables} \
+              | {s.id for s in partition.secrets} \
+              | {t.id for t in getattr(partition, "tensions", [])} \
+              | {r.id for r in uniq_ress}
+    for pers in getattr(partition, "personnages", []) or []:
+        for j in pers.destinee:
+            ratt = j.get("rattachement")
+            if ratt and ratt not in all_ids:
+                raise ValueError(
+                    f"personnage {pers.id} jalon {j['id']}: rattachement "
+                    f"vers id inconnu {ratt} — zéro dangling autorisé "
+                    "(I-341/D-219)")
+    for sub in ("nodes", "records", "tables", "secrets", "patches", "tensions", "resources", "personnages"):
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
 
     (out_dir / "manifest.json").write_text(
@@ -125,6 +140,13 @@ def write_partition(partition, out_dir: Path) -> Path:
         body = r.description_md or f"Ressource {r.id} ({r.type_ressource})"
         (out_dir / "resources" / f"{r.id}.md").write_text(
             fm + body + "\n", encoding="utf-8")
+    for pers in getattr(partition, "personnages", []) or []:
+        fm = _front_matter({"id": pers.id, "nom": pers.nom,
+                            "acquis_conversation": pers.acquis_conversation,
+                            "destinee": pers.to_dict()["destinee"]})
+        body = f"# {pers.nom}\n\nPersonnage {pers.id}."
+        (out_dir / "personnages" / f"{pers.id}.md").write_text(
+            fm + body + "\n", encoding="utf-8")
     if partition.patches:
         rows = [_front_matter({"cible_id": p.cible_id, "operation": p.operation,
                                "cause": p.cause}) + p.payload + "\n"
@@ -160,6 +182,10 @@ def write_partition(partition, out_dir: Path) -> Path:
                        **({"page": r.page} if getattr(r, "page", None) else {}),
                        **({"fichier": r.fichier} if getattr(r, "fichier", "") else {})}
                       for r in uniq_ress],
+        "personnages": [{"id": p.id, "nom": p.nom,
+                         "nb_jalons": len(p.destinee),
+                         "acquis_conversation": p.acquis_conversation}
+                        for p in getattr(partition, "personnages", []) or []],
         "aventure": ({"etage": "adventure",
                       "trajectoire": len(av.trajectoire),
                       "conditions": len(av.conditions)}
