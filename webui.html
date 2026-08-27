@@ -196,6 +196,25 @@
     text-transform: uppercase; font-size: .66rem;
     margin-bottom: .5rem;
   }
+  /* ── conversation B — options cliquables ── */
+  #conv-b-options {
+    display: none;
+    max-width: 46rem; margin: 0 auto .8rem;
+    gap: .4rem; flex-wrap: wrap;
+  }
+  #conv-b-options.on { display: flex; }
+  #conv-b-options button {
+    background: #1e1a16; color: var(--ink-dim);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: .4rem .7rem; font-size: .82rem;
+    cursor: pointer; text-align: left;
+    font-family: Georgia, serif; line-height: 1.4;
+    flex: 1 1 100%;
+    transition: border-color .2s, color .2s;
+  }
+  #conv-b-options button:hover {
+    border-color: var(--accent); color: var(--ink);
+  }
 </style>
 </head>
 <body>
@@ -220,6 +239,7 @@
 <div id="orphelin">Ton message attend dans la file — mais le Director ne t'écoute plus. Écris « continue » dans le terminal pour le réveiller : ton message lui parviendra aussitôt.</div>
 
 <footer>
+  <div id="conv-b-options"></div>
   <div class="zone">
     <textarea id="saisie" rows="1" placeholder="Que fais-tu ?"></textarea>
     <button class="envoi" id="envoi" title="Envoyer (Entrée)">➤</button>
@@ -245,6 +265,7 @@
   const jPlein = document.getElementById('jauge-plein');
   const jTxt   = document.getElementById('jauge-txt');
   const bann   = document.getElementById('banniere');
+  const convOpts = document.getElementById('conv-b-options');
 
   let seq = 0;
   let colle = true;   // l'utilisateur suit le bas du flux
@@ -336,14 +357,43 @@
       majJauge(d.gauge);
       indic.classList.toggle('on', d.status === 'thinking');
       const pret = d.status === 'waiting';
-      saisie.disabled = false;      // on laisse toujours écrire : l'entrée est mise en file
+      saisie.disabled = false;
       envoi.disabled  = false;
       mot.textContent = d.status === 'thinking' ? '' :
                         pret ? 'à toi' : '';
       if (d.status === 'thinking') auBas();
+      sondeConvB();
     } catch (e) {
       lien.textContent = 'moteur injoignable';
       lien.classList.add('ko');
+    }
+  }
+
+  async function sondeConvB() {
+    try {
+      const r = await fetch('/conv-b/state');
+      const d = await r.json();
+      if (d.error || d.done || !d.options) {
+        convOpts.classList.remove('on');
+        convOpts.innerHTML = '';
+        return;
+      }
+      convOpts.innerHTML = '';
+      d.options.forEach(o => {
+        const b = document.createElement('button');
+        b.textContent = o.texte;
+        b.addEventListener('click', () => {
+          fetch('/conv-b/choice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: String(o.numero) })
+          });
+        });
+        convOpts.appendChild(b);
+      });
+      convOpts.classList.add('on');
+    } catch (e) {
+      convOpts.classList.remove('on');
     }
   }
 
