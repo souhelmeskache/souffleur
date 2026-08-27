@@ -32,21 +32,25 @@ class NoCallLLM:
 engine.llm = NoCallLLM()
 
 # ---- 1) nothing to undo on an empty transcript ----
-assert engine.undo_last() is False
-print("1) empty transcript: undo_last() -> False")
+result = engine.undo_last()
+assert result["undone"] is False
+print("1) empty transcript: undo_last() -> {undone: False}")
 
 # ---- 2) a full exchange is removed, no model call ----
 store.append_turn("player", "wind the great spring")
 store.append_turn("narrator", "The spring groans and the city stutters awake.")
 assert len(store.turns()) == 2
-assert engine.undo_last() is True
+result = engine.undo_last()
+assert result["undone"] is True
+assert result["mechanics_restored"] is True
 assert store.turns() == [], store.turns()
 assert engine.llm.calls == 0, "undo touched the model"
 print("2) full exchange removed without a model call")
 
 # ---- 3) an orphan player turn (empty generation) is dropped ----
 store.append_turn("player", "listen at the door")
-assert engine.undo_last() is True
+result = engine.undo_last()
+assert result["undone"] is True
 assert store.turns() == []
 print("3) orphan player turn dropped")
 
@@ -66,7 +70,9 @@ eng2.llm = SidecarLLM()
 list(eng2.turn("parry the thrust"))
 eng2.maybe_fold()
 assert store2.rpg_state()["player"]["hp"] == 15, store2.rpg_state()["player"]
-assert eng2.undo_last() is True
+result = eng2.undo_last()
+assert result["undone"] is True
+assert result["mechanics_restored"] is True
 assert store2.rpg_state()["player"]["hp"] == 20, "RPG not rolled back on undo"
 assert store2.turns() == []
 print("4) RPG deltas rolled back on undo")

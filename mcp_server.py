@@ -475,13 +475,15 @@ def undo_last() -> dict:
     eng = _require_engine()
     before = len(_require_store().turns())
     _stage_rollback()
-    done = eng.undo_last()
+    result = eng.undo_last()
     # The snapshot is consumed by the restore; the next turn needs a fresh one.
     # The ledger mark goes too: the engine truncated the log under it.
     _completed_turn = None
     _pending_log_mark = None
     _arm_turn()
-    return {"undone": bool(done), "turns_before": before,
+    return {"undone": result["undone"],
+            "mechanics_restored": result["mechanics_restored"],
+            "turns_before": before,
             "turns_after": len(_require_store().turns())}
 
 
@@ -786,9 +788,15 @@ def retry_turn() -> dict:
     eng = _require_engine()
     store = _require_store()
     turns = store.turns()
+    mechanics_restored = True
     if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2:
-        action = turns[-2]["text"]
-        store.drop_last_turns(2)
+        if turns[-2]["role"] == "player":
+            action = turns[-2]["text"]
+            store.drop_last_turns(2)
+        else:
+            action = ""
+            store.drop_last_turns(1)
+            mechanics_restored = False
     elif turns and turns[-1]["role"] == "player":
         action = turns[-1]["text"]
         store.drop_last_turns(1)
@@ -802,7 +810,8 @@ def retry_turn() -> dict:
     n = len(store.turns())
     # The native loop re-probes the fold after a retry (play.py:363-365); the
     # turn count moved, so the answer can have changed.
-    return {"action": action, "turns": n, "fold_due": _fold_probe(n)}
+    return {"action": action, "turns": n, "fold_due": _fold_probe(n),
+            "mechanics_restored": mechanics_restored}
 
 
 # ── companion side-chat — the engine's prompt, our model ─────────
