@@ -23,6 +23,10 @@ PATCH_OPS = ("append", "prepend", "replace", "delete")
 PREREQUIS_TYPES = ("entite_vivante", "flag", "quete_etat")   # fiche SCÉNARIO §2
 # D-218 tension traversante (P-CONV-2) : premier inventaire réel
 TENSION_CATEGORIES = ("menace", "horloge", "echeance", "cout", "choix", "revelation")
+# D-218 contrat traversant : alias canonique — les 6 codes que l'analyse repère,
+# que l'adaptation rend jouable, que l'Auteur respecte. Toute tension hors ces
+# 6 codes est ROUGE (validate_form §8, emit garde, test-auteur-codes-tension).
+TENSION_CODES = TENSION_CATEGORIES
 RESSOURCE_TYPES = ("carte",)  # D-216 §2 générique, premier cas = carte (D-217 poste uniquement)
 # D-129/D-135 via D-220 : marqueurs temporels interdits dans les jalons de destinée
 # (passé/intention seuls — jamais futur ni événement)
