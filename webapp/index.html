@@ -12,6 +12,7 @@
   <nav>
     <a href="#library">Library</a>
     <a href="#characters">Pieces</a>
+    <a href="#combat">Combat</a>
     <a href="#defaults">Defaults</a>
     <a href="#settings">Settings</a>
   </nav>
@@ -20,13 +21,43 @@
 
 <main id="view"></main>
 
-<aside id="char-panel" class="hidden">
-  <div id="char-panel-inner"></div>
-</aside>
-<div id="combat-canvas-wrap" class="hidden">
-  <div id="combat-canvas"></div>
-  <button id="combat-close">Close</button>
-</div>
+<template id="tpl-combat-view">
+  <div id="combat-root">
+    <div id="combat-head">
+      <button id="combat-back">&#8592; Story</button>
+      <div class="title">Combat</div>
+      <div id="combat-round" class="muted"></div>
+    </div>
+    <div id="combat-body">
+      <div id="battle-area"></div>
+      <div id="combat-side">
+        <div id="combat-log"></div>
+        <div id="combat-initiative"></div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-fiche-perso">
+  <aside id="fiche-perso">
+    <div class="fiche-header">
+      <div class="fiche-name"></div>
+      <div class="fiche-tension"></div>
+    </div>
+    <div class="fiche-section">
+      <h3>Acquis</h3>
+      <ul class="fiche-acquis"></ul>
+    </div>
+    <div class="fiche-section">
+      <h3>Destin&#233;e</h3>
+      <ol class="fiche-destinee"></ol>
+    </div>
+    <div class="fiche-section">
+      <h3>Ressources</h3>
+      <div class="fiche-ressources"></div>
+    </div>
+  </aside>
+</template>
 
 <div id="modal-root" class="hidden">
   <div id="modal-back"></div>

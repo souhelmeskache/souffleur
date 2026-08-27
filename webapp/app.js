@@ -105,6 +105,7 @@ async function render() {
     if (h.startsWith("#play/")) await renderPlay(h.slice(6));
     else if (h.startsWith("#world/")) await renderBuilder(h.slice(7), "scenario");
     else if (h.startsWith("#edit/")) await renderBuilder(h.slice(6), "save");
+    else if (h === "#combat") { view.innerHTML = ""; renderCombatView(view); }
     else if (h === "#characters") await renderCharacters();
     else if (h === "#defaults") await renderDefaults();
     else if (h === "#settings") await renderSettings();
@@ -1795,51 +1796,145 @@ async function renderSettings() {
   });
 }
 
-/* ---------- I-329: character panel + combat canvas ---------- */
-function showCharPanel(data) {
-  const p = $("#char-panel");
-  if (!p) return;
-  const pers = data.personnage || {};
-  const acquis = (pers.acquis_conversation || []).map(a =>
-    `<li>${esc(a)}</li>`).join("");
-  const jalons = (pers.destinee || []).map(j =>
-    `<div class="cp-jalon">${esc(j.intention_md || j.id || "")}</div>`).join("");
-  const tension = data.tension
-    ? `<div class="cp-tension">${esc(data.tension.description_md || data.tension.id || "")}</div>`
-    : "";
-  const ressource = data.ressource
-    ? `<div class="cp-ressource">
-         <div class="cp-thumb"></div>
-         <div><div class="cp-rid">${esc(data.ressource.id || "")}</div>
-         <div class="muted">${esc(data.ressource.type || "")}</div></div>
-       </div>`
-    : "";
-  $("#char-panel-inner").innerHTML = `
-    <button class="cp-close mini" onclick="document.getElementById('char-panel').classList.add('hidden')">✕</button>
-    <div class="cp-title">${esc(pers.nom || "Character")}</div>
-    <div class="cp-section"><h3>Acquis</h3>
-      <ul class="cp-acquis">${acquis || '<li class="muted">none</li>'}</ul>
-    </div>
-    <div class="cp-section"><h3>Destinée</h3>${jalons || '<div class="muted">none</div>'}</div>
-    ${tension ? `<div class="cp-section"><h3>Tension</h3>${tension}</div>` : ""}
-    ${ressource ? `<div class="cp-section"><h3>Ressource</h3>${ressource}</div>` : ""}`;
-  p.classList.remove("hidden");
+/* ---------- I-329: combat canvas + fiche perso ---------- */
+const DKS_FIXTURE = {
+  tokens: [
+    {id:"pj:kael",name:"Kael",col:2,row:3,hp:12,hpMax:12,ac:16,color:"#1fda25",faction:"ally"},
+    {id:"pnj:gob1",name:"Goblin 1",col:7,row:1,hp:7,hpMax:7,ac:15,color:"#ff6b6b",faction:"enemy"},
+    {id:"pnj:gob2",name:"Goblin 2",col:8,row:2,hp:7,hpMax:7,ac:15,color:"#ff6b6b",faction:"enemy"},
+    {id:"pnj:gob3",name:"Goblin 3",col:9,row:1,hp:7,hpMax:7,ac:15,color:"#ff6b6b",faction:"enemy"},
+    {id:"pnj:gob4",name:"Goblin 4",col:7,row:4,hp:7,hpMax:7,ac:15,color:"#ff6b6b",faction:"enemy"},
+    {id:"pnj:gob5",name:"Goblin 5",col:8,row:5,hp:7,hpMax:7,ac:15,color:"#ff6b6b",faction:"enemy"},
+    {id:"pnj:cent1",name:"Centipede",col:10,row:3,hp:14,hpMax:14,ac:13,color:"#ff6b6b",faction:"enemy"},
+    {id:"pnj:cent2",name:"Centipede 2",col:10,row:5,hp:14,hpMax:14,ac:13,color:"#ff6b6b",faction:"enemy"},
+    {id:"pnj:darek",name:"Darek",col:5,row:6,hp:22,hpMax:22,ac:14,color:"#ffce6a",faction:"ally"},
+    {id:"pnj:dk",name:"Death Knight",col:11,row:4,hp:28,hpMax:28,ac:15,color:"#b44aff",faction:"enemy",persistent:["pv"]},
+  ],
+  log: [
+    {t:"move",text:"Kael moves to E3"},
+    {t:"attack",text:"Goblin 1 attacks Kael: d20+4=15 vs AC16 → miss"},
+    {t:"attack",text:"Kael attacks Goblin 1: d20+5=18 vs AC15 → hit, 1d8+3=7 dmg"},
+    {t:"dmg",text:"Goblin 1 takes 7 damage (0/7 HP)"},
+    {t:"move",text:"Death Knight advances to L4"},
+  ],
+  initiative: ["pj:kael","pnj:gob1","pnj:gob2","pnj:cent1","pnj:darek","pnj:gob3","pnj:dk"],
+  round: 1,
+};
+
+const FICHE_FIXTURE = {
+  personnage: {
+    id: "kael",
+    nom: "Kael",
+    acquis_conversation: [
+      "A accepté l'alliance avec Darek Brewmont",
+      "Découvert l'entrée sud du donjon",
+      "Appris que le Death Knight garde la relique",
+      "Négocié le passage avec les gobelins",
+    ],
+    destinee: [
+      {id: "j1", intention_md: "Retrouver la relique volée", rattachement: "node:donjon"},
+      {id: "j2", intention_md: "Confronter le Death Knight", rattachement: "pnj:dk"},
+      {id: "j3", intention_md: "Protéger Darek", rattachement: "pnj:darek"},
+    ],
+  },
+  tensions: [
+    {id: "t1", categorie: "menace", description_md: "Le Death Knight traque les intrus"},
+    {id: "t2", categorie: "echeance", description_md: "La relique s'affaiblit à chaque aube"},
+  ],
+  ressources: [
+    {id: "carte-donjon", type: "carte", fichier: "resources/carte-donjon.jpg", description_md: "Plan du donjon"},
+    {id: "relique", type: "carte", fichier: "resources/relique.jpg", description_md: "Relique ancienne"},
+  ],
+};
+
+let _battleGrid = null;
+
+function renderCombatView(container) {
+  const tpl = document.getElementById("tpl-combat-view");
+  if (!tpl) return;
+  const frag = tpl.content.cloneNode(true);
+  container.appendChild(frag);
+  const area = document.getElementById("battle-area");
+  _battleGrid = new BattleGrid(area, {cols: 12, rows: 8, cellSize: 48});
+  _battleGrid.loadTokens(DKS_FIXTURE.tokens);
+  _battleGrid.onMove = (token, oldCol, oldRow) => {
+    _battleGrid.addLog({t: "move", text: token.name + " moves to " + String.fromCharCode(65 + token.col) + (token.row + 1)});
+    updateCombatLog();
+    updateCombatInitiative();
+  };
+  DKS_FIXTURE.log.forEach(e => _battleGrid.addLog(e));
+  updateCombatLog();
+  updateCombatInitiative();
+  document.getElementById("combat-round").textContent = "Round " + DKS_FIXTURE.round;
+  const backBtn = document.getElementById("combat-back");
+  if (backBtn) backBtn.addEventListener("click", () => {
+    if (_battleGrid) { _battleGrid.destroy(); _battleGrid = null; }
+    location.hash = "#library";
+  });
 }
 
-function showCombatCanvas(fixture) {
-  const wrap = $("#combat-canvas-wrap");
-  if (!wrap) return;
-  wrap.classList.remove("hidden");
-  if (wrap._cv) wrap._cv.stop();
-  const cv = new CombatCanvas("#combat-canvas", fixture.opts || {});
-  cv.load(fixture);
-  wrap._cv = cv;
-  $("#combat-close").onclick = () => {
-    wrap.classList.add("hidden");
-    if (wrap._cv) { wrap._cv.stop(); wrap._cv = null; }
-  };
-  return cv;
+function updateCombatLog() {
+  const el = document.getElementById("combat-log");
+  if (!el || !_battleGrid) return;
+  el.innerHTML = _battleGrid.log.map(e => {
+    const cls = e.t === "dmg" || e.t === "attack" ? "log-dmg" : e.t === "heal" ? "log-heal" : "log-move";
+    return '<div class="log-entry ' + cls + '">' + esc(e.text) + "</div>";
+  }).join("");
+  el.scrollTop = el.scrollHeight;
 }
+
+function updateCombatInitiative() {
+  const el = document.getElementById("combat-initiative");
+  if (!el) return;
+  const activeIdx = 0;
+  el.innerHTML = '<div class="init-title">Initiative</div>' +
+    DKS_FIXTURE.initiative.map((id, i) => {
+      const t = DKS_FIXTURE.tokens.find(x => x.id === id);
+      const name = t ? t.name : id;
+      const active = i === activeIdx ? " active" : "";
+      return '<div class="init-row' + active + '"><span class="init-num">' + (20 - i * 2) + '</span> ' + esc(name) + "</div>";
+    }).join("");
+}
+
+function renderFichePerso(container, data) {
+  const tpl = document.getElementById("tpl-fiche-perso");
+  if (!tpl) return;
+  const frag = tpl.content.cloneNode(true);
+  container.appendChild(frag);
+  const d = data || FICHE_FIXTURE;
+  const pers = d.personnage || {};
+  const nameEl = document.querySelector(".fiche-name");
+  if (nameEl) nameEl.textContent = pers.nom || "Character";
+  const tensionEl = document.querySelector(".fiche-tension");
+  if (tensionEl && d.tensions && d.tensions.length) {
+    tensionEl.innerHTML = d.tensions.map(t =>
+      '<div>' + esc(t.description_md || t.id) + "</div>").join("");
+  } else if (tensionEl) { tensionEl.textContent = ""; }
+  const acquisEl = document.querySelector(".fiche-acquis");
+  if (acquisEl) {
+    acquisEl.innerHTML = (pers.acquis_conversation || []).map(a =>
+      "<li>" + esc(a) + "</li>").join("") || '<li class="muted">none</li>';
+  }
+  const destEl = document.querySelector(".fiche-destinee");
+  if (destEl) {
+    destEl.innerHTML = (pers.destinee || []).map(j =>
+      "<li>" + esc(j.intention_md || j.id) + "</li>").join("")
+      || '<li class="muted">none</li>';
+  }
+  const resEl = document.querySelector(".fiche-ressources");
+  if (resEl) {
+    resEl.innerHTML = (d.ressources || []).map(r =>
+      '<div class="fiche-ressource-card">' +
+      '<div class="vignette" style="background:var(--bg)"></div>' +
+      '<div class="res-label">' + esc(r.id) + "</div></div>"
+    ).join("") || '<span class="muted">none</span>';
+  }
+}
+
+window.DKS_FIXTURE = DKS_FIXTURE;
+window.FICHE_FIXTURE = FICHE_FIXTURE;
+window.renderCombatView = renderCombatView;
+window.renderFichePerso = renderFichePerso;
 
 /* ---------- brainline ---------- */
 async function setBrainline() {
