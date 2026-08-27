@@ -24,6 +24,10 @@ PREREQUIS_TYPES = ("entite_vivante", "flag", "quete_etat")   # fiche SCÉNARIO �
 # D-218 tension traversante (P-CONV-2) : premier inventaire réel
 TENSION_CATEGORIES = ("menace", "horloge", "echeance", "cout", "choix", "revelation")
 RESSOURCE_TYPES = ("carte",)  # D-216 §2 générique, premier cas = carte (D-217 poste uniquement)
+# D-129/D-135 via D-220 : marqueurs temporels interdits dans les jalons de destinée
+# (passé/intention seuls — jamais futur ni événement)
+JALON_INTERDITS_FUTUR = ("fera", "ferait", "futur", "quand il", "lorsqu'il",
+                          "il arrivera", "il adviendra", "va", "ira", "deviendra")
 NEGATION_TYPE = "non"   # D-187: non(<atome>), une seule profondeur
 DECLENCHEUR_TYPES = ("delai", "etat", "date")                # D-182
 ISSUES_PERTURBATION = ("transplantee", "abandonnee")         # D-120 §5.1
@@ -478,6 +482,66 @@ class Ressource:
                 "ancres_sources": [list(a) for a in self.anchors]}
 
 
+class Personnage:
+    """Primitive Personnage + Destinée (I-341, D-219, D-220).
+
+    Le personnage n'est pas un prérequis à l'ingestion, c'est UNE SORTIE de
+    l'ingestion — créé après le premier module, via fenêtres négociables.
+    La destinée est un chemin biographique VAGUE mais CONNU, structuré en
+    jalons flous rattachables (D-129/D-135 via D-220 : passé/intention seuls,
+    jamais futur ni événement).
+
+    acquis_conversation : choix négociés issus de la conversation d'accord,
+    vide à l'état initial avant B.
+    destinee : liste de jalons flous, chacun {id, intention_md, rattachement?}
+    où rattachement pointe un id existant de la partition (node_id,
+    ressource_id, tension_id) — garde zéro-dangling portée par emit/validate.
+    """
+
+    def __init__(self, pid: str, nom: str,
+                 acquis_conversation: list[str] | None = None,
+                 destinee: list[dict] | None = None):
+        check_id(pid, "personnage")
+        if not nom or not str(nom).strip():
+            raise ValueError(f"personnage {pid}: nom vide")
+        self.id = pid
+        self.nom = str(nom).strip()
+        self.acquis_conversation = [str(a) for a in (acquis_conversation or [])]
+        self.destinee: list[dict] = []
+        for i, j in enumerate(destinee or []):
+            self.destinee.append(self._check_jalon(j, pid, i))
+        if len(self.destinee) < 2:
+            raise ValueError(f"personnage {pid}: destinee exige au moins 2 "
+                             "jalons flous (D-220 : chemin biographique "
+                             "vague mais connu)")
+
+    def _check_jalon(self, j: dict, pid: str, idx: int) -> dict:
+        jid = check_id(str(j.get("id", "")), f"personnage {pid} jalon[{idx}]")
+        intention = str(j.get("intention_md", "")).strip()
+        if not intention:
+            raise ValueError(f"personnage {pid} jalon {jid}: intention_md vide")
+        bas = intention.lower()
+        for marqueur in JALON_INTERDITS_FUTUR:
+            if marqueur in bas:
+                raise ValueError(f"personnage {pid} jalon {jid}: "
+                                 f"intention_md contient {marqueur!r} — "
+                                 "D-129/D-135 : passé/intention seuls, "
+                                 "jamais futur ni événement")
+        ratt = j.get("rattachement")
+        if ratt is not None:
+            check_id(str(ratt), f"personnage {pid} jalon {jid} rattachement")
+        return {"id": jid, "intention_md": intention,
+                "rattachement": str(ratt) if ratt else None}
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "nom": self.nom,
+                "acquis_conversation": self.acquis_conversation,
+                "destinee": [{"id": j["id"], "intention_md": j["intention_md"],
+                              **({"rattachement": j["rattachement"]}
+                                 if j["rattachement"] else {})}
+                             for j in self.destinee]}
+
+
 class Patch:
     """Addressed incremental mutation (D-132) — never a full rewrite."""
 
@@ -659,10 +723,12 @@ class Partition:
         self.ressources: list["Ressource"] = []  # D-216 §2 — primitive générique (premier cas carte, D-217 poste uniquement)
         # alias anglais pour les outils/emission : resources <-> ressources
         self.resources = self.ressources
+        self.personnages: list["Personnage"] = []  # I-341/D-219 — personnage + destinée
 
     def ids(self) -> set[str]:
         return ({n.id for n in self.nodes} | {r.id for r in self.records}
                 | {t.id for t in self.tables} | {s.id for s in self.secrets}
                 | {t.id for t in getattr(self, "tensions", [])}
                 | {r.id for r in getattr(self, "ressources", [])}
-                | {r.id for r in getattr(self, "resources", [])})
+                | {r.id for r in getattr(self, "resources", [])}
+                | {p.id for p in getattr(self, "personnages", [])})

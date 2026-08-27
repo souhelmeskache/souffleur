@@ -43,7 +43,7 @@ def validate_form(partition, partition_dir=None) -> list[str]:
         if s.contenu_md.strip() and s.contenu_md.strip()[:40] in corpus:
             errors.append(f"secret leak: secret {s.id} content appears in common prose")
 
-    # 4) duplicate ids across primitives (tensions D-218 + ressources D-216 §2)
+    # 4) duplicate ids across primitives (tensions D-218 + ressources D-216 §2 + personnages I-341)
     ress_list = (getattr(partition, "ressources", []) or []) + (getattr(partition, "resources", []) or [])
     # déduplication par id pour l'alias (même objet deux fois)
     seen = set()
@@ -55,7 +55,8 @@ def validate_form(partition, partition_dir=None) -> list[str]:
     all_ids = [n.id for n in partition.nodes] + [r.id for r in partition.records] \
         + [t.id for t in partition.tables] + [s.id for s in partition.secrets] \
         + [t.id for t in getattr(partition, "tensions", []) or []] \
-        + uniq_ress_ids
+        + uniq_ress_ids \
+        + [p.id for p in getattr(partition, "personnages", []) or []]
     dupes = sorted({i for i in all_ids if all_ids.count(i) > 1})
     if dupes:
         errors.append(f"duplicate ids: {dupes}")
@@ -158,7 +159,24 @@ def validate_form(partition, partition_dir=None) -> list[str]:
             except Exception:
                 errors.append(f"ressource {r.id}: page invalide {r.page!r}")
 
-    # 10) Garde caméra D-184 : secrets jamais dans le brief du Director
+    # 10) I-341/D-219 personnage + destinée — jalons flous, rattachement, D-129
+    for pers in getattr(partition, "personnages", []) or []:
+        if not getattr(pers, "nom", "").strip():
+            errors.append(f"personnage {pers.id}: nom vide")
+        if len(getattr(pers, "destinee", [])) < 2:
+            errors.append(f"personnage {pers.id}: destinee exige au moins 2 "
+                          "jalons flous (D-220)")
+        for j in getattr(pers, "destinee", []):
+            if not j.get("intention_md", "").strip():
+                errors.append(f"personnage {pers.id} jalon {j.get('id', '?')}: "
+                              "intention_md vide")
+            ratt = j.get("rattachement")
+            if ratt and ratt not in ids:
+                errors.append(f"personnage {pers.id} jalon {j.get('id', '?')}: "
+                              f"rattachement vers id inconnu {ratt} "
+                              "(I-341/D-219 — zéro dangling)")
+
+    # 11) Garde caméra D-184 : secrets jamais dans le brief du Director
     if partition_dir is not None:
         from pathlib import Path
         directeur = Path(partition_dir) / "directeur.md"
