@@ -1944,6 +1944,185 @@ async def narration_events(handle_id: str) -> dict:
             "live": bridge.live(handle_id)}
 
 
+# ── I-200: evolution interne du personnage ─────────────────────
+# Two tools, one deriver. D-125: portable, setting ontology (not a 9-alignment
+# grid). D-090: interoception invited IN CHARACTER, never probed in meta.
+# D-100: execution = proposition (the player decides, the engine records).
+
+_EVOLUTION_INTERNE_MIN = -5
+_EVOLUTION_INTERNE_MAX = 5
+_EVOLUTION_INTERNE_SCHEMA = ROOT / "schemas" / "character.json"
+
+_FORBIDDEN_ALIGNMENTS = {
+    "lawful good", "neutral good", "chaotic good",
+    "lawful neutral", "true neutral", "chaotic neutral",
+    "lawful evil", "neutral evil", "chaotic evil",
+    "lg", "ng", "cg", "ln", "tn", "cn", "le", "ne", "ce",
+}
+
+
+def _validate_evolution_interne(vecteurs: list[dict]) -> list[dict]:
+    """Validate a list of evolution_interne vectors against the schema rules.
+    Returns the cleaned list. Raises ValueError on any problem."""
+    if not isinstance(vecteurs, list):
+        raise ValueError("vecteurs must be a list")
+    if len(vecteurs) < 2:
+        raise ValueError("at least 2 vectors required (D-125: graduated axes)")
+    clean = []
+    seen_ids = set()
+    for v in vecteurs:
+        if not isinstance(v, dict):
+            raise ValueError(f"each vector must be a dict, got {type(v).__name__}")
+        vid = str(v.get("id", "")).strip()
+        if not vid:
+            raise ValueError("vector id is required")
+        if vid in seen_ids:
+            raise ValueError(f"duplicate vector id: {vid}")
+        seen_ids.add(vid)
+        label = str(v.get("label", "")).strip()
+        if not label:
+            raise ValueError(f"vector {vid}: label is required")
+        if label.lower() in _FORBIDDEN_ALIGNMENTS:
+            raise ValueError(
+                f"vector {vid}: label {label!r} is a 9-alignment grid value "
+                f"(D-090 forbidden — graduated axes only)")
+        try:
+            valeur = int(v.get("valeur", 0))
+        except (TypeError, ValueError):
+            raise ValueError(f"vector {vid}: valeur must be an integer")
+        if valeur < _EVOLUTION_INTERNE_MIN or valeur > _EVOLUTION_INTERNE_MAX:
+            raise ValueError(
+                f"vector {vid}: valeur {valeur} out of range "
+                f"[{_EVOLUTION_INTERNE_MIN}, {_EVOLUTION_INTERNE_MAX}]")
+        source = str(v.get("source", "")).strip().lower()
+        if source not in ("interoception", "journal"):
+            raise ValueError(
+                f"vector {vid}: source must be 'interoception' or 'journal'")
+        clean.append({"id": vid, "label": label,
+                       "valeur": valeur, "source": source})
+    return clean
+
+
+def journal2vecteur(acte: str, vecteur_id: str) -> dict:
+    """Derive a vector delta from a role-play act (non-declarative).
+
+    The act is a description of what the CHARACTER did (not what the player
+    thinks or feels — D-090 guard). Returns {"delta": int, "reason": str}.
+    The delta is +1 or -1 based on keyword polarity; 0 if the act is ambiguous.
+
+    D-090 guard: if the act reads as meta-probing (the player asking the
+    character how they feel, or declaring an alignment), returns {"delta": 0,
+    "refused": True, "reason": ...}."""
+    acte_lower = acte.strip().lower()
+    if not acte_lower:
+        return {"delta": 0, "refused": True,
+                "reason": "empty act — nothing to derive"}
+    meta_markers = [
+        "quel est ton alignement", "what is your alignment",
+        "je pense que je suis", "i think i am",
+        "mon alignement est", "my alignment is",
+        "en tant que joueur", "as a player",
+        "je ressens que le personnage", "i feel that the character",
+        "je pense que mon personnage", "i think my character",
+        "mon personnage est", "my character is",
+    ]
+    for marker in meta_markers:
+        if marker in acte_lower:
+            return {"delta": 0, "refused": True,
+                    "reason": f"D-090: meta-probing detected ({marker!r}) — "
+                              f"interoception must be IN CHARACTER, not probed "
+                              f"from outside"}
+    positive_poles = [
+        "sauve", "protect", "defend", "sacrifice", "pardonne", "forgive",
+        "aide", "help", "console", "comfort", "partage", "share",
+        "courage", "bravely", "bold", "audacieux",
+    ]
+    negative_poles = [
+        "trahit", "betray", "abandonne", "abandon", "vole", "steal",
+        "ment", "lie", "manipule", "manipulate", "cruel", "blesse", "hurt",
+        "fuit", "flee", "lachete", "coward", "retenue", "hesite", "hesitate",
+    ]
+    delta = 0
+    reasons = []
+    for word in positive_poles:
+        if word in acte_lower:
+            delta += 1
+            reasons.append(f"positive pole: {word}")
+            break
+    for word in negative_poles:
+        if word in acte_lower:
+            delta -= 1
+            reasons.append(f"negative pole: {word}")
+            break
+    if delta == 0:
+        return {"delta": 0, "reason": "ambiguous act — no clear pole matched"}
+    return {"delta": max(-1, min(1, delta)),
+            "reason": "; ".join(reasons)}
+
+
+@mcp.tool()
+def set_evolution_interne(vecteurs: list[dict]) -> dict:
+    """Set the character's evolution_interne vectors (I-200, performatif).
+
+    The player DECIDES the vectors — this is not a state report (D-100).
+    Each vector: {id, label, valeur (-5..+5), source: "interoception"|"journal"}.
+    At least 2 vectors required (D-125: graduated axes, not 9-alignment grid).
+
+    D-090 guard: labels matching D&D alignments are REJECTED. Source
+    'interoception' means the player declared in-character; 'journal' means
+    derived from acts via journal2vecteur."""
+    store = _require_store()
+    try:
+        clean = _validate_evolution_interne(vecteurs)
+    except ValueError as e:
+        return {"error": str(e)}
+    rpg = store.rpg_state()
+    if "evolution_interne" not in rpg:
+        rpg["evolution_interne"] = {}
+    rpg["evolution_interne"]["vecteurs"] = clean
+    store.set_rpg_state(rpg)
+    return {"ok": True, "vecteurs": clean,
+            "count": len(clean),
+            "schema": str(_EVOLUTION_INTERNE_SCHEMA)}
+
+
+@mcp.tool()
+def derive_evolution_interne(acte: str, vecteur_id: str) -> dict:
+    """Derive a vector delta from a role-play act (journal2vecteur, I-200).
+
+    The act describes what the CHARACTER did — not what the player feels or
+    thinks (D-090: interoception in-character, never meta-probed). Returns
+    the delta and, if applied, the new vector value.
+
+    Use after set_evolution_interne has created the vectors."""
+    store = _require_store()
+    result = journal2vecteur(acte, vecteur_id)
+    if result.get("refused"):
+        return result
+    rpg = store.rpg_state()
+    ei = rpg.get("evolution_interne", {})
+    vecteurs = ei.get("vecteurs", [])
+    target = None
+    for v in vecteurs:
+        if v["id"] == vecteur_id:
+            target = v
+            break
+    if target is None:
+        return {**result,
+                "error": f"vector {vecteur_id!r} not found — call "
+                         f"set_evolution_interne first"}
+    old = target["valeur"]
+    new = max(_EVOLUTION_INTERNE_MIN,
+              min(_EVOLUTION_INTERNE_MAX, old + result["delta"]))
+    target["valeur"] = new
+    target["source"] = "journal"
+    ei["vecteurs"] = vecteurs
+    rpg["evolution_interne"] = ei
+    store.set_rpg_state(rpg)
+    return {**result, "vecteur_id": vecteur_id,
+            "old_valeur": old, "new_valeur": new}
+
+
 if __name__ == "__main__":
     # Opt-in: set CODERAIN_UI_AUTOSTART to a port in the project's .mcp.json env
     # block and the screen is up before Claude Code says a word — so a launcher
