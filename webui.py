@@ -199,6 +199,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(snapshot(since))
         elif path.path == "/health":
             self._json({"ok": True, "port": _port})
+        elif path.path == "/conv-b/state":
+            self._json(conv_b_state())
         else:
             self._json({"error": "not found"}, 404)
 
@@ -212,6 +214,29 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(e)}, 400)
                 return
             self._json({"ok": True})
+            return
+        if path.path == "/conv-b/start":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                pdata = payload.get("partition", {})
+                nom = payload.get("nom", "Vahn")
+                result = conv_b_start(pdata, nom)
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": str(e)}, 400)
+                return
+            self._json(result)
+            return
+        if path.path == "/conv-b/choice":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                text = (payload.get("text") or "").strip()
+                result = conv_b_submit(text)
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": str(e)}, 400)
+                return
+            self._json(result)
             return
         if path.path != "/say":
             self._json({"error": "not found"}, 404)
@@ -276,3 +301,412 @@ def stop() -> dict:
 
 def is_running() -> bool:
     return _server is not None
+
+
+# ── Conversation B — 4 fenêtres jouables (D-219 §Spécification) ──
+
+_CONV_B: "ConversationB | None" = None
+
+
+class _FenetreOption:
+    __slots__ = ("texte", "negotiable", "acquis", "jalon")
+
+    def __init__(self, texte: str, negotiable: bool, acquis: str, jalon: dict):
+        self.texte = texte
+        self.negotiable = negotiable
+        self.acquis = acquis
+        self.jalon = jalon
+
+
+class ConversationB:
+    """4 fenêtres jouables F1→F4 (D-219 §Spécification, I-341/D-220).
+
+    F1 origine / F2 posture sociale / F3 lien tension centrale / F4 enjeu personnel.
+    Chaque fenêtre : 3 options négociables + 1 non-négociable rare.
+    Le joueur choisit ou reformule. Garde zéro-spoiler (5 règles D-219).
+    Produit un record Personnage (acquis_conversation + destinée ≥2 jalons rattachés).
+    """
+
+    NUM_WINDOWS = 4
+    WINDOW_NAMES = ("origine", "posture_sociale", "lien_tension", "enjeu_personnel")
+
+    def __init__(self, partition_data: dict, nom: str = "Vahn"):
+        self._partition = partition_data
+        self._nom = nom
+        self._idx = 0
+        self._acquis: list[str] = []
+        self._jalons: list[dict] = []
+        self._options: list[_FenetreOption] = []
+        self._done = False
+        self._last_prose = ""
+        self._secrets_ids = {s["id"] for s in partition_data.get("secrets", [])}
+        self._build_window()
+
+    def _nodes(self) -> list[dict]:
+        return self._partition.get("nodes", [])
+
+    def _tensions(self) -> list[dict]:
+        return self._partition.get("tensions", [])
+
+    def _resources(self) -> list[dict]:
+        return self._partition.get("resources", [])
+
+    def _scene_origine(self) -> dict | None:
+        for n in self._nodes():
+            if n["id"] == "scene-origine":
+                return n
+        for n in self._nodes():
+            if n.get("type") == "scene":
+                return n
+        return None
+
+    def _scene_origine_id(self) -> str:
+        s = self._scene_origine()
+        return s["id"] if s else "scene-origine"
+
+    def _tension_by_cat(self, cat: str) -> dict | None:
+        for t in self._tensions():
+            if t.get("categorie") == cat:
+                return t
+        return None
+
+    def _build_window(self):
+        if self._idx >= self.NUM_WINDOWS:
+            self._done = True
+            self._options = []
+            return
+        builders = (self._build_f1, self._build_f2,
+                    self._build_f3, self._build_f4)
+        builders[self._idx]()
+
+    def _build_f1(self):
+        sid = self._scene_origine_id()
+        self._options = [
+            _FenetreOption(
+                "Ancien soldat ayant survécu à une guerre oubliée, "
+                "tu portes encore les cicatrices des campagnes passées.",
+                True, "soldat-survivant",
+                {"id": "jalon-origine",
+                 "intention_md": "Ancien soldat ayant survécu à une guerre oubliée.",
+                 "rattachement": sid}),
+            _FenetreOption(
+                "Vagabond sans maître, tu erres depuis les ruines "
+                "d'un foyer que tu ne reverras pas.",
+                True, "vagabond",
+                {"id": "jalon-origine",
+                 "intention_md": "Vagabond sans maître ni attache.",
+                 "rattachement": sid}),
+            _FenetreOption(
+                "Fils de paysan endetté, tu as fui pour échapper "
+                "aux créanciers et à la misère.",
+                True, "paysan-fugitif",
+                {"id": "jalon-origine",
+                 "intention_md": "Fils de paysan endetté ayant fui son domaine.",
+                 "rattachement": sid}),
+            _FenetreOption(
+                "Porteur d'une dette envers un mort — tu lui as promis "
+                "de finir ce qu'il a commencé.",
+                False, "dette-envers-un-mort",
+                {"id": "jalon-dette",
+                 "intention_md": "Porteur d'une dette envers un mort.",
+                 "rattachement": sid}),
+        ]
+
+    def _build_f2(self):
+        self._options = [
+            _FenetreOption(
+                "Tu te méfies des autorités — les seigneurs et "
+                "leurs promesses creuses ne t'abusent plus.",
+                True, "mefiance-autorite",
+                {"id": "jalon-posture",
+                 "intention_md": "Méfiant envers les autorités établies."}),
+            _FenetreOption(
+                "Tu cherches la rédemption — une faute ancienne "
+                "que tu veux racheter avant la fin.",
+                True, "redemption",
+                {"id": "jalon-posture",
+                 "intention_md": "En quête de rédemption pour une faute ancienne."}),
+            _FenetreOption(
+                "Tu protèges les tiens — ceux qui ne peuvent "
+                "se défendre eux-mêmes.",
+                True, "protecteur",
+                {"id": "jalon-posture",
+                 "intention_md": "Protecteur de ceux qui ne peuvent se défendre."}),
+            _FenetreOption(
+                "Tu portes le pieu de l'arbre rouge — marque "
+                "des anciens combattants, serment de sang.",
+                False, "pieu-arbre-rouge",
+                {"id": "jalon-marque",
+                 "intention_md": "Porteur du pieu de l'arbre rouge, marque des anciens combattants."}),
+        ]
+
+    def _build_f3(self):
+        menace = self._tension_by_cat("menace")
+        choix = self._tension_by_cat("choix")
+        cout = self._tension_by_cat("cout")
+        menace_id = menace["id"] if menace else "tension-menace"
+        choix_id = choix["id"] if choix else "tension-choix"
+        cout_id = cout["id"] if cout else "tension-cout"
+        self._options = [
+            _FenetreOption(
+                "Une menace rôde dans les terres sauvages — "
+                "tu l'as déjà croisée du regard.",
+                True, "menace-rode",
+                {"id": "jalon-tension-1",
+                 "intention_md": "Confronté à une menace rôdant dans les terres sauvages.",
+                 "rattachement": menace_id}),
+            _FenetreOption(
+                "Un choix ancien te hante — dire la vérité ou mentir, "
+                "la balance pèse encore.",
+                True, "choix-ancien",
+                {"id": "jalon-tension-2",
+                 "intention_md": "Hanté par un choix ancien entre vérité et mensonge.",
+                 "rattachement": choix_id}),
+            _FenetreOption(
+                "Un coût personnel t'a marqué — ce que tu as perdu "
+                "ne se remplacera pas.",
+                True, "cout-personnel",
+                {"id": "jalon-tension-3",
+                 "intention_md": "Marqué par un coût personnel irréversible.",
+                 "rattachement": cout_id}),
+            _FenetreOption(
+                "La menace des gobelins pèse sur la région — "
+                "tu ne peux l'ignorer.",
+                False, "menace-goblins",
+                {"id": "jalon-tension-goblins",
+                 "intention_md": "Confronté à la menace des gobelins pesant sur la région.",
+                 "rattachement": menace_id}),
+        ]
+
+    def _build_f4(self):
+        resources = self._resources()
+        res_id = resources[0]["id"] if resources else "carte-1"
+        sid = self._scene_origine_id()
+        self._options = [
+            _FenetreOption(
+                "Retrouver la paix intérieure — laisser les fantômes "
+                "du passé se reposer enfin.",
+                True, "paix-interieure",
+                {"id": "jalon-enjeu",
+                 "intention_md": "En quête de paix intérieure, laisser les fantômes se reposer.",
+                 "rattachement": sid}),
+            _FenetreOption(
+                "Honorer la promesse faite au mort — finir "
+                "ce qu'il n'a pas pu achever.",
+                True, "honorer-promesse",
+                {"id": "jalon-enjeu",
+                 "intention_md": "Honorer la promesse faite à un mort.",
+                 "rattachement": sid}),
+            _FenetreOption(
+                "Construire un foyer — avoir un lieu à soi, enfin.",
+                True, "construire-foyer",
+                {"id": "jalon-enjeu",
+                 "intention_md": "Construire un foyer, avoir un lieu à soi.",
+                 "rattachement": res_id}),
+            _FenetreOption(
+                "Protéger la carte tilepage — un héritage qui ne doit "
+                "pas tomber en mauvaises mains.",
+                False, "protecteur-carte",
+                {"id": "jalon-enjeu-carte",
+                 "intention_md": "Protecteur de la carte tilepage, héritage à préserver.",
+                 "rattachement": res_id}),
+        ]
+
+    @property
+    def current_window(self) -> str:
+        if self._idx >= self.NUM_WINDOWS:
+            return "done"
+        return self.WINDOW_NAMES[self._idx]
+
+    @property
+    def is_done(self) -> bool:
+        return self._done
+
+    def start(self) -> dict:
+        self._idx = 0
+        self._acquis = []
+        self._jalons = []
+        self._done = False
+        self._build_window()
+        return self._current_state()
+
+    def _window_title(self) -> str:
+        titles = {
+            0: f"**Origine** — D'où viens-tu, {self._nom} ?",
+            1: "**Posture** — Comment te tiens-tu dans ce monde ?",
+            2: "**Fardeau** — Qu'est-ce qui pèse sur tes épaules ?",
+            3: "**Enjeu** — Que cherches-tu, au fond ?",
+        }
+        return titles.get(self._idx, "")
+
+    def _options_prose(self) -> str:
+        lines = []
+        for opt in self._options:
+            lines.append(f"*{opt.texte}*")
+        lines.append("\nChoisis, ou reformule à ta manière.")
+        return "\n\n".join(lines)
+
+    def _closing_prose(self) -> str:
+        return (f"La toile de ton destin est tissée, {self._nom}. "
+                f"Que l'aventure commence.")
+
+    def _current_state(self) -> dict:
+        if self._done:
+            prose = self._closing_prose()
+            self._guard_check(prose)
+            self._last_prose = prose
+            return {"done": True, "prose": prose,
+                    "acquis": list(self._acquis),
+                    "jalons": list(self._jalons)}
+        title = self._window_title()
+        opts = self._options_prose()
+        full = f"{title}\n\n{opts}"
+        self._guard_check(full)
+        self._last_prose = full
+        return {
+            "done": False,
+            "window": self.current_window,
+            "window_number": self._idx + 1,
+            "prose": full,
+            "options": [{"numero": i + 1, "texte": o.texte}
+                        for i, o in enumerate(self._options)],
+            "acquis": list(self._acquis),
+            "jalons": list(self._jalons),
+        }
+
+    def submit(self, player_text: str) -> dict:
+        if self._done:
+            return {"error": "conversation terminee", "done": True}
+        player_text = player_text.strip()
+        if not player_text:
+            return {"error": "texte vide", "done": False}
+        choice_idx = self._parse_choice(player_text)
+        if choice_idx is not None:
+            opt = self._options[choice_idx]
+            self._accept_option(opt)
+        else:
+            rejection = self._check_reformulation(player_text)
+            if rejection:
+                return {"error": rejection,
+                        "error_type": "non-negotiable-contredit",
+                        "done": False, "prose": self._last_prose,
+                        "window": self.current_window}
+            self._accept_reformulation(player_text)
+        self._idx += 1
+        self._build_window()
+        return self._current_state()
+
+    def _parse_choice(self, text: str) -> int | None:
+        t = text.strip().lower()
+        mapping = {"1": 0, "un": 0, "2": 1, "deux": 1,
+                   "3": 2, "trois": 3, "4": 3, "quatre": 3}
+        return mapping.get(t)
+
+    def _accept_option(self, opt: _FenetreOption):
+        self._acquis.append(opt.acquis)
+        self._jalons.append(dict(opt.jalon))
+
+    def _accept_reformulation(self, text: str):
+        neg_opts = [o for o in self._options if o.negotiable]
+        self._acquis.append(f"reformulation-{self._idx}")
+        if neg_opts:
+            jalon = dict(neg_opts[0].jalon)
+            jalon["intention_md"] = text
+            self._jalons.append(jalon)
+        else:
+            self._jalons.append({"id": f"jalon-reformulation-{self._idx}",
+                                 "intention_md": text})
+
+    def _check_reformulation(self, text: str) -> str | None:
+        non_neg = next((o for o in self._options if not o.negotiable), None)
+        if non_neg is None:
+            return None
+        text_lower = text.lower()
+        non_neg_words = [w for w in non_neg.texte.lower().split()
+                         if len(w) > 4]
+        if len(non_neg_words) < 2:
+            return None
+        has_key = sum(1 for w in non_neg_words[:5] if w in text_lower) >= 2
+        negation_markers = ("pas", "jamais", "non", "refuse", "contre",
+                            "nullement", "aucun")
+        has_neg = any(m in text_lower for m in negation_markers)
+        if has_key and has_neg:
+            return (f"reformulation contredit l'element non-negociable "
+                    f"'{non_neg.acquis}' — fondamental pour ce personnage")
+        return None
+
+    def _guard_check(self, text: str) -> None:
+        violations = self.guard_output(text)
+        if violations:
+            raise ValueError(
+                f"GARDE ZERO-SPOILER VIOLEE: {violations}")
+
+    def guard_output(self, text: str) -> list[str]:
+        violations: list[str] = []
+        text_lower = text.lower()
+        for sid in self._secrets_ids:
+            if sid.lower() in text_lower:
+                violations.append(f"secret-cite: {sid}")
+        for marker in ("négociable", "non-négociable",
+                       "negociable", "non-negociable"):
+            if marker in text_lower:
+                violations.append(f"marqueur-visible: {marker}")
+        for n in self._nodes():
+            nid = n["id"]
+            if nid in text:
+                violations.append(f"id-node-cite: {nid}")
+        for t in self._tensions():
+            tid = t["id"]
+            if tid in text:
+                violations.append(f"id-tension-cite: {tid}")
+        for r in self._resources():
+            rid = r["id"]
+            if rid in text:
+                violations.append(f"id-ressource-cite: {rid}")
+        return violations
+
+    def personnage(self, pid: str | None = None,
+                   nom: str | None = None) -> dict:
+        if not self._done:
+            raise ValueError("conversation non terminee — "
+                             "4 fenêtres requises")
+        return {
+            "id": pid or self._nom.lower(),
+            "nom": nom or self._nom,
+            "acquis_conversation": list(self._acquis),
+            "destinee": [dict(j) for j in self._jalons],
+        }
+
+
+def conv_b_start(partition_data: dict, nom: str = "Vahn") -> dict:
+    global _conv_b
+    _conv_b = ConversationB(partition_data, nom)
+    state = _conv_b.start()
+    say(state["prose"], role="mj")
+    return state
+
+
+def conv_b_submit(player_text: str) -> dict:
+    global _conv_b
+    if _conv_b is None:
+        return {"error": "conversation non initialisee"}
+    result = _conv_b.submit(player_text)
+    if "error" not in result:
+        say(result.get("prose", ""), role="mj")
+    return result
+
+
+def conv_b_state() -> dict:
+    if _conv_b is None:
+        return {"error": "conversation non initialisee"}
+    return _conv_b._current_state()
+
+
+def conv_b_personnage(pid: str | None = None,
+                      nom: str | None = None) -> dict:
+    if _conv_b is None:
+        return {"error": "conversation non initialisee"}
+    return _conv_b.personnage(pid, nom)
+
+
+_conv_b: ConversationB | None = None

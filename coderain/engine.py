@@ -668,6 +668,28 @@ class Engine:
         state = list(self.store.rpg_state().get("companions", {}))
         return list(dict.fromkeys(marked + state))
 
+    def conversation_b_start(self, partition_data: dict,
+                             nom: str = "Vahn") -> dict:
+        """Start a conversation B (D-219 §Spécification, I-144).
+
+        Takes partition data (nodes, tensions, resources, secrets) and drives
+        the 4-window character creation protocol. Returns the F1 state.
+        Delegates to webui.ConversationB — the webui holds the session state.
+        """
+        from webui import conv_b_start
+        return conv_b_start(partition_data, nom)
+
+    def conversation_b_submit(self, player_text: str) -> dict:
+        """Submit a player choice/reformulation to the active conversation B."""
+        from webui import conv_b_submit
+        return conv_b_submit(player_text)
+
+    def conversation_b_personnage(self, pid: str | None = None,
+                                  nom: str | None = None) -> dict:
+        """Build the Personnage record from the completed conversation B."""
+        from webui import conv_b_personnage
+        return conv_b_personnage(pid, nom)
+
     def companion_chat(self, name: str, user_text: str) -> Iterator[str]:
         """Out-of-band side-chat with a companion (SPEC-V2 §3.4): a private
         conversation between story turns — advice, banter, strategy. Streams the
