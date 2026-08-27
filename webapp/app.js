@@ -1795,6 +1795,52 @@ async function renderSettings() {
   });
 }
 
+/* ---------- I-329: character panel + combat canvas ---------- */
+function showCharPanel(data) {
+  const p = $("#char-panel");
+  if (!p) return;
+  const pers = data.personnage || {};
+  const acquis = (pers.acquis_conversation || []).map(a =>
+    `<li>${esc(a)}</li>`).join("");
+  const jalons = (pers.destinee || []).map(j =>
+    `<div class="cp-jalon">${esc(j.intention_md || j.id || "")}</div>`).join("");
+  const tension = data.tension
+    ? `<div class="cp-tension">${esc(data.tension.description_md || data.tension.id || "")}</div>`
+    : "";
+  const ressource = data.ressource
+    ? `<div class="cp-ressource">
+         <div class="cp-thumb"></div>
+         <div><div class="cp-rid">${esc(data.ressource.id || "")}</div>
+         <div class="muted">${esc(data.ressource.type || "")}</div></div>
+       </div>`
+    : "";
+  $("#char-panel-inner").innerHTML = `
+    <button class="cp-close mini" onclick="document.getElementById('char-panel').classList.add('hidden')">✕</button>
+    <div class="cp-title">${esc(pers.nom || "Character")}</div>
+    <div class="cp-section"><h3>Acquis</h3>
+      <ul class="cp-acquis">${acquis || '<li class="muted">none</li>'}</ul>
+    </div>
+    <div class="cp-section"><h3>Destinée</h3>${jalons || '<div class="muted">none</div>'}</div>
+    ${tension ? `<div class="cp-section"><h3>Tension</h3>${tension}</div>` : ""}
+    ${ressource ? `<div class="cp-section"><h3>Ressource</h3>${ressource}</div>` : ""}`;
+  p.classList.remove("hidden");
+}
+
+function showCombatCanvas(fixture) {
+  const wrap = $("#combat-canvas-wrap");
+  if (!wrap) return;
+  wrap.classList.remove("hidden");
+  if (wrap._cv) wrap._cv.stop();
+  const cv = new CombatCanvas("#combat-canvas", fixture.opts || {});
+  cv.load(fixture);
+  wrap._cv = cv;
+  $("#combat-close").onclick = () => {
+    wrap.classList.add("hidden");
+    if (wrap._cv) { wrap._cv.stop(); wrap._cv = null; }
+  };
+  return cv;
+}
+
 /* ---------- brainline ---------- */
 async function setBrainline() {
   try {
