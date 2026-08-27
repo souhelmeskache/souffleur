@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Character",
+  "description": "Schema for a coderain character (I-200: evolution interne).",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "visual": {
+      "type": "string"
+    },
+    "voice": {
+      "type": "string"
+    },
+    "mentality": {
+      "type": "string"
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "governing_stat": { "type": "string" }
+        },
+        "required": ["name"]
+      }
+    },
+    "evolution_interne": {
+      "type": "object",
+      "description": "I-200: internal evolution vectors — graduated axes derived from role-play acts (D-125 portable, setting ontology). Not a 9-alignment grid (D-090).",
+      "properties": {
+        "vecteurs": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*$"
+              },
+              "label": {
+                "type": "string",
+                "description": "Human-readable label, e.g. 'audace--retenue'"
+              },
+              "valeur": {
+                "type": "integer",
+                "minimum": -5,
+                "maximum": 5,
+                "description": "Position on the axis: -5 (pole A) to +5 (pole B)"
+              },
+              "source": {
+                "type": "string",
+                "enum": ["interoception", "journal"],
+                "description": "interoception = player declaration in-character (D-090); journal = derived from role-play acts (journal2vecteur)"
+              }
+            },
+            "required": ["id", "label", "valeur", "source"]
+          }
+        }
+      },
+      "required": ["vecteurs"]
+    }
+  },
+  "required": ["name", "slug"]
+}
