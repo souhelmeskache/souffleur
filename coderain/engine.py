@@ -383,25 +383,34 @@ class Engine:
         visible, _ = sidecar_mod.strip_sidecar(raw)  # drop any ```rpg block
         return visible.strip()
 
-    def undo_last(self) -> bool:
+    def undo_last(self) -> dict:
         """Remove the last exchange WITHOUT regenerating — the player is left at the
         prior state to try a different action. Mirrors the retry rollback (drop the
         last narrator + its player turn, roll back this turn's RPG mechanics) but does
-        not call the model. Returns False when there's nothing to undo.
+        not call the model. Returns {"undone": bool, "mechanics_restored": bool}.
 
         Single-level within the session: `restore_pre_turn_rpg` holds one snapshot, so
         a second consecutive undo won't further rewind mechanics (multi-level undo
         would need per-turn persisted snapshots). Only ever touches the retry-able tail
-        (turns not yet folded/timelined), so timeline pointers stay valid."""
+        (turns not yet folded/timelined), so timeline pointers stay valid.
+
+        When the pattern is [narrator, narrator] (opening after resume), only the
+        opening narrator is dropped and mechanics_restored is False (no player turn
+        to rollback)."""
         turns = self.store.turns()
         if turns and turns[-1]["role"] == "narrator" and len(turns) >= 2:
-            self.store.drop_last_turns(2)
+            if turns[-2]["role"] == "player":
+                self.store.drop_last_turns(2)
+                self.restore_pre_turn_rpg()
+                return {"undone": True, "mechanics_restored": True}
+            else:
+                self.store.drop_last_turns(1)
+                return {"undone": True, "mechanics_restored": False}
         elif turns and turns[-1]["role"] == "player":
             self.store.drop_last_turns(1)  # orphan player turn (empty generation)
+            return {"undone": True, "mechanics_restored": False}
         else:
-            return False
-        self.restore_pre_turn_rpg()
-        return True
+            return {"undone": False, "mechanics_restored": False}
 
     def maybe_fold(self) -> list[str]:
         """Run due memory folds after a turn. Returns event strings for the UI —
