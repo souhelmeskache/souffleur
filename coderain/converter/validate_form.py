@@ -195,6 +195,38 @@ def validate_form(partition, partition_dir=None) -> list[str]:
                     errors.append(f"secret {s.id}: leak dans directeur.md "
                                   "(garde caméra D-184 — secrets jamais "
                                   "servis au Director en clair)")
+
+    # 12) I-033 borne à deux murs — fenêtres conversation d'accord (D-219 §4)
+    # Garde triple : (a) tension liée requise, (b) zéro-spoiler règle 1
+    # (fenêtre négociable ne cite pas un secret), (c) rattachement existant.
+    secret_ids = {s.id for s in partition.secrets}
+    tension_ids = {t.id for t in getattr(partition, "tensions", [])}
+    for fen in getattr(partition, "fenetres", []) or []:
+        # (a) fenêtre sans tension liée → refus
+        if not getattr(fen, "tension_id", None):
+            errors.append(f"fenetre {fen.id}: sans tension_id liée — "
+                          "borne à deux murs (a) exige tension D-218 "
+                          "(I-033 §1)")
+        elif fen.tension_id not in tension_ids:
+            errors.append(f"fenetre {fen.id}: tension_id inconnu "
+                          f"{fen.tension_id} — zéro dangling autorisé "
+                          "(I-033 §1a)")
+        # (b) fenêtre négociable qui cite un secret → refus (zéro-spoiler règle 1)
+        if getattr(fen, "negociable", True):
+            texte_fen = (getattr(fen, "contexte_md", "") + " " +
+                         " ".join(getattr(fen, "options", [])) + " " +
+                         getattr(fen, "non_negociable_msg", ""))
+            for sid in secret_ids:
+                if sid in texte_fen:
+                    errors.append(f"fenetre {fen.id}: cite secret {sid} — "
+                                  "zéro-spoiler règle 1 violated "
+                                  "(I-033 §1b, D-219 §garde)")
+        # (c) rattachement inexistant → refus (zéro-dangling)
+        ratt = getattr(fen, "rattachement", None)
+        if ratt and ratt not in ids:
+            errors.append(f"fenetre {fen.id}: rattachement vers id inconnu "
+                          f"{ratt} — zéro dangling autorisé "
+                          "(I-033 §1c)")
     return errors
 
 

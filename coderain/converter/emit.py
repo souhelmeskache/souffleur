@@ -71,7 +71,7 @@ def write_partition(partition, out_dir: Path) -> Path:
                     f"personnage {pers.id} jalon {j['id']}: rattachement "
                     f"vers id inconnu {ratt} — zéro dangling autorisé "
                     "(I-341/D-219)")
-    for sub in ("nodes", "records", "tables", "secrets", "patches", "tensions", "resources", "personnages"):
+    for sub in ("nodes", "records", "tables", "secrets", "patches", "tensions", "resources", "personnages", "fenetres"):
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
 
     (out_dir / "manifest.json").write_text(
@@ -155,6 +155,41 @@ def write_partition(partition, out_dir: Path) -> Path:
         body = f"# {pers.nom}\n\nPersonnage {pers.id}."
         (out_dir / "personnages" / f"{pers.id}.md").write_text(
             fm + body + "\n", encoding="utf-8")
+    # I-033/D-219 fenêtres conversation d'accord — 4 fenêtres canoniques
+    # garde borne deux murs : tension_id requis, rattachement existant,
+    # zéro-spoiler (fenêtre négociable ne cite pas un secret)
+    secret_ids = {s.id for s in partition.secrets}
+    for fen in getattr(partition, "fenetres", []) or []:
+        if not getattr(fen, "tension_id", None):
+            raise ValueError(
+                f"fenetre {fen.id}: sans tension_id — borne à deux murs "
+                "(I-033 §1a, D-219 §4)")
+        ratt = getattr(fen, "rattachement", None)
+        if ratt and ratt not in all_ids:
+            raise ValueError(
+                f"fenetre {fen.id}: rattachement vers id inconnu {ratt} — "
+                "zéro dangling autorisé (I-033 §1c)")
+        if getattr(fen, "negociable", True):
+            texte_fen = (getattr(fen, "contexte_md", "") + " " +
+                         " ".join(getattr(fen, "options", [])))
+            for sid in secret_ids:
+                if sid in texte_fen:
+                    raise ValueError(
+                        f"fenetre {fen.id}: cite secret {sid} — "
+                        "zéro-spoiler règle 1 violated (I-033 §1b)")
+        fm = _front_matter({"id": fen.id, "dimension": fen.dimension,
+                            "titre": fen.titre, "negociable": fen.negociable,
+                            **({"non_negociable_msg": fen.non_negociable_msg}
+                               if fen.non_negociable_msg else {}),
+                            **({"tension_id": fen.tension_id}
+                               if fen.tension_id else {}),
+                            **({"rattachement": fen.rattachement}
+                               if fen.rattachement else {}),
+                            "anchors": []})
+        body = (f"# {fen.titre}\n\n{fen.contexte_md}\n\n" +
+                "\n".join(f"- {o}" for o in fen.options) + "\n")
+        (out_dir / "fenetres" / f"{fen.id}.md").write_text(
+            fm + body + "\n", encoding="utf-8")
     if partition.patches:
         rows = [_front_matter({"cible_id": p.cible_id, "operation": p.operation,
                                "cause": p.cause}) + p.payload + "\n"
@@ -193,7 +228,12 @@ def write_partition(partition, out_dir: Path) -> Path:
         "personnages": [{"id": p.id, "nom": p.nom,
                          "nb_jalons": len(p.destinee),
                          "acquis_conversation": p.acquis_conversation}
-                        for p in getattr(partition, "personnages", []) or []],
+                        for p in getattr(partition, "personnages", [])],
+        "fenetres": [{"id": f.id, "dimension": f.dimension,
+                      "titre": f.titre, "negociable": f.negociable,
+                      **({"tension_id": f.tension_id} if f.tension_id else {}),
+                      **({"rattachement": f.rattachement} if f.rattachement else {})}
+                     for f in getattr(partition, "fenetres", [])],
         "aventure": ({"etage": "adventure",
                       "trajectoire": len(av.trajectoire),
                       "conditions": len(av.conditions)}

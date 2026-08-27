@@ -546,6 +546,60 @@ class Personnage:
                              for j in self.destinee]}
 
 
+class Fenetre:
+    """Fenêtre de conversation d'accord (D-219 §Les quatre fenêtres, I-033).
+
+    Chaque fenêtre couvre UNE dimension du personnage (F1 origine, F2 posture,
+    F3 lien tension, F4 enjeu). Structure : negociable (bool), non_negociable_msg
+    (contrainte module), tension_id (lien vers inventaire D-218), rattachement
+    (id partition existant — node/tension/ressource).
+
+    La borne à deux murs (I-033) refuse :
+    - fenêtre sans tension liée (a)
+    - fenêtre négociable qui cite un secret (b, zéro-spoiler règle 1)
+    - fenêtre dont le rattachement n'existe pas (c, zéro-dangling)
+    """
+
+    DIMENSIONS = ("origine", "posture", "lien_tension", "enjeu")
+
+    def __init__(self, fid: str, dimension: str, titre: str,
+                 contexte_md: str, options: list[str],
+                 negociable: bool = True,
+                 non_negociable_msg: str = "",
+                 tension_id: str | None = None,
+                 rattachement: str | None = None):
+        check_id(fid, "fenetre")
+        if dimension not in self.DIMENSIONS:
+            raise ValueError(f"fenetre {fid}: dimension {dimension!r} not in "
+                             f"{self.DIMENSIONS} (D-219 §4 fenêtres)")
+        if not titre or not str(titre).strip():
+            raise ValueError(f"fenetre {fid}: titre vide")
+        if not options or len(options) < 1:
+            raise ValueError(f"fenetre {fid}: options vide — au moins 1 option requise")
+        self.id = fid
+        self.dimension = dimension
+        self.titre = str(titre).strip()
+        self.contexte_md = str(contexte_md or "").strip()
+        self.options = [str(o).strip() for o in options if str(o).strip()]
+        self.negociable = bool(negociable)
+        self.non_negociable_msg = str(non_negociable_msg or "").strip()
+        if tension_id is not None:
+            check_id(tension_id, f"fenetre {fid} tension_id")
+        self.tension_id = tension_id
+        if rattachement is not None:
+            check_id(rattachement, f"fenetre {fid} rattachement")
+        self.rattachement = rattachement
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "dimension": self.dimension,
+                "titre": self.titre, "contexte_md": self.contexte_md,
+                "options": self.options, "negociable": self.negociable,
+                **({"non_negociable_msg": self.non_negociable_msg}
+                   if self.non_negociable_msg else {}),
+                **({"tension_id": self.tension_id} if self.tension_id else {}),
+                **({"rattachement": self.rattachement} if self.rattachement else {})}
+
+
 class Patch:
     """Addressed incremental mutation (D-132) — never a full rewrite."""
 
@@ -728,6 +782,7 @@ class Partition:
         # alias anglais pour les outils/emission : resources <-> ressources
         self.resources = self.ressources
         self.personnages: list["Personnage"] = []  # I-341/D-219 — personnage + destinée
+        self.fenetres: list["Fenetre"] = []  # I-033/D-219 — fenêtres conversation d'accord
 
     def ids(self) -> set[str]:
         return ({n.id for n in self.nodes} | {r.id for r in self.records}
@@ -735,4 +790,5 @@ class Partition:
                 | {t.id for t in getattr(self, "tensions", [])}
                 | {r.id for r in getattr(self, "ressources", [])}
                 | {r.id for r in getattr(self, "resources", [])}
-                | {p.id for p in getattr(self, "personnages", [])})
+                | {p.id for p in getattr(self, "personnages", [])}
+                | {f.id for f in getattr(self, "fenetres", [])})

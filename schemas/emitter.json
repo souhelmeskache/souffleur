@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "coderain-emitter-partition",
+  "title": "Coderain Partition Emitter Schema",
+  "description": "Schema for the partition output (SPEC-P4 §8) — manifest.json + index.json + primitives directories.",
+  "type": "object",
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "altitude"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "type": {"type": "string", "enum": ["chapitre", "section", "scene", "read_aloud"]},
+          "altitude": {"type": "string", "enum": ["scene", "scenario", "adventure"]},
+          "titre": {"type": "string"},
+          "charniere_sortie": {"type": "object"},
+          "scenario": {"type": "boolean"}
+        }
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "classe"],
+        "properties": {
+          "id": {"type": "string"},
+          "classe": {"type": "string", "enum": ["creature", "pnj", "objet", "lieu", "faction"]},
+          "transverse": {"type": "boolean"},
+          "ancre_srd": {"type": "string"},
+          "pose_sur_nodes": {"type": "array", "items": {"type": "string"}},
+          "persistent_attrs": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "de"],
+        "properties": {
+          "id": {"type": "string"},
+          "de": {"type": "string", "pattern": "^\\d+d\\d+$"}
+        }
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "statut"],
+        "properties": {
+          "id": {"type": "string"},
+          "statut": {"type": "string", "enum": ["public", "suspect", "secret"]}
+        }
+      }
+    },
+    "tensions": {
+      "type": "array",
+      "description": "D-218 tension traversante — 6 categories canoniques",
+      "items": {
+        "type": "object",
+        "required": ["id", "categorie", "node_id"],
+        "properties": {
+          "id": {"type": "string"},
+          "categorie": {"type": "string", "enum": ["menace", "horloge", "echeance", "cout", "choix", "revelation"]},
+          "node_id": {"type": "string"}
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "description": "D-216 §2 ressource générique — premier cas carte",
+      "items": {
+        "type": "object",
+        "required": ["id", "type"],
+        "properties": {
+          "id": {"type": "string"},
+          "type": {"type": "string", "enum": ["carte"]},
+          "node_id": {"type": "string"},
+          "page": {"type": "integer", "minimum": 1, "maximum": 500},
+          "fichier": {"type": "string"}
+        }
+      }
+    },
+    "personnages": {
+      "type": "array",
+      "description": "I-341/D-219 personnage + destinée",
+      "items": {
+        "type": "object",
+        "required": ["id", "nom", "nb_jalons"],
+        "properties": {
+          "id": {"type": "string"},
+          "nom": {"type": "string"},
+          "nb_jalons": {"type": "integer", "minimum": 2},
+          "acquis_conversation": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "fenetres": {
+      "type": "array",
+      "description": "I-033/D-219 fenêtres conversation d'accord — 4 fenêtres canoniques (F1 origine, F2 posture, F3 lien_tension, F4 enjeu). Borne à deux murs : tension_id requis, rattachement existant, zéro-spoiler.",
+      "items": {
+        "type": "object",
+        "required": ["id", "dimension", "titre", "negociable"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "dimension": {"type": "string", "enum": ["origine", "posture", "lien_tension", "enjeu"]},
+          "titre": {"type": "string"},
+          "negociable": {"type": "boolean"},
+          "tension_id": {"type": "string"},
+          "rattachement": {"type": "string"}
+        }
+      }
+    },
+    "aventure": {
+      "type": ["object", "null"],
+      "description": "D-178 étage aventure",
+      "properties": {
+        "etage": {"type": "string", "const": "adventure"},
+        "trajectoire": {"type": "integer"},
+        "conditions": {"type": "integer"}
+      }
+    }
+  },
+  "required": ["nodes", "records", "tables", "secrets"]
+}
