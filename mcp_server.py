@@ -24,7 +24,7 @@ from coderain.memory import Library, MemoryStore
 from coderain import validator as validator_mod
 from coderain.rules_engine import get_bridge
 from coderain.sidecar import DEFAULT_CFG as _DEFAULT_RPG
-from coderain.config import load_config
+from coderain.config import load_config, saves_dir
 
 mcp = FastMCP("coderain-engine")
 
@@ -73,7 +73,7 @@ def _resolve_instructions_root() -> tuple[Path, bool]:
     return path.resolve(), True
 
 
-_saves_root: Path = ROOT / "saves"
+_saves_root: Path = saves_dir()  # same resolution as memory.Library (config.saves_dir)
 # Sentinel: "this pipeline resolved the mechanics before the narrator wrote".
 # See _assemble_text — it is what selects the engine's quad-mode sheet.
 _RESOLVED_BEFORE_NARRATION = object()
