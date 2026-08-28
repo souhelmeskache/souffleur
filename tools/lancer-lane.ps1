@@ -278,6 +278,34 @@ $worktreePath = $worktreeData.result.worktree.path
 Write-Output "Worktree : $worktreePath"
 Write-Output "Pane     : $paneId"
 
+# --- Automode local du worktree (Issue #45) -------------------------------
+#
+# Posé À LA MAIN le 28/08 dans les worktrees des lanes 33-38, réplique par
+# lanceur ici pour que chaque nouveau lancement en hérite d'office (l'ancien
+# réglage manuel ne vaut que pour les worktrees qui existaient déjà à
+# l'époque). Fichier LOCAL au worktree, non versionné (voir .gitignore) :
+# autorise Bash(*) pour ne pas bloquer la lane sur une demande de permission
+# que personne ne verra, tout en gardant en deny les commandes qui
+# contourneraient les gardes déjà en place (garde pré-commit rouge, garde de
+# branche main) — --no-verify/-n restent interdits même avec Bash(*) en allow.
+$claudeDir = Join-Path $worktreePath '.claude'
+New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+$settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
+$settingsLocal = [ordered]@{
+    permissions = [ordered]@{
+        allow = @('Bash(*)')
+        deny  = @(
+            'Bash(git commit --no-verify*)',
+            'Bash(git commit -n*)',
+            'Bash(git push --no-verify*)',
+            'Bash(git push --force*)',
+            'Bash(git push -f*)'
+        )
+    }
+}
+($settingsLocal | ConvertTo-Json -Depth 5) | Set-Content -Path $settingsLocalPath -Encoding utf8
+Write-Output "Automode posé : $settingsLocalPath"
+
 # --- Jeton scopé lanes (D-227) --------------------------------------------
 #
 # GH_TOKEN_LANES est un jeton fine-grained limité au repo souffleur seul
