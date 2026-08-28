@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "coderain-validator-provenance",
+  "title": "Agentivity Guard Report (I-462)",
+  "description": "Shape of the list returned by coderain.validator.scan_missing_origin(store) — one entry per managed-registry entry (store.gated_registries() + threads.md) whose `origin` attr is absent or not one of player/narrator/inferred. See docs/garde-agentivite-i462.md for the D-107 provenance rule this report enforces. Deliberately excludes any field that could name the entry's content (title, body, aliases) — `registry` + `slug` only, so the report is safe to log at any verbosity.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["registry", "slug"],
+    "additionalProperties": false,
+    "properties": {
+      "registry": {
+        "type": "string",
+        "description": "The managed registry file the entry lives in (MemoryStore.gated_registries(), plus threads.md).",
+        "enum": ["characters.md", "locations.md", "factions.md", "items.md", "canon-events.md", "threads.md"]
+      },
+      "slug": {
+        "type": "string",
+        "description": "The entry's stable slug — an identifier, not a spoiler by itself.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      }
+    }
+  }
+}

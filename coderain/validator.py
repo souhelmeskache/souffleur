@@ -796,6 +796,45 @@ def scan_hidden_forced(store) -> list[dict]:
     return out
 
 
+_ORIGINS = {"player", "narrator", "inferred"}
+
+
+def scan_missing_origin(store) -> list[dict]:
+    """The agentivity guard (I-462, D-107): flags every entry in a managed
+    registry (`store.gated_registries()` + threads.md) whose `origin` attr is
+    absent or not one of player/narrator/inferred.
+
+    `Summarizer._apply_promotions` (I-462) now stamps `origin` on every
+    promotion, new thread, and thread resolution it writes — the fold LLM is
+    told (SCENE_INSTRUCTION) to say whether the PLAYER's own turn forced the
+    change, a NARRATOR/NPC turn stated it unprompted, or it is merely
+    inferred. Before that stamp existed, nothing survived the fold to say
+    which: turns carry a role (memory.py's `turns()`) but `_turns_text`
+    flattens it into prompt prose that the JSON reply never has to echo back
+    — the exact mechanism the fold-arc bench caught (a player-forced action
+    resurfacing as a PNJ's spontaneous revelation, indistinguishable once
+    folded).
+
+    This is a PRESENCE/validity check only, same limits as scan_hidden_forced:
+    it cannot tell a truthful "player" stamp from a hallucinated one, only
+    that some stamp is there for the guard's cross-checks to build on next
+    (see docs/garde-agentivite-i462.md, "Ce que la garde ne fait pas"). An
+    entry with no `origin` at all is either hand-authored (fine — an author
+    isn't a fold, provenance doesn't apply) or fell through a fold path that
+    predates this guard or forgot to stamp it; either way a caller cannot
+    currently distinguish the two, so this stays a warning, never a block.
+
+    Returns one dict per offending entry: {"registry", "slug"} — never title
+    or body, same spoiler-safety rule as scan_hidden_forced (see
+    schemas/validator-provenance.json for the exact shape)."""
+    out: list[dict] = []
+    for rel in list(store.gated_registries()) + ["threads.md"]:
+        for e in store.entries(rel):
+            if str(e.attrs.get("origin", "")).strip().lower() not in _ORIGINS:
+                out.append({"registry": rel, "slug": e.slug})
+    return out
+
+
 def snapshot_state(store) -> dict:
     """Deep-copy the WHOLE mutable state for the pre-turn undo snapshot — with
     world deltas in play, undo must cover time/flags/location, not just the rpg
