@@ -133,12 +133,16 @@ Aucun changement de code produit pendant la passe.
 
 ## 7. Dépôt et écarts de protocole consignés
 
-- Dépôt disque (P1) au poste : `C:\Users\souhe\coderain-ingestion-dks-analyse\corpus-modules\death-knights-squire\`
+- Dépôt disque (P1) au poste, à l'époque de cette session : `C:\Users\souhe\coderain-ingestion-dks-analyse\corpus-modules\death-knights-squire\`
   (README, outil d'extraction, extraction/ 117 pages + 7 sections, mesures JSON,
-  inventaires json+md ×2, cartographie, estimation). Ce dossier est
+  inventaires json+md ×2, cartographie, estimation). Ce dossier était
   **gitignoré par le dépôt lui-même** (`.gitignore` ligne 22, matériau de
   campagne — D-178, cohérent avec cli.py « no material ever enters git ») :
-  il ne peut pas remonter par commit sans forcer outre une politique explicite.
+  il ne pouvait pas remonter par commit sans forcer outre une politique explicite.
+  *Mise à jour 2026-08-28 (phase 1 assainissement) : le corpus a depuis été
+  déplacé hors du repo moteur vers le dépôt privé dédié `ttrpg-corpus` ; le
+  chemin ci-dessus est un repère historique, plus l'emplacement actuel — voir
+  `coderain/config.py:corpus_dir()`.*
   Le commit porte donc la **forme seule** : fixture synthétique 100 %
   `tests/fixtures/module-fixture-gamebook-s2.txt` (prévue par la fiche :
   « tests\fixtures\ — fixtures de structure si besoin »), zéro contenu réel.

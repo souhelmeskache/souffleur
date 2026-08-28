@@ -79,11 +79,10 @@ assert info_director["secrets_suppressed"] is False, \
     "secrets_suppressed must be False for Director path"
 
 # ---- Improvisation rate D-128: measured on partition-pconv3 ----
+from coderain.config import corpus_dir
 from coderain.converter.aval import load_partition, get_node
 
-partition_path = Path(
-    r"C:\Users\souhe\coderain\corpus-modules"
-    r"\death-knights-squire\partition-pconv3")
+partition_path = corpus_dir() / "death-knights-squire" / "partition-pconv3"
 if partition_path.exists():
     part = load_partition(partition_path)
     total_node_chars = sum(

@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from coderain.config import corpus_dir
 from coderain.converter import validate_form, validate_fidelity
 from coderain.converter.aval import load_partition
 from coderain.converter.emit import write_partition
@@ -127,15 +128,13 @@ finally:
 
 # (b) partition-pconv3 réelle + Vahn synthétique VERT -----------------------
 section("(b) partition-pconv3 reelle + Vahn synthetique VERT")
-PCONV3 = Path(r"C:\Users\souhe\coderain\corpus-modules"
-              r"\death-knights-squire\partition-pconv3")
+PCONV3 = corpus_dir() / "death-knights-squire" / "partition-pconv3"
 if PCONV3.exists():
     import hashlib
     from datetime import datetime, timezone
 
-    texte = Path(r"C:\Users\souhe\coderain\corpus-modules"
-                 r"\death-knights-squire\extraction"
-                 r"\source-pconv0-p10-98.txt").read_text(encoding="utf-8")
+    texte = (corpus_dir() / "death-knights-squire" / "extraction"
+             / "source-pconv0-p10-98.txt").read_text(encoding="utf-8")
     manifest_obj = Manifest(
         titre="Death Knight's Squire", corpus_source="5e",
         corpus_cible="5e", structures=["S1", "S2"],

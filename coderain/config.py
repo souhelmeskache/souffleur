@@ -134,6 +134,30 @@ def build_profile(data: dict, name: str, model: str | None = None) -> Profile:
     )
 
 
+def corpus_dir() -> Path:
+    """Root of the campaign-material corpus (module converter input, real-
+    partition test fixtures). Lives entirely outside this repo (D-178/D-224) —
+    backed up in the private `ttrpg-corpus` GitHub repo since 2026-08-28
+    (phase 1 assainissement). Resolution order: `CORPUS_DIR` env var >
+    `corpus_dir:` key in config.yaml > historical default location.
+
+    Never raises — the corpus is optional (callers check `.exists()`; tests
+    skip their real-partition sections when it's absent, same as before)."""
+    override = os.environ.get("CORPUS_DIR", "").strip()
+    if override:
+        return Path(override)
+    cfg_path = ROOT / "config.yaml"
+    if cfg_path.exists():
+        try:
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            raw = data.get("corpus_dir")
+            if raw:
+                return Path(raw)
+        except Exception:
+            pass  # malformed config.yaml here is not this function's problem
+    return Path(r"C:\Users\souhe\ttrpg-corpus")
+
+
 def load_config(path: str | Path | None = None) -> Config:
     load_dotenv(ROOT / ".env")
     cfg_path = Path(path) if path else ROOT / "config.yaml"
