@@ -12,9 +12,11 @@ import re
 from typing import Iterator
 
 from . import features
+from . import input_processor
 from . import sidecar as sidecar_mod
 from . import validator as validator_mod
 from .config import Config, context_budget
+from .input_processor import ProcessedInput
 from .llm import LLM
 from .memory import Entry, MemoryStore, safe_output_regex
 from .summarizer import Summarizer
@@ -134,6 +136,10 @@ class Engine:
         self._rpg_events: list[str] = []
         self._swipes = None            # ST-02 alternates for the last narrator turn
         self._pre_turn_rpg = None
+        # I-373: the last turn's routing result (input_processor.process),
+        # consulted by _augment_pack to surface LE PACK's propositions to the
+        # Director. None before the first routed turn.
+        self._last_route: ProcessedInput | None = None
         # Md mutations aren't covered by the state.json snapshot, so undo/retry
         # reverts them explicitly: reveals get re-hidden, canon events added by
         # this turn get removed, consumed event rules get un-consumed.
@@ -158,7 +164,42 @@ class Engine:
                                        scenes_tail=self.scenes_tail,
                                        budget_tokens=self.budget,
                                        retriever=self.retriever)
-        return self._augment_style(self._augment_rpg(messages))
+        return self._augment_pack(self._augment_style(self._augment_rpg(messages)))
+
+    def route_input(self, player_input: str) -> ProcessedInput:
+        """Le processeur d'entrée v-min (I-373) : route `player_input` vers les
+        3 registres D-092 (parole/intériorité/action) + la ligne PAROLE (trou
+        N4) + les commandes méta (I-237) — voir coderain/input_processor.py
+        pour la table complète. Effet de bord : chaque segment 'interiorite'
+        est extrait vers le support biographique D-233b (réceptacle stub tant
+        qu'il n'existe pas). Ne génère rien et n'appelle pas le Director;
+        c'est `turn()` qui dispatche une commande vers son propriétaire
+        déclaré au lieu d'un tour normal. Le résultat est mémorisé sur
+        self._last_route pour que _augment_pack sache quoi remonter."""
+        processed = input_processor.process(player_input)
+        interior = [s for s in processed.segments if s.registre == "interiorite"]
+        if interior:
+            input_processor.extraire_interiorite(
+                self.store, interior, len(self.store.turns()) + 1)
+        self._last_route = processed
+        return processed
+
+    def _augment_pack(self, messages):
+        """I-373 : LE PACK — tout ce que le processeur d'entrée n'a pas su
+        router monte au Director en un objet unique, chaque pièce avec une
+        PROPOSITION de lecture, jamais une décision (le processeur propose,
+        le Director tranche). Zéro fait n'est écrit à partir de ces
+        propositions : elles ne quittent jamais ce bloc de prompt."""
+        processed = self._last_route
+        if not messages or processed is None or not processed.pack:
+            return messages
+        lines = [f'- "{item.text}" — proposition : {item.proposition}'
+                 for item in processed.pack]
+        add = ("\n\n# PACK D'ENTRÉE NON ROUTÉ (I-373)\nPropositions de "
+               "lecture ci-dessous, PAS des faits établis — à toi de "
+               "trancher :\n" + "\n".join(lines))
+        return [{**messages[0], "content": messages[0]["content"] + add},
+               *messages[1:]]
 
     def _authors_note_cfg(self) -> tuple[str, int]:
         """ST-21: per-save author's-note placement — depth ('system' | 'tail') and
@@ -284,7 +325,22 @@ class Engine:
         yield from self._generate_and_store(messages, on_stage)
 
     def turn(self, player_input: str, on_stage=None) -> Iterator[str]:
-        self._rpg_events = []
+        # I-373: route BEFORE anything else lands in the transcript. A meta
+        # command (annuler/rejouer) never becomes a player turn and never
+        # reaches the Director — it dispatches straight to its declared
+        # owner (undo_last/swipe_generate), reusing their logic verbatim.
+        processed = self.route_input(player_input)
+        if processed.commande is not None:
+            self._rpg_events = []
+            if processed.commande.proprietaire == "undo_last":
+                self.undo_last()
+            elif processed.commande.proprietaire == "swipe_generate":
+                yield from self.swipe_generate(on_stage=on_stage)
+            return
+        self._rpg_events = [
+            f"input: {processed.pack_ratio:.0%} transmis brut au Director "
+            f"({input_processor.classify_pack_ratio(processed.pack_ratio)}) "
+            "(I-373)"]
         self._pre_turn_rpg = self._snapshot_rpg()
         self._pre_turn_reveals = []
         self._pre_turn_canon = []
