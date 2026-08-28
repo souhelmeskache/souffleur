@@ -1,12 +1,12 @@
-﻿"""D-218 contrat traversant : codes de tension (6) ÔÇö enum, validator, emit, int├®gr├®e.
-100% synth├®tique (D-109) sauf section 6 (partition-pconv3 r├®elle).
+"""D-218 contrat traversant : codes de tension (6) — enum, validator, emit, intégrée.
+100% synthétique (D-109) sauf section 6 (partition-pconv3 réelle).
 6 sections :
-  1. TENSION_CODES enum ÔÇö 6 valeurs canoniques
-  2. Validator vert ÔÇö tensions valides passent
-  3. Validator rouge ÔÇö cat├®gorie hors codes ÔçÆ tension_code_invalide
-  4. Emit garde ÔÇö cat├®gorie invalide ÔçÆ ValueError non silencieuse
-  5. Code valide accept├® + undefined refus├®
-  6. partition-pconv3 int├®gr├®e ÔÇö 9 tensions r├®elles toutes valides
+  1. TENSION_CODES enum — 6 valeurs canoniques
+  2. Validator vert — tensions valides passent
+  3. Validator rouge — catégorie hors codes ⇒ tension_code_invalide
+  4. Emit garde — catégorie invalide ⇒ ValueError non silencieuse
+  5. Code valide accepté + undefined refusé
+  6. partition-pconv3 intégrée — 9 tensions réelles toutes valides
 """
 from __future__ import annotations
 
@@ -49,11 +49,11 @@ def node(nid="scene-1", body="Contenu de scene.", anchors=None):
 
 def partition_min():
     p = Partition(manifest())
-    p.nodes.append(node("scene-1", "La for├¬t s'├®tend.", [(0, 10)]))
-    p.nodes.append(node("scene-2", "Le ch├óteau.", [(10, 20)]))
+    p.nodes.append(node("scene-1", "La forêt s'étend.", [(0, 10)]))
+    p.nodes.append(node("scene-2", "Le château.", [(10, 20)]))
     p.nodes[-1].liens.append({"cible_id": "scene-1", "condition_textuelle": "retour"})
     p.aventure = Aventure(
-        [{"id": "traj-01", "description_md": "Qu├¬te accept├®e",
+        [{"id": "traj-01", "description_md": "Quête acceptée",
           "declencheur": {"type": "etat", "valeur": "quete acceptee"},
           "perturbations": [{"condition_etat": "abandon", "issue": "abandonnee",
                              "porteur_cible_id": "scene-1"}],
@@ -80,13 +80,13 @@ try:
                                  "scene-1", [(0, 5)]))
     part.tensions.append(Tension("t-horloge", "horloge", "Le temps presse",
                                  "scene-1", [(0, 5)]))
-    part.tensions.append(Tension("t-echeance", "echeance", "├ëch├®ance du rituel",
+    part.tensions.append(Tension("t-echeance", "echeance", "Échéance du rituel",
                                  "scene-2", [(10, 15)]))
-    part.tensions.append(Tension("t-cout", "cout", "Un prix ├á payer",
+    part.tensions.append(Tension("t-cout", "cout", "Un prix à payer",
                                  "scene-2", [(10, 15)]))
     part.tensions.append(Tension("t-choix", "choix", "Dire ou mentir",
                                  "scene-1", [(3, 8)]))
-    part.tensions.append(Tension("t-revelation", "revelation", "Secret r├®v├®l├®",
+    part.tensions.append(Tension("t-revelation", "revelation", "Secret révélé",
                                  "scene-2", [(12, 18)]))
     (tmp / "directeur.md").write_text("# Brief\nSans secret.\n", encoding="utf-8")
     errs = validate_form.validate_form(part, tmp)
@@ -94,7 +94,7 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
-# 3 -- Validator rouge : cat├®gorie hors codes ÔçÆ tension_code_invalide ------
+# 3 -- Validator rouge : catégorie hors codes ⇒ tension_code_invalide ------
 section("validator rouge : categorie hors codes => tension_code_invalide")
 part = partition_min()
 t_bad = Tension.__new__(Tension)
@@ -109,7 +109,7 @@ assert any("tension_code_invalide" in e for e in errs), \
     f"attendu tension_code_invalide dans {errs}"
 assert any("emotion" in e for e in errs), f"attendu 'emotion' dans {errs}"
 
-# 4 -- Emit garde : cat├®gorie invalide ÔçÆ ValueError non silencieuse --------
+# 4 -- Emit garde : catégorie invalide ⇒ ValueError non silencieuse --------
 section("emit garde : categorie invalide => ValueError non silencieuse")
 tmp = Path(tempfile.mkdtemp(prefix="d218-emit-"))
 try:
@@ -117,7 +117,7 @@ try:
     t_bad2 = Tension.__new__(Tension)
     t_bad2.id = "t-undefined-cat"
     t_bad2.categorie = "undefined"
-    t_bad2.description_md = "Cat├®gorie non d├®finie"
+    t_bad2.description_md = "Catégorie non définie"
     t_bad2.node_id = "scene-1"
     t_bad2.anchors = [(0, 5)]
     part.tensions.append(t_bad2)
@@ -131,7 +131,7 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
-# 5 -- Code valide accept├® + undefined refus├® ------------------------------
+# 5 -- Code valide accepté + undefined refusé ------------------------------
 section("code valide accepte + undefined refuse")
 tmp = Path(tempfile.mkdtemp(prefix="d218-accept-"))
 try:
@@ -145,7 +145,7 @@ try:
     assert idx["tensions"][0]["categorie"] == "menace"
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
-# undefined ÔåÆ rejet├® par le constructeur Tension
+# undefined → rejeté par le constructeur Tension
 for bad in ("undefined", None, "", "emotion", "peur"):
     try:
         if bad is None:
@@ -165,7 +165,7 @@ for bad in ("undefined", None, "", "emotion", "peur"):
     except ValueError:
         pass
 
-# 6 -- partition-pconv3 int├®gr├®e : 9 tensions r├®elles toutes valides -------
+# 6 -- partition-pconv3 intégrée : 9 tensions réelles toutes valides -------
 section("partition-pconv3 integree : 9 tensions reelles toutes valides")
 part_dir = corpus_dir() / "death-knights-squire" / "partition-pconv3"
 if part_dir.exists():
@@ -222,7 +222,7 @@ if part_dir.exists():
         fm_av = json.loads(m_av.group(1))
         part_test.aventure = Aventure(fm_av.get("trajectoire", []), fm_av.get("conditions", []),
                                        fm_av.get("charniere_md", "") if "charniere_md" in fm_av else
-                                       av_text.split("## Charni├¿re de sortie")[-1].strip() if "## Charni├¿re" in av_text else "")
+                                       av_text.split("## Charnière de sortie")[-1].strip() if "## Charnière" in av_text else "")
     else:
         part_test.aventure = Aventure([], [], "")
     # validate_form vert sur partition-pconv3 + 9 tensions
@@ -241,5 +241,5 @@ if part_dir.exists():
 else:
     print("SKIP partition-pconv3 : dossier absent (CI)")
 
-print(f"\nOK test-auteur-codes-tension ÔÇö {len(FAIT)}/6 sections vertes")
+print(f"\nOK test-auteur-codes-tension — {len(FAIT)}/6 sections vertes")
 assert len(FAIT) == 6, f"attendu 6 sections, got {len(FAIT)}"
