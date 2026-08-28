@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Character sheet — Coderain</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* I-329: standalone live character sheet. Reuses the SPA's matrix palette
+     (style.css :root) but needs its own layout — a single reading page, not
+     the app shell. */
+  body { overflow-y: auto; align-items: center; }
+  #sheet-root {
+    width: min(720px, 100%); margin: 32px auto; padding: 0 16px 48px;
+  }
+  #sheet-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 18px;
+  }
+  #sheet-head h1 { font-family: var(--mono); font-size: 20px; margin: 0; }
+  #sheet-clock { color: var(--dim); font-family: var(--mono); font-size: 13px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+  .bar-label { width: 70px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  .bar-track {
+    flex: 1; height: 10px; background: #1a1a1a; border-radius: 5px; overflow: hidden;
+  }
+  .bar-fill { height: 100%; }
+  .bar-fill.hp { background: var(--ok); }
+  .bar-fill.mana { background: #6ab0ff; }
+  .bar-value { width: 70px; text-align: right; font-family: var(--mono); font-size: 12px; }
+  .sheet-section { margin-top: 22px; }
+  .sheet-section h2 {
+    font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); border-bottom: 1px solid var(--line); padding-bottom: 4px;
+  }
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px 16px;
+  }
+  .stat-cell { display: flex; justify-content: space-between; font-family: var(--mono); }
+  .stat-cell .v { color: var(--accent); }
+  ul.plain { list-style: none; padding: 0; margin: 6px 0; }
+  ul.plain li { padding: 3px 0; }
+  .muted { color: var(--dim); }
+  .cond-tag {
+    display: inline-block; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 4px; padding: 2px 8px; margin: 2px 4px 2px 0; font-size: 12px;
+  }
+  #sheet-error { color: var(--danger); margin-top: 20px; }
+</style>
+</head>
+<body>
+<div id="sheet-root">
+  <div id="sheet-head">
+    <h1 id="sheet-title">Character sheet</h1>
+    <span id="sheet-clock" class="muted"></span>
+  </div>
+  <div id="sheet-body">
+    <p class="muted">Loading…</p>
+  </div>
+  <div id="sheet-error"></div>
+</div>
+
+<script>
+/* I-329: live character sheet, source = get_world_state via
+   GET /api/saves/{slug}/rpg (server.py `_rpg_payload`, same data the running
+   story's pinned side panel renders as text). Polls so it stays "vivante"
+   while a session plays in another tab — no save selector, no write path:
+   read-only reflection of engine state. */
+(function () {
+  const qs = new URLSearchParams(location.search);
+  const slug = qs.get("save");
+  const root = document.getElementById("sheet-body");
+  const errEl = document.getElementById("sheet-error");
+  const POLL_MS = 4000;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function bar(label, value, max, cls) {
+    const v = Number(value) || 0, m = Math.max(1, Number(max) || 1);
+    const pct = Math.max(0, Math.min(100, (v / m) * 100));
+    return `<div class="bar-row">
+      <span class="bar-label">${esc(label)}</span>
+      <span class="bar-track"><span class="bar-fill ${cls}" style="width:${pct}%"></span></span>
+      <span class="bar-value">${v}/${m}</span>
+    </div>`;
+  }
+
+  function section(title, inner) {
+    return `<div class="sheet-section"><h2>${esc(title)}</h2>${inner}</div>`;
+  }
+
+  function render(payload) {
+    if (!payload || !payload.enabled) {
+      root.innerHTML = '<p class="muted">RPG mechanics are off for this save — '
+        + "nothing to show.</p>";
+      return;
+    }
+    const p = payload.player || {};
+    const world = payload.world || {};
+    let html = "";
+    html += bar("HP", p.hp, p.hp_max, "hp");
+    if (p.mana_max) html += bar("Mana", p.mana, p.mana_max, "mana");
+    html += `<div class="bar-row"><span class="bar-label">Level</span>`
+      + `<span>${esc(p.level ?? 1)} <span class="muted">(XP ${esc(p.xp ?? 0)})</span></span></div>`;
+
+    const stats = p.stats || {};
+    if (Object.keys(stats).length) {
+      html += section("Stats", '<div class="stat-grid">' + Object.entries(stats).map(
+        ([k, v]) => `<div class="stat-cell"><span>${esc(k)}</span>`
+          + `<span class="v">${v >= 0 ? "+" : ""}${esc(v)}</span></div>`
+      ).join("") + "</div>");
+    }
+
+    if ((p.conditions || []).length) {
+      html += section("Conditions", (p.conditions || [])
+        .map(c => `<span class="cond-tag">${esc(c)}</span>`).join(""));
+    }
+    if ((p.abilities || []).length) {
+      html += section("Abilities", '<ul class="plain">'
+        + p.abilities.map(a => `<li>${esc(a)}</li>`).join("") + "</ul>");
+    }
+    if ((p.titles || []).length) {
+      html += section("Titles", '<ul class="plain">'
+        + p.titles.map(t => `<li>${esc(t)}</li>`).join("") + "</ul>");
+    }
+
+    const inv = payload.inventory || {};
+    if (Object.keys(inv).length) {
+      html += section("Inventory", '<ul class="plain">' + Object.entries(inv).map(
+        ([slug, it]) => `<li>${esc(slug)} ×${esc(it.qty ?? 1)}`
+          + (it.equipped ? ' <span class="muted">[equipped]</span>' : "") + "</li>"
+      ).join("") + "</ul>");
+    }
+
+    const comps = payload.companions || {};
+    if (Object.keys(comps).length) {
+      html += section("Companions", '<ul class="plain">' + Object.entries(comps).map(
+        ([slug, c]) => `<li>${esc(slug)} <span class="muted">(trust ${esc(c.trust ?? 0)}`
+          + (c.mood ? `, ${esc(c.mood)}` : "") + ")</span></li>"
+      ).join("") + "</ul>");
+    }
+
+    const ens = payload.enemies || {};
+    if (Object.keys(ens).length) {
+      html += section("Enemies", (Object.entries(ens).map(([slug, e]) =>
+        bar(slug, e.hp, e.hp_max, "hp")).join("")));
+    }
+
+    if ((world.quests_active || []).length) {
+      html += section("Active quests", '<ul class="plain">'
+        + world.quests_active.map(q => `<li>${esc(q)}</li>`).join("") + "</ul>");
+    }
+
+    const lc = payload.last_check;
+    if (lc && typeof lc === "object") {
+      const who = lc.actor ? esc(lc.actor) + ": " : "";
+      html += section("Last check", `<p>${who}${esc(lc.stat)} vs DC${esc(lc.dc)} — `
+        + `rolled ${esc(lc.total)} → `
+        + `<strong>${lc.success ? "SUCCESS" : "FAIL"}</strong></p>`);
+    }
+
+    root.innerHTML = html;
+    const clockEl = document.getElementById("sheet-clock");
+    const bits = [world.day != null ? "Day " + world.day : null, world.phase,
+      world.location].filter(Boolean);
+    clockEl.textContent = bits.join(" · ");
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch(`/api/saves/${encodeURIComponent(slug)}/rpg`);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const payload = await res.json();
+      errEl.textContent = "";
+      render(payload);
+    } catch (e) {
+      errEl.textContent = "couldn't reach the server: " + e.message;
+    }
+  }
+
+  if (!slug) {
+    root.innerHTML = "";
+    errEl.textContent = "no save specified — open this page as "
+      + "character-sheet.html?save=<slug>";
+  } else {
+    document.getElementById("sheet-title").textContent = "Character sheet — " + slug;
+    poll();
+    setInterval(poll, POLL_MS);
+  }
+})();
+</script>
+</body>
+</html>

@@ -138,6 +138,36 @@ def _save_payload(slug: str) -> dict:
     }
 
 
+def _rpg_payload(store: MemoryStore) -> dict:
+    """Structured character-sheet + combat data (I-329): the same source as the
+    text sheet (`_sheet_lines`/`rpg_mod.render_sheet_lines`) but as plain dicts,
+    for the live character-sheet page and the combat canvas to render without
+    parsing formatted text. Empty/inert shape when RPG mechanics are off."""
+    rpg = store.rpg_state()
+    world = store.world_state()
+    if not rpg.get("enabled"):
+        return {"enabled": False}
+    wplayer = world.get("player") if isinstance(world.get("player"), dict) else {}
+    time = world.get("time") if isinstance(world.get("time"), dict) else {}
+    quests = world.get("quests") if isinstance(world.get("quests"), dict) else {}
+    return {
+        "enabled": True,
+        "player": rpg.get("player", {}),
+        "inventory": rpg.get("inventory", {}),
+        "companions": rpg.get("companions", {}),
+        "enemies": rpg.get("enemies", {}),
+        "last_check": rpg.get("last_check"),
+        "world": {
+            "day": time.get("day"),
+            "phase": time.get("phase"),
+            "weather": time.get("weather"),
+            "location": wplayer.get("location"),
+            "gold": wplayer.get("gold"),
+            "quests_active": [s for s, st in quests.items() if st == "active"],
+        },
+    }
+
+
 def _sheet_lines(eng: Engine) -> list[str]:
     store = eng.store
     if not store.rpg_enabled():
@@ -707,6 +737,13 @@ def _clean_regex_rules(raw) -> list[dict]:
         if len(out) >= 30:
             break
     return out
+
+
+@app.get("/api/saves/{slug}/rpg")
+def get_rpg(slug: str):
+    """I-329: structured sheet + combat data for character-sheet.html and
+    combat-canvas.js — see `_rpg_payload`."""
+    return _rpg_payload(_save_store(slug))
 
 
 @app.get("/api/saves/{slug}/aids")

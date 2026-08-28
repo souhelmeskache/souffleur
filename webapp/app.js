@@ -105,6 +105,9 @@ async function render() {
     if (h.startsWith("#play/")) await renderPlay(h.slice(6));
     else if (h.startsWith("#world/")) await renderBuilder(h.slice(7), "scenario");
     else if (h.startsWith("#edit/")) await renderBuilder(h.slice(6), "save");
+    else if (h.startsWith("#combat/")) {
+      view.innerHTML = ""; await renderCombatView(view, h.slice(8));
+    }
     else if (h === "#combat") { view.innerHTML = ""; renderCombatView(view); }
     else if (h === "#characters") await renderCharacters();
     else if (h === "#defaults") await renderDefaults();
@@ -1064,8 +1067,17 @@ async function renderPlay(slug) {
   };
   const setSheet = lines => {
     const el = $("#sheet");
-    if (el) el.innerHTML =
-      '<div class="sheet-title">Character</div>' + esc(lines.join("\n"));
+    if (!el) return;
+    // I-329: the pinned panel keeps its compact text render; these links open
+    // the fuller live views (character-sheet.html, the combat canvas) fed by
+    // the same source (get_world_state via /api/saves/{slug}/rpg).
+    el.innerHTML =
+      '<div class="sheet-title">Character</div>'
+      + `<div class="sheet-links">`
+      + `<a href="character-sheet.html?save=${encodeURIComponent(slug)}" target="_blank">Full sheet ↗</a> `
+      + `<a href="#combat/${encodeURIComponent(slug)}">Combat</a>`
+      + `</div>`
+      + esc(lines.join("\n"));
   };
   const setEvents = events => {
     evbar.innerHTML = (events || []).map(e =>
@@ -1848,13 +1860,57 @@ const FICHE_FIXTURE = {
 };
 
 let _battleGrid = null;
+let _liveCombat = null;
+let _combatCanvasLoad = null;
 
-function renderCombatView(container) {
+// I-329: combat-canvas.js isn't in index.html's static script tags (it's only
+// needed for a live combat session, not the story/library views) — load it
+// once, lazily, the first time a real save's combat is opened.
+function loadCombatCanvas() {
+  if (window.LiveCombat) return Promise.resolve();
+  if (!_combatCanvasLoad) {
+    _combatCanvasLoad = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "combat-canvas.js";
+      s.onload = resolve;
+      s.onerror = () => reject(new Error("combat-canvas.js failed to load"));
+      document.head.appendChild(s);
+    });
+  }
+  return _combatCanvasLoad;
+}
+
+async function renderCombatView(container, slug) {
   const tpl = document.getElementById("tpl-combat-view");
   if (!tpl) return;
   const frag = tpl.content.cloneNode(true);
   container.appendChild(frag);
   const area = document.getElementById("battle-area");
+  const backBtn = document.getElementById("combat-back");
+
+  if (slug) {
+    // Live mode: real HP/roster from get_world_state, polled — see
+    // combat-canvas.js (RpgCombat.fromPayload / LiveCombat).
+    try {
+      await loadCombatCanvas();
+    } catch (e) {
+      area.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+      return;
+    }
+    _liveCombat = new LiveCombat(area, {slug, cols: 12, rows: 8, cellSize: 48});
+    _liveCombat.onLog = e => { _liveCombat.grid.addLog(e); updateCombatLog(_liveCombat.grid); };
+    document.getElementById("combat-round").textContent = "";
+    _liveCombat.start();
+    updateCombatLog(_liveCombat.grid);
+    updateCombatInitiative(_liveCombat.initiative,
+      id => (_liveCombat.grid.tokens.find(t => t.id === id) || {}).name || id);
+    if (backBtn) backBtn.addEventListener("click", () => {
+      if (_liveCombat) { _liveCombat.destroy(); _liveCombat = null; }
+      location.hash = `#play/${encodeURIComponent(slug)}`;
+    });
+    return;
+  }
+
   _battleGrid = new BattleGrid(area, {cols: 12, rows: 8, cellSize: 48});
   _battleGrid.loadTokens(DKS_FIXTURE.tokens);
   _battleGrid.onMove = (token, oldCol, oldRow) => {
@@ -1866,33 +1922,33 @@ function renderCombatView(container) {
   updateCombatLog();
   updateCombatInitiative();
   document.getElementById("combat-round").textContent = "Round " + DKS_FIXTURE.round;
-  const backBtn = document.getElementById("combat-back");
   if (backBtn) backBtn.addEventListener("click", () => {
     if (_battleGrid) { _battleGrid.destroy(); _battleGrid = null; }
     location.hash = "#library";
   });
 }
 
-function updateCombatLog() {
+function updateCombatLog(grid) {
+  grid = grid || _battleGrid;
   const el = document.getElementById("combat-log");
-  if (!el || !_battleGrid) return;
-  el.innerHTML = _battleGrid.log.map(e => {
+  if (!el || !grid) return;
+  el.innerHTML = grid.log.map(e => {
     const cls = e.t === "dmg" || e.t === "attack" ? "log-dmg" : e.t === "heal" ? "log-heal" : "log-move";
     return '<div class="log-entry ' + cls + '">' + esc(e.text) + "</div>";
   }).join("");
   el.scrollTop = el.scrollHeight;
 }
 
-function updateCombatInitiative() {
+function updateCombatInitiative(order, nameOf) {
   const el = document.getElementById("combat-initiative");
   if (!el) return;
+  order = order || DKS_FIXTURE.initiative;
+  nameOf = nameOf || (id => (DKS_FIXTURE.tokens.find(x => x.id === id) || {}).name || id);
   const activeIdx = 0;
   el.innerHTML = '<div class="init-title">Initiative</div>' +
-    DKS_FIXTURE.initiative.map((id, i) => {
-      const t = DKS_FIXTURE.tokens.find(x => x.id === id);
-      const name = t ? t.name : id;
+    order.map((id, i) => {
       const active = i === activeIdx ? " active" : "";
-      return '<div class="init-row' + active + '"><span class="init-num">' + (20 - i * 2) + '</span> ' + esc(name) + "</div>";
+      return '<div class="init-row' + active + '"><span class="init-num">' + (20 - i * 2) + '</span> ' + esc(nameOf(id)) + "</div>";
     }).join("");
 }
 
