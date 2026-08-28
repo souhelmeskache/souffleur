@@ -1380,7 +1380,7 @@ class MemoryStore:
         if player:
             sections.append(
                 (0, "You",
-                 "\n\n".join(e.render() + _persistent_suffix(e, pstate)
+                 "\n\n".join(_context_render(e) + _persistent_suffix(e, pstate)
                              for e in player)))
         clock = self.clock_str()
         loc = self.world_state().get("player", {}).get("location", "")
@@ -1398,7 +1398,7 @@ class MemoryStore:
         if open_threads:
             sections.append(
                 (1, "Open threads",
-                 "\n\n".join(e.render() + _persistent_suffix(e, pstate)
+                 "\n\n".join(_context_render(e) + _persistent_suffix(e, pstate)
                              for e in open_threads)))
         arc = _strip_h1(self.read("memory/arc.md"))
         if arc:
@@ -1472,10 +1472,15 @@ class MemoryStore:
                 pr = 1 if any(e.pinned() or e.weight() == "critical"
                               for e in picked[rel]) else 2
                 sections.append((pr, label,
-                                 "\n\n".join(e.render()
+                                 "\n\n".join(_context_render(e)
                                              + _persistent_suffix(e, pstate)
                                              for e in picked[rel])))
         if hidden_hits:
+            # NOTE: this section keeps Entry.render() (not _context_render)
+            # deliberately -- mcp_server.py's secret-splice/leak guard
+            # (`_splice_secrets`/`_hidden_exposure`) matches hidden entries by
+            # locating this EXACT rendered text inside the assembled prefix;
+            # changing it here would desync that matching (I-376 review).
             sections.append((
                 2, "Secrets you know (NOT yet revealed to the player — "
                    "foreshadow, hint, let them discover; never state outright)",
@@ -1654,12 +1659,46 @@ def _persistent_suffix(e: Entry, pstate: dict | None) -> str:
             + "\n".join(lines))
 
 
+# Attribute keys that are purely internal bookkeeping (activation/authoring
+# machinery or raw ids) and never carry narrative content -- I-376 (D-82 the
+# narrator must never see an explicit "hidden"/secret-status marker; D-219
+# internal ids are invisible to narrator and player alike). Entry.render()
+# itself must keep dumping every attr verbatim (memory.py:447/454 round-trip
+# entries back to the authored Markdown file byte-for-byte), so the filter
+# lives in this narrator-facing sibling instead, used only at assemble()'s
+# context-building call sites -- never for file persistence.
+_INTERNAL_ATTRS = {
+    "hidden", "pinned", "weight", "chance", "delay", "sticky", "cooldown",
+    "triggers", "triggers_all", "triggers_not", "group", "semantic",
+    "recurse", "persistent", "origin", "resolved_origin",
+}
+
+
+def _context_render(e: Entry) -> str:
+    """Entry.render(), minus internal-only attrs (_INTERNAL_ATTRS) and any
+    attr whose KEY looks like a raw internal id (`node_id`, `tension_id`, a
+    bare `id`, or anything ending in `_id`/`_uuid`) -- narrator-facing text
+    should read as natural authored prose, never framework bookkeeping."""
+    lines = [f"## {e.title}  {{#{e.slug}}}"]
+    if e.aliases:
+        lines.append("aliases: " + ", ".join(e.aliases))
+    lines.append(f"importance: {e.importance}")
+    for k, v in e.attrs.items():
+        key = k.strip().lower()
+        if not v or key in _INTERNAL_ATTRS or key == "id" \
+                or key.endswith(("_id", "_uuid")):
+            continue
+        lines.append(f"{k}: {v}")
+    body = re.sub(r"(?m)^##(?=\s)", "###", e.body.strip())
+    return "\n".join(lines) + "\n\n" + body + "\n"
+
+
 def _masked_render(e: Entry) -> str:
     """A hidden entry seen through a recall tool: name only, framed as an
     unrevealed secret — never the body (the Secrets section in assemble() is
     the one sanctioned channel, with its foreshadow framing)."""
     if not e.hidden():
-        return e.render()
+        return _context_render(e)
     return (f"## {e.title}  {{#{e.slug}}}\n\n(SECRET — known to you but not "
             "yet revealed to the player. Foreshadow only; never state its "
             "details until it is revealed.)")
