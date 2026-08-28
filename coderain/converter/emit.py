@@ -156,13 +156,17 @@ def write_partition(partition, out_dir: Path) -> Path:
         (out_dir / "personnages" / f"{pers.id}.md").write_text(
             fm + body + "\n", encoding="utf-8")
     # I-033/D-219 fenêtres conversation d'accord — 4 fenêtres canoniques
-    # garde borne deux murs : tension_id requis, rattachement existant,
+    # garde borne deux murs : tension_id requis SEULEMENT pour F3
+    # (dimension lien_tension, D-219 §4) — optionnelle pour F1/F2/F4
+    # (I-370a, la garde suit la spec, pas l'inverse) ; rattachement existant,
     # zéro-spoiler (fenêtre négociable ne cite pas un secret)
     secret_ids = {s.id for s in partition.secrets}
     for fen in getattr(partition, "fenetres", []) or []:
-        if not getattr(fen, "tension_id", None):
+        if getattr(fen, "dimension", None) == "lien_tension" \
+                and not getattr(fen, "tension_id", None):
             raise ValueError(
                 f"fenetre {fen.id}: sans tension_id — borne à deux murs "
+                "exige tension D-218 pour F3 lien_tension "
                 "(I-033 §1a, D-219 §4)")
         ratt = getattr(fen, "rattachement", None)
         if ratt and ratt not in all_ids:

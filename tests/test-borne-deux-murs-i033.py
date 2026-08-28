@@ -1,13 +1,19 @@
 """I-033 borne à deux murs — fenêtres conversation d'accord (D-219 §4).
 100% synthétique (D-109) sauf section 7 (partition-pconv3 réelle).
-6 sections + validate_form :
-  1. F1 origine → vert (fenêtre valide, tension liée, rattachement existant)
-  2. F2 posture → vert
-  3. F3 lien_tension → vert
-  4. F4 enjeu → vert
+
+I-370a : la tension liée est obligatoire SEULEMENT pour F3 (dimension
+lien_tension) — F1/F2/F4 la portent en option, conformément à D-219 §4.
+La garde suit la spec, pas l'inverse.
+
+8 sections + validate_form :
+  1. F1 origine → vert (fenêtre valide SANS tension, rattachement existant)
+  2. F2 posture → vert (fenêtre valide SANS tension — cas réel, ex-contournement I-370a)
+  3. F3 lien_tension → vert (tension liée, requise)
+  4. F4 enjeu → vert (tension optionnelle, ici présente)
   5. Spoiler refusé — fenêtre négociable cite un secret → erreur
   6. Dangling refusé — rattachement inexistant → erreur
-  7. partition-pconv3 intégrée — 4 fenêtres vertes + validate_form vert
+  7. F3 sans tension → refusé (borne à deux murs (a), I-370a)
+  8. partition-pconv3 intégrée — 4 fenêtres vertes + validate_form vert
 """
 from __future__ import annotations
 
@@ -78,7 +84,7 @@ def partition_base():
 
 
 # 1 -- F1 origine → vert ---------------------------------------------------
-section("F1 origine : fenetre valide, tension liee, rattachement existant")
+section("F1 origine : fenetre valide SANS tension, rattachement existant")
 tmp = Path(tempfile.mkdtemp(prefix="i033-f1-"))
 try:
     part = partition_base()
@@ -87,14 +93,13 @@ try:
         "Vous avez survécu à la guerre d'Weathercote.",
         ["Soldat vétéran", "Recrue inexpérimentée", "Déserteur repentis"],
         negociable=True,
-        tension_id="tension-menace-1",
         rattachement="scene-origine"))
     write_partition(part, tmp)
     assert (tmp / "fenetres" / "f1-origine.md").exists()
     idx = json.loads((tmp / "index.json").read_text(encoding="utf-8"))
     assert len(idx["fenetres"]) == 1
     assert idx["fenetres"][0]["dimension"] == "origine"
-    assert idx["fenetres"][0]["tension_id"] == "tension-menace-1"
+    assert "tension_id" not in idx["fenetres"][0]
     (tmp / "directeur.md").write_text("# Brief\nSans secret.\n", encoding="utf-8")
     errs = validate_form.validate_form(part, tmp)
     assert errs == [], f"F1 VERT attendu mais {errs}"
@@ -102,7 +107,7 @@ finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
 # 2 -- F2 posture → vert ---------------------------------------------------
-section("F2 posture : fenetre valide avec tension choix")
+section("F2 posture : fenetre valide SANS tension — cas réel (I-370a)")
 tmp = Path(tempfile.mkdtemp(prefix="i033-f2-"))
 try:
     part = partition_base()
@@ -111,12 +116,12 @@ try:
         "Votre position dans la hiérarchie sociale.",
         ["Noble discret", "Roturier ambitieux"],
         negociable=True,
-        tension_id="tension-choix-1",
         rattachement="scene-chateau"))
     write_partition(part, tmp)
     assert (tmp / "fenetres" / "f2-posture.md").exists()
     idx = json.loads((tmp / "index.json").read_text(encoding="utf-8"))
     assert idx["fenetres"][0]["dimension"] == "posture"
+    assert "tension_id" not in idx["fenetres"][0]
     errs = validate_form.validate_form(part)
     assert errs == [], f"F2 VERT attendu mais {errs}"
 finally:
@@ -217,7 +222,21 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
-# 7 -- partition-pconv3 intégrée : 4 fenêtres vertes + validate_form -------
+# 7 -- F3 sans tension → refusé ---------------------------------------------
+section("F3 sans tension refuse : borne a deux murs (a) exige tension pour lien_tension")
+part = partition_base()
+part.fenetres.append(Fenetre(
+    "f3-sans-tension", "lien_tension", "Lien à la dette",
+    "Vous portez une dette envers un mort.",
+    ["Vengeur silencieux", "Gardien du souvenir"],
+    negociable=False,
+    non_negociable_msg="La dette existe, le mort est réel.",
+    rattachement="scene-origine"))
+errs = validate_form.validate_form(part)
+assert any("f3-sans-tension" in e and "tension_id" in e for e in errs), \
+    f"attendu erreur tension_id manquant pour F3 dans {errs}"
+
+# 8 -- partition-pconv3 intégrée : 4 fenêtres vertes + validate_form -------
 section("partition-pconv3 integree : 4 fenetres vertes + validate_form vert")
 part_dir = corpus_dir() / "death-knights-squire" / "partition-pconv3"
 if part_dir.exists():
@@ -295,19 +314,17 @@ if part_dir.exists():
     ressource_ids = [r.id for r in part_test.ressources]
     assert len(tension_ids) >= 4, f"tensions {len(tension_ids)} < 4"
     assert len(node_ids_list) >= 1, f"nodes {len(node_ids_list)} < 1"
-    # F1 origine
+    # F1 origine — sans tension (D-219 §4 : tension optionnelle hors F3)
     part_test.fenetres.append(Fenetre("f1-origine", "origine", "Ancien soldat",
                                        "Vous avez survécu à la guerre.",
                                        ["Vétéran", "Recrue"],
                                        negociable=True,
-                                       tension_id=tension_ids[0],
                                        rattachement=node_ids_list[0]))
-    # F2 posture
+    # F2 posture — sans tension, cas réel (I-370a, ex-contournement)
     part_test.fenetres.append(Fenetre("f2-posture", "posture", "Position sociale",
                                        "Votre place dans la hiérarchie.",
                                        ["Noble", "Roturier"],
                                        negociable=True,
-                                       tension_id=tension_ids[1],
                                        rattachement=node_ids_list[0]))
     # F3 lien_tension
     part_test.fenetres.append(Fenetre("f3-lien", "lien_tension", "Lien à la menace",
@@ -341,5 +358,5 @@ if part_dir.exists():
 else:
     print("SKIP partition-pconv3 : dossier absent (CI)")
 
-print(f"\nOK test-borne-deux-murs-i033 — {len(FAIT)}/7 sections vertes")
-assert len(FAIT) >= 6, f"attendu au moins 6 sections, got {len(FAIT)}"
+print(f"\nOK test-borne-deux-murs-i033 — {len(FAIT)}/8 sections vertes")
+assert len(FAIT) >= 7, f"attendu au moins 7 sections, got {len(FAIT)}"
