@@ -24,9 +24,17 @@
     Affiche ce qui serait lancé (issue, branche, worktree, pane, commandes
     herdr) sans rien créer ni lancer.
 
+.PARAMETER SessionTour
+    Nom de la session de tour de contrôle à tester en premier via SendMessage
+    au premier blocage de la lane (ex. meta-rpg-5f). Vide par défaut : ce nom
+    change à chaque fil de tour, aucune valeur figée ne resterait valide — sans
+    ce paramètre la lane saute directement le test du canal rapide et poste son
+    ``BLOQUÉ : ...`` sur l'Issue, qui reste le canal de secours garanti.
+
 .EXAMPLE
     .\tools\lancer-lane.ps1 14 -DryRun
     .\tools\lancer-lane.ps1 14 -Modele fable -Effort medium
+    .\tools\lancer-lane.ps1 14 -SessionTour meta-rpg-5f
 #>
 
 [CmdletBinding()]
@@ -41,6 +49,9 @@ param(
     [Parameter()]
     [ValidateSet('low', 'medium')]
     [string]$Effort,
+
+    [Parameter()]
+    [string]$SessionTour = '',
 
     [Parameter()]
     [switch]$DryRun
@@ -100,8 +111,45 @@ function Build-LanePrompt {
         [Parameter(Mandatory)] [int]$IssueNumber,
         [Parameter(Mandatory)] [string]$Title,
         [Parameter(Mandatory)] [string]$Body,
-        [Parameter(Mandatory)] [string]$RepoSlug
+        [Parameter(Mandatory)] [string]$RepoSlug,
+        [Parameter()] [string]$SessionTour = ''
     )
+
+    $canalRapide = if ($SessionTour) {
+        @"
+## Test du canal rapide (à faire une seule fois, au premier blocage)
+
+Avant de poster ton tout premier commentaire ``BLOQUÉ : ...`` sur cette
+Issue, tente d'abord ``SendMessage`` vers la session ``$SessionTour`` avec la
+question qui te bloque. C'est un test du canal rapide (interrogation directe
+d'une session plutôt qu'un aller-retour par commentaire GitHub) :
+
+- Si ``SendMessage`` aboutit (session trouvée, message envoyé) : note-le dans
+  ton commentaire ``BLOQUÉ : ...`` (« canal rapide testé : SendMessage vers
+  $SessionTour a fonctionné ») et attends sa réponse avant de continuer si elle
+  arrive vite ; sinon poste quand même le commentaire GitHub en parallèle pour
+  ne pas rester bloqué.
+- Si ``SendMessage`` échoue ou n'est pas disponible dans ton environnement :
+  note-le aussi dans le commentaire (« canal rapide testé : SendMessage
+  indisponible/échoué — repli sur commentaire GitHub ») et continue avec le
+  commentaire ``BLOQUÉ : ...`` normalement, qui reste le canal de secours
+  garanti.
+
+Ce test ne se refait pas à chaque blocage ultérieur de la même lane — une
+seule tentative suffit à établir si le canal fonctionne dans cet
+environnement ; les blocages suivants passent directement par le commentaire
+``BLOQUÉ : ...``.
+"@
+    } else {
+        @"
+## Canal rapide
+
+Pas de session de tour de contrôle fournie à ce lancement (paramètre
+``-SessionTour`` absent) — pas de test ``SendMessage``. Poste directement ton
+``BLOQUÉ : ...`` sur cette Issue dès qu'un arbitrage manque, qui est le canal
+garanti.
+"@
+    }
 
     @"
 # Lane — Issue #$IssueNumber : $Title
@@ -133,32 +181,11 @@ chacun des trois moments suivants — aucun n'est optionnel :
    non). Le commentaire commence littéralement par ``TERMINÉ : `` suivi du
    lien de la PR.
 
-## Test du canal rapide (à faire une seule fois, au premier blocage)
-
-Avant de poster ton tout premier commentaire ``BLOQUÉ : ...`` sur cette
-Issue, tente d'abord ``SendMessage`` vers la session ``meta-rpg-32`` avec la
-question qui te bloque. C'est un test du canal rapide (interrogation directe
-d'une session plutôt qu'un aller-retour par commentaire GitHub) :
-
-- Si ``SendMessage`` aboutit (session trouvée, message envoyé) : note-le dans
-  ton commentaire ``BLOQUÉ : ...`` (« canal rapide testé : SendMessage vers
-  meta-rpg-32 a fonctionné ») et attends sa réponse avant de continuer si elle
-  arrive vite ; sinon poste quand même le commentaire GitHub en parallèle pour
-  ne pas rester bloqué.
-- Si ``SendMessage`` échoue ou n'est pas disponible dans ton environnement :
-  note-le aussi dans le commentaire (« canal rapide testé : SendMessage
-  indisponible/échoué — repli sur commentaire GitHub ») et continue avec le
-  commentaire ``BLOQUÉ : ...`` normalement, qui reste le canal de secours
-  garanti.
-
-Ce test ne se refait pas à chaque blocage ultérieur de la même lane — une
-seule tentative suffit à établir si le canal fonctionne dans cet
-environnement ; les blocages suivants passent directement par le commentaire
-``BLOQUÉ : ...``.
+$canalRapide
 "@
 }
 
-$promptText = Build-LanePrompt -IssueNumber $issueData.number -Title $issueData.title -Body $issueData.body -RepoSlug $RepoSlug
+$promptText = Build-LanePrompt -IssueNumber $issueData.number -Title $issueData.title -Body $issueData.body -RepoSlug $RepoSlug -SessionTour $SessionTour
 
 $branch = "lane-$Issue"
 $agentName = "lane-$Issue"
@@ -176,7 +203,8 @@ if ($DryRun) {
     Write-Output "Nom agent      : $agentName"
     Write-Output ""
     Write-Output "Commandes qui seraient exécutées :"
-    Write-Output "  herdr worktree create --cwd `"$RepoRoot`" --branch $branch"
+    Write-Output "  git -C `"$RepoRoot`" fetch origin main"
+    Write-Output "  herdr worktree create --cwd `"$RepoRoot`" --branch $branch --base origin/main"
     Write-Output "  git -C <repo> config extensions.worktreeConfig true"
     Write-Output "  git -C <worktree> config --worktree credential.helper `"`""
     Write-Output "  git -C <worktree> config --worktree --add credential.helper '!gh auth git-credential'"
@@ -191,8 +219,22 @@ if ($DryRun) {
 
 # --- 6. Exécution réelle ---------------------------------------------------
 
+Write-Output "Fetch d'origin/main (base fraîche de la branche de lane)..."
+# `herdr worktree create` ne fait ni fetch ni choix de base par lui-même : sans
+# --base explicite, la branche de lane est coupée depuis le HEAD courant du
+# dépôt principal — s'il n'est pas sur `main` au moment du lancement, la lane
+# hérite des commits de la branche courante en plus des siens. Cause constatée
+# de la pollution de la PR #20 (lane-18 lancée depuis la branche du lanceur ->
+# 3 fichiers au lieu d'un, cf. revue PR #17). Fetch + --base origin/main
+# garantissent une base saine indépendamment de la branche du repo principal.
+git -C $RepoRoot fetch origin main
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Échec de 'git fetch origin main' — base de lane non garantie fraîche, abandon."
+    exit 1
+}
+
 Write-Output "Création du worktree + pane pour la lane-$Issue..."
-$worktreeJson = herdr worktree create --cwd $RepoRoot --branch $branch
+$worktreeJson = herdr worktree create --cwd $RepoRoot --branch $branch --base origin/main
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr worktree create' pour la branche $branch."
     exit 1
