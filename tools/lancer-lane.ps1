@@ -177,6 +177,10 @@ if ($DryRun) {
     Write-Output ""
     Write-Output "Commandes qui seraient exécutées :"
     Write-Output "  herdr worktree create --cwd `"$RepoRoot`" --branch $branch"
+    Write-Output "  git -C <repo> config extensions.worktreeConfig true"
+    Write-Output "  git -C <worktree> config --worktree credential.helper `"`""
+    Write-Output "  git -C <worktree> config --worktree --add credential.helper '!gh auth git-credential'"
+    Write-Output '  herdr pane run <pane_id_du_worktree> $env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)'
     Write-Output "  herdr agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode acceptEdits"
     Write-Output "  herdr agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
     Write-Output ""
@@ -199,6 +203,44 @@ $worktreePath = $worktreeData.result.worktree.path
 
 Write-Output "Worktree : $worktreePath"
 Write-Output "Pane     : $paneId"
+
+# --- Jeton scopé lanes (D-227) --------------------------------------------
+#
+# GH_TOKEN_LANES est un jeton fine-grained limité au repo souffleur seul
+# (contents/issues/PR en write). Ce script ne le lit ni ne l'affiche jamais :
+# la résolution se fait DANS le pane (pas dans ce process-ci), via
+# [Environment]::GetEnvironmentVariable(..., 'User') exécuté par le pane
+# lui-même — cette API lit le registre en direct, donc elle voit la valeur
+# même si le process du pane (ou le serveur Herdr qui l'a fait naître) est
+# resté ouvert depuis avant un `setx` (setx ne touche pas les fenêtres déjà
+# ouvertes ; lire depuis 'User' contourne ce cache).
+
+Write-Output "Câblage du jeton scopé lanes (GH_TOKEN_LANES -> GH_TOKEN du pane)..."
+
+# extensions.worktreeConfig : permet une config git isolée par worktree —
+# sans ça, .git/config est partagé entre tous les worktrees (cf. CLAUDE.md,
+# section « Garde de branche main »). Idempotent, sans effet si déjà activé ;
+# posé sur le repo principal, jamais sur le compte/la config globale.
+git -C $RepoRoot config extensions.worktreeConfig true
+
+# Credential helper LOCAL à ce worktree seul. Une valeur vide de
+# credential.helper réinitialise la liste de helpers déjà accumulée par la
+# config globale/système (comportement documenté par git) ; on n'ajoute
+# ensuite QUE `gh` comme seul helper pour ce worktree — `gh` lit GH_TOKEN
+# depuis l'environnement du pane (posé juste après), jamais le compte gh
+# global de l'opérateur.
+git -C $worktreePath config --worktree credential.helper ""
+git -C $worktreePath config --worktree --add credential.helper "!gh auth git-credential"
+
+# GH_TOKEN posé dans l'environnement du PANE, pas dans celui de ce script :
+# `herdr agent start` tape la commande de lancement dans ce même pane juste
+# après, donc le process claude qu'il démarre hérite de cette variable.
+$setTokenCmd = '$env:GH_TOKEN = [System.Environment]::GetEnvironmentVariable(''GH_TOKEN_LANES'',''User'')'
+herdr pane run $paneId $setTokenCmd | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Échec de la pose de GH_TOKEN dans le pane $paneId."
+    exit 1
+}
 
 Write-Output "Démarrage de l'agent claude ($Modele, effort $Effort)..."
 # --permission-mode acceptEdits : les éditions de fichiers sont auto-acceptées
