@@ -59,7 +59,20 @@ $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 $RepoSlug = 'souhelmeskache/souffleur'
 $PauseFlag = Join-Path $RepoRoot 'tools/PAUSE'
 
-# --- 1. Lecture de l'issue ---------------------------------------------
+# --- 1. Garde-fou pause (garde la moins chère d'abord — avant tout appel réseau) --
+
+if (Test-Path $PauseFlag) {
+    Write-Error "Pause active (tools/PAUSE présent) — aucune lane ne se lance. Supprime le fichier pour reprendre."
+    exit 1
+}
+
+# --- 2. Lecture de l'issue ---------------------------------------------
+#
+# Le label `prete` est LA frontière de confiance de ce lanceur : le repo est
+# public, n'importe qui peut ouvrir une issue, et son corps est injecté
+# verbatim dans le prompt de la lane plus bas. Voir la ligne dédiée dans
+# CLAUDE.md (« ne jamais labelliser prete une issue externe sans l'avoir lue
+# en entier ») — ce script fait confiance au label, pas au contenu.
 
 $issueJson = gh issue view $Issue --repo $RepoSlug --json number,title,body,labels,url
 if ($LASTEXITCODE -ne 0) {
@@ -71,13 +84,6 @@ $issueData = $issueJson | ConvertFrom-Json
 $labelNames = @($issueData.labels | ForEach-Object { $_.name })
 if ($labelNames -notcontains 'prete') {
     Write-Error "Issue #$Issue : label 'prete' absent — refus de lancer (queue de travail = labelisée 'prete' uniquement)."
-    exit 1
-}
-
-# --- 2. Garde-fou pause --------------------------------------------------
-
-if (Test-Path $PauseFlag) {
-    Write-Error "Pause active (tools/PAUSE présent) — aucune lane ne se lance. Supprime le fichier pour reprendre."
     exit 1
 }
 
@@ -171,8 +177,8 @@ if ($DryRun) {
     Write-Output ""
     Write-Output "Commandes qui seraient exécutées :"
     Write-Output "  herdr worktree create --cwd `"$RepoRoot`" --branch $branch"
-    Write-Output "  herdr agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele"
-    Write-Output "  herdr agent prompt $agentName <prompt-gabarit ci-dessous> --wait"
+    Write-Output "  herdr agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode acceptEdits"
+    Write-Output "  herdr agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
     Write-Output ""
     Write-Output "--- Prompt-gabarit ---"
     Write-Output $promptText
@@ -194,18 +200,28 @@ $worktreePath = $worktreeData.result.worktree.path
 Write-Output "Worktree : $worktreePath"
 Write-Output "Pane     : $paneId"
 
-Write-Output "Démarrage de l'agent claude ($Modele)..."
-herdr agent start $agentName --kind claude --pane $paneId -- --model $Modele
+Write-Output "Démarrage de l'agent claude ($Modele, effort $Effort)..."
+# --permission-mode acceptEdits : les éditions de fichiers sont auto-acceptées
+# (doc officielle claude) ; les commandes bash restent gouvernées par la
+# liste blanche de .claude/settings.json — pas un blanc-seing.
+herdr agent start $agentName --kind claude --pane $paneId -- --model $Modele --effort $Effort --permission-mode acceptEdits
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr agent start' pour $agentName sur le pane $paneId."
     exit 1
 }
 
+# --until working (pas les défauts idle/done/blocked) : on veut seulement la
+# confirmation que le prompt a été accepté et que l'agent s'est mis au
+# travail, pas attendre que toute la lane se termine. `agent prompt --wait`
+# sans --until suit l'état "settled" (idle/done/blocked) qui, pour une tâche
+# agentique autonome, ne survient qu'à la fin du tour complet — donc à la fin
+# de la lane. Constaté en lançant réellement ce script (pas seulement en
+# -DryRun) sur l'Issue #18 — voir PR #17.
 Write-Output "Envoi du prompt-gabarit..."
-herdr agent prompt $agentName $promptText --wait
+herdr agent prompt $agentName $promptText --wait --until working --timeout 15000
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Échec de l'envoi du prompt à $agentName."
+    Write-Error "Échec de l'envoi du prompt à $agentName (ou l'agent n'est pas passé en 'working' sous 15s)."
     exit 1
 }
 
-Write-Output "Lane $agentName lancée sur l'Issue #$Issue (effort $Effort, modèle $Modele)."
+Write-Output "Lane $agentName lancée sur l'Issue #$Issue (effort $Effort, modèle $Modele) — le script rend la main, la lane continue en arrière-plan dans le pane $paneId."
