@@ -1,4 +1,4 @@
-﻿"""Director camera patch ÔÇö D-184/D-209/D-128.
+"""Director camera patch — D-184/D-209/D-128.
 
 Verifies the four camera guards on the produced briefing and measures
 the improvisation rate on partition-pconv3 (361 nodes).
@@ -10,7 +10,7 @@ Guards (from FICHE-cadre-camera-v0):
   4. secrets_suppressed flag correctly reported
 
 Improvisation rate (D-128): ratio of briefing content beyond activated
-lore candidates ÔÇö measured on partition-pconv3.
+lore candidates — measured on partition-pconv3.
 """
 import os
 import sys
@@ -103,7 +103,7 @@ if partition_path.exists():
           f"module_nodes={len(part['nodes'])}, "
           f"total_node_chars={total_node_chars})")
 else:
-    print("D-128: partition-pconv3 not found ÔÇö skipped")
+    print("D-128: partition-pconv3 not found — skipped")
 
-print("test-director-camera-patch: OK ÔÇö 4 guards verified, "
+print("test-director-camera-patch: OK — 4 guards verified, "
       "improvisation rate measured")
