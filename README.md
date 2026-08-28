@@ -109,9 +109,9 @@ is provider-agnostic (one OpenAI-compatible client). Tests: `python run_tests.py
 [CLAUDE.md](CLAUDE.md) for the full test/PR workflow). A retro Win2000 Tkinter UI
 (`gui.py`) survives as an easter egg.
 
-## Attribution
+## Attribution & third-party components
 
-This project is **based on [Coderain](https://github.com/Zwimy/coderain) by
+**This project is based on [Coderain](https://github.com/Zwimy/coderain) by
 Zwimy**, licensed **MIT**. The original [LICENSE](LICENSE) is preserved unchanged
 in this repository, as required by the MIT license. This fork has since diverged
 significantly (see [What this fork adds](#what-this-fork-adds) above) but the
@@ -120,8 +120,18 @@ Planner/Validator/Writer pipeline, SillyTavern card import — originates with
 Zwimy's upstream project. If you'd like to support the original work directly:
 [Ko-fi](https://ko-fi.com/zwimy) · [GitHub Sponsors](https://github.com/sponsors/Zwimy).
 
-The D&D 5e rules engine and SRD dataset this fork bundles carry their own
-licenses (MIT and CC-BY-4.0 respectively) — see [NOTICE-dnd5e.md](NOTICE-dnd5e.md).
+Two third-party components are bundled as regular dependencies (pinned in
+[requirements.txt](requirements.txt)) and carry obligations of their own,
+reproduced in full in **[NOTICE-dnd5e.md](NOTICE-dnd5e.md)**:
+
+| Component | What it provides | License | Obligation |
+|---|---|---|---|
+| [`dnd5e-engine`](https://github.com/tapestria/nat20) 0.3.0 | D&D 5e rules engine (checks, combat resolution) | MIT | License + notice ship with the package distribution |
+| [`dnd5e-srd-data`](https://github.com/tapestria/nat20) 0.3.0 | D&D 5e SRD dataset (stat blocks, rules text) | **CC-BY-4.0** | **Attribution notice must be reproduced** — done in full in `NOTICE-dnd5e.md` |
+
+For every other dependency in `requirements.txt`, see the license audit posted
+as a comment on the PR that added this section — none require special handling
+(no strong copyleft, nothing unlicensed).
 
 ## License
 
