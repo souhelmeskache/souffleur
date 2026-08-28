@@ -1,8 +1,12 @@
-# «·NOM DU PROJET — à trancher (Souhel, `I-1623`)·»
+# Souffleur
 
 **A local, private AI storytelling engine — your worlds, your model, your memory.**
 
-`«NOM DU PROJET»` is a fork of [Coderain](https://github.com/Zwimy/coderain), an
+*Named after the théâtre prompter — the [souffleur](https://en.wikipedia.org/wiki/Prompter)
+who sits just out of sight and quietly feeds the actors their lines. That's the job:
+stay out of the way, keep the story moving.*
+
+Souffleur is a fork of [Coderain](https://github.com/Zwimy/coderain), an
 AI-Dungeon-style interactive-fiction engine that runs on **your** machine against
 **your** model (local via Ollama, or any OpenAI-compatible cloud key). No accounts,
 no subscription, no server reading your stories. It's built around one idea most
@@ -11,7 +15,7 @@ edit, diff, and own.
 
 Free and open source (MIT) — see [Attribution](#attribution) below.
 
-![Coderain in action](docs/demo.gif)
+![Souffleur in action](docs/demo.gif)
 
 ---
 
