@@ -1,0 +1,3 @@
+# Les hooks sh doivent rester en LF meme avec core.autocrlf=true
+# (un shebang CRLF casse leur execution par git for Windows).
+hooks/* text eol=lf
