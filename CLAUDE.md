@@ -3,7 +3,9 @@
 *Socle court pour tout agent Claude Code travaillant dans ce repo. Décisions/
 historique détaillé : vault `C:\Vaults\MVP2\meta-rpg\` (hors périmètre de ce
 dépôt). Voir aussi [DISCIPLINE-VERSIONNEMENT.md](DISCIPLINE-VERSIONNEMENT.md)
-et [README-ci.md](README-ci.md) pour le détail des gardes déjà en place.*
+et [README-ci.md](README-ci.md) pour le détail des gardes déjà en place, et
+[README-moule-test-element.md](README-moule-test-element.md) pour tester une
+brique comme élément joué (fixtures + scénario réduit + verdict mécanique).*
 
 ## Tester
 
