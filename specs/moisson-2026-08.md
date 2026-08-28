@@ -4,7 +4,7 @@
 
 Source : `meta-rpg/etat-boucle.md` (10 fiches « lançables en attente ») + `veilleur-state.json` (8 fiches dans `fichesBannies` au moment du gel — cf. `MRPG-I-1622` : le compteur d'échecs de la boucle bannissait des fiches saines sur deux bugs machine, pas sur un défaut du travail proposé). Vérification croisée faite sur `git log --all` des deux dépôts (`boucle`, `coderain`) pour écarter ce qui est déjà livré.
 
-**Statut global (mis à jour phase 1, verdicts `MRPG-H-2371`) : 12 fiches ouvertes (matière réelle à Issue) · 2 déjà livrées (exclues, gardées ici pour traçabilité) · 1 fiche (#13) tranchée en Issue de merge · 4 fiches (#2/#5/#6/#7) caduques par gel, déplacées en fin de fichier.**
+**Statut global (mis à jour phase 1, verdicts `MRPG-H-2371`) : 18 fiches recensées = 11 ouvertes ordinaires (matière réelle à Issue) + 1 fiche (#13) tranchée en Issue de merge (12 items GitHub actionnables au total) · 2 déjà livrées (exclues, gardées ici pour traçabilité) · 4 fiches (#2/#5/#6/#7) caduques par gel, déplacées en fin de fichier.**
 
 La colonne *Label suggéré* est une proposition ; le brief réserve le label `prete` aux fiches "réellement lançables" — décision à trancher en phase 1 au moment de la création effective des Issues, pas figée ici.
 
@@ -179,6 +179,11 @@ La colonne *Label suggéré* est une proposition ; le brief réserve le label `p
 | 17 | I-229 | Détecteur répétition campagne | OUVERTE | coderain |
 | 18 | I-335 | Collision id I-333 | OUVERTE (doc) | — (vault) |
 
-**Issues à créer en phase 1 : 12 fiches ouvertes (#1, #4, #8, #9, #10, #12, #14, #17 en coderain ; #3, #18 en doc/vault si Souhel les veut sur GitHub) + 1 Issue de merge (#13, label `prete`, avec la vigilance `8934352` notée ci-dessus) + #16 dépendante de #13. Total 16 fiches ouvertes + 1 merge = 17 threads de travail sur GitHub, conforme au chiffre « 16 ouvertes + Issue de merge » du brief.**
+**Issues à créer en phase 1 (12 items GitHub au total) :**
+- **9 en coderain** : #1 (I-329), #4 (I-309), #8 (I-462), #9 (I-159), #10 (I-150), #12 (D-184), #14 (D-218), #16 (D-219 patch, dépend de #13/#1 mergé), #17 (I-229).
+- **2 en doc/vault** (#3 I-023, #18 I-335) — nature décisionnelle, pas de périmètre fichiers coderain ; à créer sur GitHub seulement si Souhel les veut suivies là plutôt que dans le vault.
+- **1 Issue de merge** (#13 coeur-b, label `prete`, avec la vigilance `8934352` notée ci-dessus — contenu à re-vérifier avant merge, pas simplement rejouer le `--ff-only` H-1842).
+
+11 fiches ouvertes ordinaires + 1 merge = 12 threads de travail sur GitHub. (Le chiffre « 16 ouvertes » du brief reprend le décompte brut de phase 0, avant que les 4 fiches `veilleur.ps1` ne soient tranchées caduques et que #13 ne soit reclassée en Issue de merge plutôt qu'Issue ordinaire — 16 − 4 (caduques) − 1 (coeur-b, recompté à part) = 11, cohérent.)
 **4 fiches (#2, #5, #6, #7) : caduques par gel — voir section dédiée ci-dessus, pas d'Issue.**
 **2 fiches (#3, #18) sont purement décisionnelles/doc** (vault `meta-rpg`) — pas de périmètre fichiers coderain, à traiter comme Issues de suivi si Souhel les veut sur GitHub, ou à laisser dans le vault.
