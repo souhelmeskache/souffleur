@@ -555,7 +555,8 @@ class Fenetre:
     (id partition existant — node/tension/ressource).
 
     La borne à deux murs (I-033) refuse :
-    - fenêtre sans tension liée (a)
+    - F3 (lien_tension) sans tension liée (a) — tension_id optionnelle pour
+      F1/F2/F4, requise seulement pour F3 (D-219 §4, I-370a)
     - fenêtre négociable qui cite un secret (b, zéro-spoiler règle 1)
     - fenêtre dont le rattachement n'existe pas (c, zéro-dangling)
     """

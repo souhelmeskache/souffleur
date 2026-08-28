@@ -197,17 +197,23 @@ def validate_form(partition, partition_dir=None) -> list[str]:
                                   "servis au Director en clair)")
 
     # 12) I-033 borne à deux murs — fenêtres conversation d'accord (D-219 §4)
-    # Garde triple : (a) tension liée requise, (b) zéro-spoiler règle 1
-    # (fenêtre négociable ne cite pas un secret), (c) rattachement existant.
+    # Garde triple : (a) tension liée — REQUISE seulement pour F3 (dimension
+    # lien_tension, D-219 §4) ; les 3 autres fenêtres (F1 origine, F2 posture,
+    # F4 enjeu) la portent en option — la garde suit la spec, pas l'inverse
+    # (I-370a) ; (b) zéro-spoiler règle 1 (fenêtre négociable ne cite pas un
+    # secret) ; (c) rattachement existant.
     secret_ids = {s.id for s in partition.secrets}
     tension_ids = {t.id for t in getattr(partition, "tensions", [])}
     for fen in getattr(partition, "fenetres", []) or []:
-        # (a) fenêtre sans tension liée → refus
-        if not getattr(fen, "tension_id", None):
+        # (a) F3 (lien_tension) sans tension liée → refus ; les autres
+        #     fenêtres portent tension_id en option (D-219 §4)
+        if getattr(fen, "dimension", None) == "lien_tension" \
+                and not getattr(fen, "tension_id", None):
             errors.append(f"fenetre {fen.id}: sans tension_id liée — "
-                          "borne à deux murs (a) exige tension D-218 "
-                          "(I-033 §1)")
-        elif fen.tension_id not in tension_ids:
+                          "borne à deux murs (a) exige tension D-218 pour "
+                          "F3 lien_tension (I-033 §1, D-219 §4)")
+        elif getattr(fen, "tension_id", None) \
+                and fen.tension_id not in tension_ids:
             errors.append(f"fenetre {fen.id}: tension_id inconnu "
                           f"{fen.tension_id} — zéro dangling autorisé "
                           "(I-033 §1a)")
