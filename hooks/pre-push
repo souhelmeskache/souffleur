@@ -1,0 +1,16 @@
+#!/bin/sh
+# Pre-push guard (D-224, phase 1 point f): never push directly to main.
+# git feeds RESOLVED refspecs on stdin (<local ref> <local sha> <remote ref>
+# <remote sha>), so quoting, flags, -C, subshells, casing and cwd are all
+# already normalized by git itself — nothing to parse.
+# Known accepted limit (see CLAUDE.md): --no-verify skips this hook; the
+# absolute backstop is server-side branch protection once the repo goes public.
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "PUSH REFUSE — cible refs/heads/main (D-224)." >&2
+        echo "Passe par une branche + Pull Request." >&2
+        status=1
+    fi
+done
+exit $status

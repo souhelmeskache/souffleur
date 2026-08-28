@@ -1,0 +1,25 @@
+#!/bin/sh
+# Pre-commit guard (poste TECHNIQUE, 2026-08-22): never commit a red state.
+# Runs every suite EXCEPT the known pre-existing failure (trinity_test:
+# missing connection profile, documented). A red suite blocks the commit.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+PY=.venv/Scripts/python.exe
+[ -f "$PY" ] || PY=python
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
+failed=""
+for t in tests/*_test.py; do
+    [ -f "$t" ] || continue
+    case "$t" in *trinity*) continue ;; esac
+    if ! "$PY" "$t" >/dev/null 2>&1; then
+        failed="$failed $t"
+    fi
+done
+
+if [ -n "$failed" ]; then
+    echo "COMMIT REFUSE — suites en echec:$failed" >&2
+    echo "Regle: jamais d'etat rouge dans l'historique." >&2
+    exit 1
+fi
+echo "suites vertes -> commit autorise"
