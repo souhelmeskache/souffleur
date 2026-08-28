@@ -153,16 +153,15 @@ def _library() -> Library:
 # to act on it: the detail goes to stderr, which is the machine room (stdout is
 # the MCP channel), never a value any skill prints.
 def _lore_warnings(store) -> list[str]:
+    # I-159: the scan itself (registry/slug/why) is the shared "weapon" —
+    # coderain.validator.scan_hidden_forced, also exercised standalone by
+    # tests/test-garde-secrets-i159.py. This function stays responsible only
+    # for what a caller allowed to reach the player is allowed to say.
     out, detail, counts = [], [], {}
-    for rel in store.gated_registries():
-        for e in store.entries(rel):
-            if not e.hidden():
-                continue
-            why = [w for w, on in (("pinned", e.pinned()),
-                                   ("critical", e.weight() == "critical")) if on]
-            if why:
-                counts[rel] = counts.get(rel, 0) + 1
-                detail.append(f"{rel}:{e.slug} ({'+'.join(why)})")
+    for hit in validator_mod.scan_hidden_forced(store):
+        rel = hit["registry"]
+        counts[rel] = counts.get(rel, 0) + 1
+        detail.append(f"{rel}:{hit['slug']} ({'+'.join(hit['why'])})")
     for rel, n in counts.items():
         out.append(
             f"{rel}: {n} hidden entry/entries also carry pinned or critical — the "

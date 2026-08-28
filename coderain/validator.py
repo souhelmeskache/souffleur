@@ -762,6 +762,40 @@ def replay_records(store, rpg_cfg, records: list[dict]) -> int:
     return n
 
 
+def scan_hidden_forced(store) -> list[dict]:
+    """The secret guard (I-159): flags every gated entry that is BOTH
+    `hidden: true` AND forced always-in (`pinned: true` or `weight: critical`).
+
+    memory.py's assemble() tests `always = e.pinned() or e.weight() ==
+    "critical"` BEFORE the hidden() gate (mcp_server.py:131 traces the exact
+    line) — the property "always" lore needs to survive a turn that never
+    mentions it. That is precisely wrong for a secret: hidden lore must earn
+    the Secrets section through a trigger hit, never ride in unconditionally.
+    No code downstream of assemble() can hold this back without overriding
+    the engine's own selection, so the guard lives here instead, upstream of
+    play, where an author-facing check can still catch the combination.
+
+    Measured on the live campaign at authoring time (I-159): 0/20 hidden
+    entries carried either flag — the combination is rare, not impossible,
+    and a single `pinned: true` typed on a hidden entry is silent otherwise.
+
+    Returns one dict per offending entry: {"registry", "slug", "why"} where
+    `why` is a subset of ("pinned", "critical") — never the title or body, so
+    a caller may log or print this at any verbosity without spoiling the
+    secret it just found (see schemas/validator-secrets.json for the exact
+    shape and docs/gabarit-autorat-secrets-i159.md for the authoring rule)."""
+    out: list[dict] = []
+    for rel in store.gated_registries():
+        for e in store.entries(rel):
+            if not e.hidden():
+                continue
+            why = [w for w, on in (("pinned", e.pinned()),
+                                   ("critical", e.weight() == "critical")) if on]
+            if why:
+                out.append({"registry": rel, "slug": e.slug, "why": why})
+    return out
+
+
 def snapshot_state(store) -> dict:
     """Deep-copy the WHOLE mutable state for the pre-turn undo snapshot — with
     world deltas in play, undo must cover time/flags/location, not just the rpg
