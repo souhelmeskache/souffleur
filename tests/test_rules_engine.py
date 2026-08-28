@@ -1,8 +1,11 @@
 """Rules-engine bridge tests: coderain calls dnd5e-engine (D-078/D-200) and
 never re-implements a rule. Covers lazy loading, deterministic resolve_check,
 a FULL deterministic combat driven through the MCP endpoints (two runs, same
-seeds => byte-identical transcripts), IntentRejectedError passthrough, and the
-read-only mirroring contract. modules/rpg.py stays untouched (coexistence v0).
+seeds => byte-identical transcripts), k illegal intents => k motivated engine
+refusals (I-369), the missing-table boundary (unknown CheckSpec.kind =>
+signalled exception, never an improvisation), IntentRejectedError passthrough,
+and the read-only mirroring contract. modules/rpg.py stays untouched
+(coexistence v0).
 
 Needs dnd5e-engine==0.3.0 installed (requirements.txt); skips loudly if absent.
 """
@@ -192,10 +195,76 @@ async def rejection_probe():
 msg = asyncio.run(rejection_probe())
 print(f"5) IntentRejectedError passthrough intact ({msg.split(':')[0]})")
 
+# 5bis) k illegal intents => k motivated refusals from the engine (I-369).
+# Each rejection carries the engine's own typed ``reason`` (no ad-hoc string
+# matching on our side) and the combat handle stays usable afterwards — a
+# refusal never crashes the session.
+
+
+async def k_refusals_probe():
+    st = await bridge.start_combat(session_id="k-refus-probe", party=[KAEL],
+                                   encounter=[GOBLIN], rng_seed=5, zones=["z1"])
+    h = st["handle_id"]
+    reasons = []
+    try:
+        # a) action impossible: acting out of turn (Kael goes first; the
+        #    engine itself already exercised via rejection_probe() above as
+        #    monster_turn — here the mirror case, a second PJ intent before
+        #    the goblin's turn comes back around).
+        try:
+            await bridge.monster_turn(h)
+            raise AssertionError("expected not_actor_turn")
+        except IRE as e:
+            reasons.append(e.reason)
+
+        # b) cible/acteur invalide: an entity that never joined the fight.
+        try:
+            await bridge.submit_intent(h, "pj:ghost", {"intent_type": "pass"})
+            raise AssertionError("expected actor_not_in_initiative")
+        except IRE as e:
+            reasons.append(e.reason)
+
+        # c) ressource épuisée: Dash a second time the same turn spends an
+        #    Action the actor no longer has (Dash itself doesn't end the
+        #    turn, so the budget check is what stops the second one).
+        await bridge.submit_intent(h, "pj:kael", {"intent_type": "dash"})
+        try:
+            await bridge.submit_intent(h, "pj:kael", {"intent_type": "dash"})
+            raise AssertionError("expected no_action_economy")
+        except IRE as e:
+            reasons.append(e.reason)
+
+        # Combat is still perfectly playable after k refusals — no corrupted
+        # state, no crash: Kael can still act normally this same turn.
+        live_after = bridge.live(h)
+        assert live_after["active_actor_id"] == "pj:kael"
+        return reasons
+    finally:
+        await bridge.end_combat(h)
+
+
+reasons = asyncio.run(k_refusals_probe())
+assert reasons == ["not_actor_turn", "actor_not_in_initiative", "no_action_economy"]
+assert len(set(reasons)) == len(reasons), "each refusal must carry its own reason"
+print(f"5bis) k={len(reasons)} illegal intents => {len(reasons)} engine-motivated "
+      f"refusals, combat stayed usable ({', '.join(reasons)})")
+
 # 6) Coexistence v0: modules/rpg.py untouched by this integration.
 rpg_src = Path(__file__).resolve().parents[1] / "coderain" / "modules" / "rpg.py"
 text = rpg_src.read_text(encoding="utf-8")
 assert "rules_engine" not in text and "dnd5e" not in text.lower()
 print("6) modules/rpg.py carries no rules_engine coupling (coexistence v0)")
+
+# 7) Frontier: a rule with no table entry must raise, never be improvised.
+# resolve_check dispatches CheckSpec.kind through the engine's own table of
+# resolvers; an unknown kind has no entry — the engine raises KeyError
+# instead of silently falling back to some guessed computation. This is the
+# engine's own dispatch failing loudly, not coderain inventing a fallback.
+UNKNOWN_KIND_SPEC = {**SPEC, "kind": "not_a_real_kind"}
+try:
+    resolve_check(UNKNOWN_KIND_SPEC, seed=7)
+    raise AssertionError("expected a signalled exception for a kind with no table")
+except KeyError as e:
+    print(f"7) rule without a table raises loudly, never improvised ({e})")
 
 print("\nRULES-ENGINE TESTS PASSED")
