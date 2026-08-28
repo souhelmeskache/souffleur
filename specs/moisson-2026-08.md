@@ -4,7 +4,7 @@
 
 Source : `meta-rpg/etat-boucle.md` (10 fiches « lançables en attente ») + `veilleur-state.json` (8 fiches dans `fichesBannies` au moment du gel — cf. `MRPG-I-1622` : le compteur d'échecs de la boucle bannissait des fiches saines sur deux bugs machine, pas sur un défaut du travail proposé). Vérification croisée faite sur `git log --all` des deux dépôts (`boucle`, `coderain`) pour écarter ce qui est déjà livré.
 
-**Statut global (mis à jour phase 1, verdicts `MRPG-H-2371`) : 18 fiches recensées = 11 ouvertes ordinaires (matière réelle à Issue) + 1 fiche (#13) tranchée en Issue de merge (12 items GitHub actionnables au total) · 2 déjà livrées (exclues, gardées ici pour traçabilité) · 4 fiches (#2/#5/#6/#7) caduques par gel, déplacées en fin de fichier.**
+**Statut global (mis à jour phase 1, verdicts `MRPG-H-2371` + feu vert Souhel du 28/08) : 18 fiches recensées = 9 ouvertes créées comme Issues GitHub (coderain) + 1 fiche (#13) tranchée en Issue de merge (10 Issues GitHub au total) · 2 fiches (#3, #18) reroutées vault, pas d'Issue GitHub (ligne de partage `D-224` : GitHub ne porte que ce qu'une lane peut livrer dans le repo) · 2 déjà livrées (exclues, gardées ici pour traçabilité) · 4 fiches (#2/#5/#6/#7) caduques par gel, déplacées en fin de fichier.**
 
 La colonne *Label suggéré* est une proposition ; le brief réserve le label `prete` aux fiches "réellement lançables" — décision à trancher en phase 1 au moment de la création effective des Issues, pas figée ici.
 
@@ -23,12 +23,9 @@ La colonne *Label suggéré* est une proposition ; le brief réserve le label `p
 
 ### 2. I-296 — ⚰️ CADUQUE PAR GEL (D-224) — voir section « Caduques par gel » en fin de fichier.
 
-### 3. I-023 — Chantier fil rouge doigté (transverse, décisionnel)
-- **Objectif** : décomposer le chantier transverse du « doigté » (I-056) et les 6 codes de tension (D-218) en briques opératoires ancrées à la destinée (D-219), sans doctrine nouvelle.
-- **Périmètre** : documentaire seulement (vault `meta-rpg`, non versionné en git technique) — pas de fichiers code coderain identifiés.
-- **Dépendances** : D-218, D-219, D-220, arbitrage I-007 vs I-023.
-- **Statut** : OUVERTE.
-- **Note** : nature décisionnelle/doc — Issue de suivi plutôt que ticket de code.
+### 3. I-023 — ↩️ REROUTÉE VAULT (pas de périmètre repo) — pas d'Issue GitHub
+- **Décision Souhel (feu vert phase 1)** : ligne de partage actée `D-224` — GitHub ne porte que les tickets qu'une lane peut livrer *dans le repo* ; une fiche dont le livrable est une écriture de vault n'est fermable par aucune lane (l'Issue resterait ouverte indéfiniment ou serait fermée sans preuve). I-023 existe déjà comme item du registre `meta-rpg` : c'est son lieu, traité côté méta.
+- Objectif d'origine (pour mémoire) : décomposer le chantier transverse du « doigté » (I-056) et les 6 codes de tension (D-218) en briques opératoires ancrées à la destinée (D-219), sans doctrine nouvelle.
 
 ### 4. I-309 — Étage Aventure du convertisseur
 - **Objectif** : ajoute trajectoire par défaut, perturbations, conditions de monde et charnière de sortie au convertisseur — chaînon manquant pour fermer le test intégrateur DKS.
@@ -117,12 +114,9 @@ La colonne *Label suggéré* est une proposition ; le brief réserve le label `p
 - **Statut** : OUVERTE.
 - **Label suggéré** : `prete`, priorité haute (rentabilité trieur : haute).
 
-### 18. I-335 — Collision id I-333 (renommage et déréférencement)
-- **Objectif** : deux fichiers portent `id: MRPG-I-333` depuis le 25/08, rendant toute référence nue ambiguë entre deux sujets distincts. Renomme le plus récent et déréférence exhaustivement.
-- **Périmètre** : documentaire (vault `meta-rpg`, non versionné en git technique) — pas de fichiers code coderain.
-- **Dépendances** : allocataire d'ids I (`8093dfb`, déjà en prod côté boucle), collision jumelle H-057 (#7, traitée à part).
-- **Statut** : OUVERTE.
-- **Note** : nature décisionnelle/doc, comme #3.
+### 18. I-335 — ↩️ REROUTÉE VAULT (pas de périmètre repo) — pas d'Issue GitHub
+- **Décision Souhel (feu vert phase 1)** : même ligne de partage que #3 — livrable = écriture de vault, pas fermable par une lane repo. I-335 existe déjà comme item du registre `meta-rpg` : traité côté méta.
+- Objectif d'origine (pour mémoire) : deux fichiers portent `id: MRPG-I-333` depuis le 25/08, rendant toute référence nue ambiguë entre deux sujets distincts. Renomme le plus récent et déréférence exhaustivement.
 
 ---
 
@@ -162,7 +156,7 @@ La colonne *Label suggéré* est une proposition ; le brief réserve le label `p
 |---|----|----|----|----|
 | 1 | I-329 | Visualisation combats | OUVERTE | coderain |
 | 2 | I-296 | Filtre marqueurs non accentués | **⚰️ CADUQUE PAR GEL** | — |
-| 3 | I-023 | Chantier fil rouge doigté | OUVERTE (doc) | — (vault) |
+| 3 | I-023 | Chantier fil rouge doigté | **↩️ REROUTÉE VAULT** | — (vault, registre) |
 | 4 | I-309 | Étage Aventure convertisseur | OUVERTE | coderain |
 | 5 | I-314 | Garde horodatés futurs | **⚰️ CADUQUE PAR GEL** | — |
 | 6 | I-320 | Vault Obsidian Sync | **⚰️ CADUQUE PAR GEL** | — |
@@ -177,13 +171,13 @@ La colonne *Label suggéré* est une proposition ; le brief réserve le label `p
 | 15 | I-362/I-363 | Corrections dispositif v2 | **EXCLUE (livrée `cfe3545`)** | — |
 | 16 | D-219 (patch) | Patch director.md conversation B | OUVERTE (dépend de #13) | coderain (doc) |
 | 17 | I-229 | Détecteur répétition campagne | OUVERTE | coderain |
-| 18 | I-335 | Collision id I-333 | OUVERTE (doc) | — (vault) |
+| 18 | I-335 | Collision id I-333 | **↩️ REROUTÉE VAULT** | — (vault, registre) |
 
-**Issues à créer en phase 1 (12 items GitHub au total) :**
-- **9 en coderain** : #1 (I-329), #4 (I-309), #8 (I-462), #9 (I-159), #10 (I-150), #12 (D-184), #14 (D-218), #16 (D-219 patch, dépend de #13/#1 mergé), #17 (I-229).
-- **2 en doc/vault** (#3 I-023, #18 I-335) — nature décisionnelle, pas de périmètre fichiers coderain ; à créer sur GitHub seulement si Souhel les veut suivies là plutôt que dans le vault.
-- **1 Issue de merge** (#13 coeur-b, label `prete`, avec la vigilance `8934352` notée ci-dessus — contenu à re-vérifier avant merge, pas simplement rejouer le `--ff-only` H-1842).
+**Issues créées en phase 1 (10 Issues GitHub au total, feu vert Souhel 28/08) :**
+- **9 en coderain** : #1 (I-329), #4 (I-309), #8 (I-462), #9 (I-159), #10 (I-150), #12 (D-184), #14 (D-218), #16 (D-219 patch, dépend de #13/coeur-b mergé), #17 (I-229).
+- **1 Issue de merge** (#13 coeur-b, label `prete`, avec la vigilance `8934352` notée ci-dessus — contenu à re-vérifier avant merge, pas simplement rejouer le `--ff-only` H-1842 — et le séquencement `coeur-interface-complet` derrière).
+- **#3 (I-023) et #18 (I-335) : reroutées vault, pas d'Issue GitHub** — décision Souhel : ligne de partage `D-224`, GitHub ne porte que ce qu'une lane peut livrer dans le repo ; ces deux items existent déjà dans le registre `meta-rpg`, traités côté méta.
 
-11 fiches ouvertes ordinaires + 1 merge = 12 threads de travail sur GitHub. (Le chiffre « 16 ouvertes » du brief reprend le décompte brut de phase 0, avant que les 4 fiches `veilleur.ps1` ne soient tranchées caduques et que #13 ne soit reclassée en Issue de merge plutôt qu'Issue ordinaire — 16 − 4 (caduques) − 1 (coeur-b, recompté à part) = 11, cohérent.)
+9 Issues ordinaires + 1 merge = 10 threads de travail sur GitHub. (Le chiffre « 16 ouvertes » du brief reprend le décompte brut de phase 0, avant que les 4 fiches `veilleur.ps1` ne soient tranchées caduques, que #13 ne soit reclassée en Issue de merge, et que #3/#18 ne soient reroutées vault : 16 − 4 (caduques) − 1 (coeur-b, recompté à part) − 2 (reroutées vault) = 9, cohérent.)
 **4 fiches (#2, #5, #6, #7) : caduques par gel — voir section dédiée ci-dessus, pas d'Issue.**
-**2 fiches (#3, #18) sont purement décisionnelles/doc** (vault `meta-rpg`) — pas de périmètre fichiers coderain, à traiter comme Issues de suivi si Souhel les veut sur GitHub, ou à laisser dans le vault.
+**2 fiches (#3, #18) reroutées vault** (décision Souhel 28/08) — existent déjà comme items du registre `meta-rpg`, pas d'Issue GitHub : ligne de partage `D-224`, un livrable qui est une écriture de vault n'est fermable par aucune lane repo.
