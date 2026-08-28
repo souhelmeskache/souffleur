@@ -44,16 +44,28 @@ Return ONLY a JSON object, no prose, with this shape:
      "status": "one-line current state (optional)",
      "when": "in-world time this became true (optional)",
      "relationships": [{"with": "other-slug", "note": "ally / rival / owes debt"}],
-     "detail": "FULL rewritten detail for this entity's home file"}
+     "detail": "FULL rewritten detail for this entity's home file",
+     "origin": "player|narrator|inferred"}
   ],
   "new_threads": [
     {"slug": "kebab-id", "title": "Thread name", "importance": 1-5,
-     "detail": "what is unresolved"}
+     "detail": "what is unresolved", "origin": "player|narrator|inferred"}
   ],
-  "resolved_threads": ["slug-of-resolved-thread"]
+  "resolved_threads": [
+    {"slug": "slug-of-resolved-thread", "origin": "player|narrator|inferred"}
+  ]
 }
 "time" is optional — include it only if in-world time moved forward. "relationships"
 only applies to characters. Only promote genuinely durable, story-relevant facts.
+
+Every promotion, new thread, and resolved thread MUST carry an "origin": who is
+responsible for this becoming true in the story, not who is reporting it —
+"player" if the PLAYER's own turn explicitly declared, demanded, or performed the
+action that made it so; "narrator" if a NARRATOR/NPC turn stated or revealed it
+unprompted, with no player action requiring it; "inferred" if neither turn says it
+outright and you are deducing/summarizing an implied consequence. Never default to
+"narrator" for something the player turn actually forced — that mislabeling is
+exactly what erases the player's agency once this scene is folded away.
 """
 
 ARC_INSTRUCTION = """\
@@ -145,6 +157,10 @@ class Summarizer:
                                      f"{str(r.get('note', '')).strip()}")
             if rel_pairs:
                 attrs["relationships"] = "; ".join(rel_pairs)
+            # I-462 (D-107): always stamped, never conditional on p.get(...) like
+            # the optional attrs above — a MISSING origin is itself the failure
+            # mode this guards against, so it must land as "inferred", not vanish.
+            attrs["origin"] = _origin(p.get("origin"))
             aliases = p.get("aliases", [])
             if isinstance(aliases, str):
                 # A bare string would iterate CHARACTER by character — every
@@ -173,15 +189,25 @@ class Summarizer:
             self.store.merge_entry("threads.md", Entry(
                 title=str(t.get("title", "")).strip() or slug, slug=slug,
                 importance=_clamp_int(t.get("importance", 3)),
-                attrs={"status": "open"}, body=detail))
+                attrs={"status": "open", "origin": _origin(t.get("origin"))},
+                body=detail))
             events.append(f"memory: new thread [[thread:{slug}]]")
 
-        for slug in obj.get("resolved_threads", []) or []:
-            slug = _slugify(str(slug))
+        for r in obj.get("resolved_threads", []) or []:
+            # Graceful degradation (D-107 marking is new, older/partial fold
+            # output may still hand back a bare slug string): accept both
+            # shapes, an origin-less string just stamps "inferred".
+            if isinstance(r, dict):
+                slug, origin = _slugify(str(r.get("slug", ""))), r.get("origin")
+            else:
+                slug, origin = _slugify(str(r)), None
             existing = {e.slug: e for e in self.store.entries("threads.md")}
             if slug in existing:
                 e = existing[slug]
                 e.attrs["status"] = "resolved"
+                # Distinct key from the thread's creation "origin": who closed
+                # it is not necessarily who opened it.
+                e.attrs["resolved_origin"] = _origin(origin)
                 self.store.upsert_entry("threads.md", e)
                 events.append(f"memory: resolved [[thread:{slug}]]")
         return events
@@ -377,6 +403,19 @@ class Summarizer:
             self.store.write_state(state)
 
         return events
+
+
+# I-462 (D-107): the three actors a fold may attribute a scenario influence to.
+# Anything the fold LLM emits outside this set (or omits) degrades to
+# "inferred" rather than dropping the promotion — a fold must still advance on
+# a partial/malformed emission (see module docstring), it just can no longer
+# claim a player action or a narrator reveal it didn't actually see.
+ORIGINS = {"player", "narrator", "inferred"}
+
+
+def _origin(v) -> str:
+    o = str(v or "").strip().lower()
+    return o if o in ORIGINS else "inferred"
 
 
 def _slugify(s: str) -> str:
