@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from coderain.config import corpus_dir
 from webui import ConversationB
 
 FAIT = []
@@ -235,8 +236,7 @@ assert violations == [], f"violations garde: {violations}"
 
 # g -- Partition réelle : Vahn synthétique dans partition-pconv3 -----------
 section("partition reelle : Vahn via ConversationB sur partition-pconv3")
-part_dir = Path(r"C:\Users\souhe\coderain\corpus-modules"
-                r"\death-knights-squire\partition-pconv3")
+part_dir = corpus_dir() / "death-knights-squire" / "partition-pconv3"
 if part_dir.exists():
     idx = json.loads((part_dir / "index.json").read_text(encoding="utf-8"))
     tensions_reelles = []

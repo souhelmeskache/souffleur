@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from coderain.config import corpus_dir
 from coderain.converter import validate_form
 from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record, Ressource
@@ -242,7 +243,7 @@ finally:
 # 6 -- partition réelle poste : 19 ressources et VERT -------------------------
 section("partition reelle poste : pconv3 VERT, 19 ressources, index")
 import json as _js
-part_dir = Path(r"C:\Users\souhe\coderain\corpus-modules\death-knights-squire\partition-pconv3")
+part_dir = corpus_dir() / "death-knights-squire" / "partition-pconv3"
 if part_dir.exists():
     idx = _js.loads((part_dir / "index.json").read_text(encoding="utf-8"))
     assert len(idx.get("resources", [])) == 19, f"resources {len(idx.get('resources', []))} != 19"
@@ -252,7 +253,7 @@ if part_dir.exists():
     from coderain.converter.schemas import Manifest, Partition, Node, Record, RollTable, Secret, Tension, Ressource, Aventure
     import hashlib
     from datetime import datetime, timezone
-    texte = Path(r"C:\Users\souhe\coderain\corpus-modules\death-knights-squire\extraction\source-pconv0-p10-98.txt").read_text(encoding="utf-8")
+    texte = (corpus_dir() / "death-knights-squire" / "extraction" / "source-pconv0-p10-98.txt").read_text(encoding="utf-8")
     manifest_obj = Manifest(titre="Death Knight's Squire", corpus_source="5e", corpus_cible="5e",
                         structures=["S1", "S2"], hash_source=hashlib.sha256(texte.encode("utf-8")).hexdigest(),
                         date_conversion=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -297,7 +298,7 @@ if part_dir.exists():
     errs = validate_form.validate_form(part, part_dir)
     assert errs == [], f"partition-pconv3 VERT attendue mais {errs}"
     # fichiers JPEG présents (poste uniquement)
-    res_dir = Path(r"C:\Users\souhe\coderain\corpus-modules\death-knights-squire\resources")
+    res_dir = corpus_dir() / "death-knights-squire" / "resources"
     assert res_dir.exists()
     jpgs = list(res_dir.glob("*.jpg"))
     assert len(jpgs) == 19, f"resources JPEG {len(jpgs)} != 19"
