@@ -66,6 +66,36 @@ if ($Modele -eq 'haiku') {
     exit 1
 }
 
+# --- 0. Résolution gh/herdr (D-228) ---------------------------------------
+#
+# La session tour (celle qui exécute ce script) n'a pas forcément `gh` et
+# `herdr` dans son PATH — constaté en usage réel. Repli sur le chemin complet
+# constaté sur cette machine si `Get-Command` échoue ; échec propre (pas de
+# `gh`/`herdr` nu qui plante plus loin avec une erreur PowerShell générique)
+# si ni le PATH ni le repli ne trouvent la commande.
+
+function Resolve-ExternalCommand {
+    param(
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)] [string[]]$FallbackPaths
+    )
+
+    $found = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($found) {
+        return $found.Source
+    }
+    foreach ($path in $FallbackPaths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    Write-Error "Commande '$Name' introuvable : ni dans le PATH, ni aux chemins de repli connus ($($FallbackPaths -join ', ')). Installe-la ou ajoute son chemin réel aux chemins de repli de ce script."
+    exit 1
+}
+
+$GhExe = Resolve-ExternalCommand -Name 'gh' -FallbackPaths @('C:\Program Files\GitHub CLI\gh.exe')
+$HerdrExe = Resolve-ExternalCommand -Name 'herdr' -FallbackPaths @("$env:LOCALAPPDATA\Programs\Herdr\bin\herdr.exe")
+
 $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 $RepoSlug = 'souhelmeskache/souffleur'
 $PauseFlag = Join-Path $RepoRoot 'tools/PAUSE'
@@ -85,7 +115,7 @@ if (Test-Path $PauseFlag) {
 # CLAUDE.md (« ne jamais labelliser prete une issue externe sans l'avoir lue
 # en entier ») — ce script fait confiance au label, pas au contenu.
 
-$issueJson = gh issue view $Issue --repo $RepoSlug --json number,title,body,labels,url
+$issueJson = & $GhExe issue view $Issue --repo $RepoSlug --json number,title,body,labels,url
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Impossible de lire l'Issue #$Issue sur $RepoSlug."
     exit 1
@@ -203,14 +233,16 @@ if ($DryRun) {
     Write-Output "Nom agent      : $agentName"
     Write-Output ""
     Write-Output "Commandes qui seraient exécutées :"
+    Write-Output "  (gh résolu : $GhExe)"
+    Write-Output "  (herdr résolu : $HerdrExe)"
     Write-Output "  git -C `"$RepoRoot`" fetch origin main"
-    Write-Output "  herdr worktree create --cwd `"$RepoRoot`" --branch $branch --base origin/main"
+    Write-Output "  $HerdrExe worktree create --cwd `"$RepoRoot`" --branch $branch --base origin/main"
     Write-Output "  git -C <repo> config extensions.worktreeConfig true"
     Write-Output "  git -C <worktree> config --worktree credential.helper `"`""
     Write-Output "  git -C <worktree> config --worktree --add credential.helper '!gh auth git-credential'"
-    Write-Output '  herdr pane run <pane_id_du_worktree> $env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)'
-    Write-Output "  herdr agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode acceptEdits"
-    Write-Output "  herdr agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
+    Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
+    Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode acceptEdits"
+    Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
     Write-Output ""
     Write-Output "--- Prompt-gabarit ---"
     Write-Output $promptText
@@ -234,7 +266,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output "Création du worktree + pane pour la lane-$Issue..."
-$worktreeJson = herdr worktree create --cwd $RepoRoot --branch $branch --base origin/main
+$worktreeJson = & $HerdrExe worktree create --cwd $RepoRoot --branch $branch --base origin/main
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr worktree create' pour la branche $branch."
     exit 1
@@ -278,7 +310,7 @@ git -C $worktreePath config --worktree --add credential.helper "!gh auth git-cre
 # `herdr agent start` tape la commande de lancement dans ce même pane juste
 # après, donc le process claude qu'il démarre hérite de cette variable.
 $setTokenCmd = '$env:GH_TOKEN = [System.Environment]::GetEnvironmentVariable(''GH_TOKEN_LANES'',''User'')'
-herdr pane run $paneId $setTokenCmd | Out-Null
+& $HerdrExe pane run $paneId $setTokenCmd | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de la pose de GH_TOKEN dans le pane $paneId."
     exit 1
@@ -288,7 +320,7 @@ Write-Output "Démarrage de l'agent claude ($Modele, effort $Effort)..."
 # --permission-mode acceptEdits : les éditions de fichiers sont auto-acceptées
 # (doc officielle claude) ; les commandes bash restent gouvernées par la
 # liste blanche de .claude/settings.json — pas un blanc-seing.
-herdr agent start $agentName --kind claude --pane $paneId -- --model $Modele --effort $Effort --permission-mode acceptEdits
+& $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $Modele --effort $Effort --permission-mode acceptEdits
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr agent start' pour $agentName sur le pane $paneId."
     exit 1
@@ -302,7 +334,7 @@ if ($LASTEXITCODE -ne 0) {
 # de la lane. Constaté en lançant réellement ce script (pas seulement en
 # -DryRun) sur l'Issue #18 — voir PR #17.
 Write-Output "Envoi du prompt-gabarit..."
-herdr agent prompt $agentName $promptText --wait --until working --timeout 15000
+& $HerdrExe agent prompt $agentName $promptText --wait --until working --timeout 15000
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de l'envoi du prompt à $agentName (ou l'agent n'est pas passé en 'working' sous 15s)."
     exit 1
