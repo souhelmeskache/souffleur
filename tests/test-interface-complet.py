@@ -1,5 +1,5 @@
-﻿"""I-329/I-144/I-166 : Interface web compl├¿te ÔÇö canvas combats + fiche perso.
-Tests structurels (D-109) : v├®rifie que les fichiers webapp/ sont syntaxiquement
+"""I-329/I-144/I-166 : Interface web complète — canvas combats + fiche perso.
+Tests structurels (D-109) : vérifie que les fichiers webapp/ sont syntaxiquement
 corrects, que les fixtures DKS ont la bonne structure, et que la fiche perso
 ne fuit pas de secrets. Pas de navigateur requis.
 """
@@ -50,7 +50,7 @@ assert token_count >= 10, f"DKS fixture has {token_count} tokens, expected >= 10
 
 assert "battle-canvas" in style_css, "battle-canvas CSS class missing"
 assert "combat-log" in style_css, "combat-log CSS class missing"
-print(f"  {token_count} tokens in DKS fixture ÔÇö PASS")
+print(f"  {token_count} tokens in DKS fixture — PASS")
 
 
 # (b) drag pion -> engine state correctement mis a jour --------------------------
@@ -66,7 +66,7 @@ assert "addEventListener" in matrix_js
 assert "mousedown" in matrix_js
 assert "mousemove" in matrix_js
 assert "mouseup" in matrix_js
-print("  drag handlers wired (mousedown/mousemove/mouseup/onMove) ÔÇö PASS")
+print("  drag handlers wired (mousedown/mousemove/mouseup/onMove) — PASS")
 
 
 # (c) fiche perso affiche 4 acquis + 3 jalons sans fuiter secret ----------------
@@ -98,7 +98,7 @@ assert "fiche-acquis" in style_css, "fiche-acquis CSS missing"
 assert "fiche-destinee" in style_css, "fiche-destinee CSS missing"
 assert "fiche-ressource" in style_css, "fiche-ressource CSS missing"
 assert "blur" in style_css, "blur filter for ressource vignette missing (D-217)"
-print(f"  {len(acquis_entries)} acquis, {len(jalon_ids)} jalons, zero secrets ÔÇö PASS")
+print(f"  {len(acquis_entries)} acquis, {len(jalon_ids)} jalons, zero secrets — PASS")
 
 
 # (d) 60 fps sur 100 frames fixture DKS -----------------------------------------
@@ -115,7 +115,7 @@ assert "cancelAnimationFrame" in matrix_js, "cancelAnimationFrame missing in des
 assert "#combat-root" in style_css, "combat-root CSS missing"
 assert "#combat-body" in style_css, "combat-body CSS missing"
 assert "#battle-area" in style_css, "battle-area CSS missing"
-print("  render loop: requestAnimationFrame + dirty flag + measureFps ÔÇö PASS")
+print("  render loop: requestAnimationFrame + dirty flag + measureFps — PASS")
 
 
 # (e) non-regression : webui.py/webui.html inchanges ----------------------------
@@ -125,7 +125,7 @@ webui_py = ROOT / "webui.py"
 webui_html = ROOT / "webui.html"
 assert webui_py.exists(), "webui.py should exist (not modified by this lane)"
 assert webui_html.exists(), "webui.html should exist (not modified by this lane)"
-print("  webui.py + webui.html present, untouched by P1 ÔÇö PASS")
+print("  webui.py + webui.html present, untouched by P1 — PASS")
 
 
 # (f) HTML structure : templates + nav -------------------------------------------
@@ -136,7 +136,7 @@ assert "tpl-fiche-perso" in index_html, "fiche template missing"
 assert "#combat" in index_html, "combat nav link missing"
 assert "matrix.js" in index_html, "matrix.js script tag missing"
 assert "app.js" in index_html, "app.js script tag missing"
-print("  templates + nav + scripts present ÔÇö PASS")
+print("  templates + nav + scripts present — PASS")
 
 
 # (g) CSS : classes combat + fiche complete --------------------------------------
@@ -151,7 +151,7 @@ required_css = [
 ]
 for cls in required_css:
     assert cls in style_css, f"CSS class '{cls}' missing from style.css"
-print(f"  {len(required_css)} required CSS selectors present ÔÇö PASS")
+print(f"  {len(required_css)} required CSS selectors present — PASS")
 
 
 # (h) app.js : router + combat route --------------------------------------------
@@ -162,7 +162,7 @@ assert "renderCombatView" in app_js, "renderCombatView not called"
 assert "renderFichePerso" in app_js, "renderFichePerso not defined"
 assert "updateCombatLog" in app_js, "updateCombatLog missing"
 assert "updateCombatInitiative" in app_js, "updateCombatInitiative missing"
-print("  router + combat functions wired ÔÇö PASS")
+print("  router + combat functions wired — PASS")
 
 
 # ---------------------------------------------------------------------------
