@@ -6,7 +6,7 @@
   "mcp": {
     "coderain-engine": {
       "type": "local",
-      "command": ["C:\\Users\\souhe\\coderain\\.venv\\Scripts\\python.exe", "C:\\Users\\souhe\\coderain\\mcp_server.py"],
+      "command": [".venv/Scripts/python.exe", "mcp_server.py"],
       "enabled": true
     }
   }

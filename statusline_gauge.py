@@ -10,7 +10,7 @@ Wire it in .claude/settings.json:
 
     "statusLine": {
       "type": "command",
-      "command": "python C:\\\\Users\\\\souhe\\\\coderain\\\\statusline_gauge.py",
+      "command": "python <chemin-vers-ce-repo>\\statusline_gauge.py",
       "refreshInterval": 5
     }
 

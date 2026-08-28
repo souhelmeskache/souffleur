@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import templates
+from .config import saves_dir
 from .macros import expand_macros
 
 # Registry files whose entries are recall-gated by alias/name match.
@@ -2274,7 +2275,12 @@ class Library:
         self.outdated_rules = templates.seed_instructions(self.instructions_dir)
         self.scenarios = ScenarioLibrary(self.root / "scenarios",
                                          self.instructions_dir)
-        self.saves = SaveLibrary(self.root / "saves", self.scenarios,
+        # Saves resolve through config.saves_dir(self.root): for the production
+        # root this consults SAVES_DIR env / config.yaml `saves_dir:` (real play
+        # data can live outside this repo, D-224, while scenarios/instructions
+        # stay put) ; for any other root (every test harness opens one against a
+        # throwaway tmp dir) it's exactly self.root/"saves", unchanged.
+        self.saves = SaveLibrary(saves_dir(self.root), self.scenarios,
                                  self.instructions_dir)
 
     def reset_all_rules(self) -> list[str]:

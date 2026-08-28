@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from coderain.config import corpus_dir
 from coderain.converter import validate_form
 from coderain.converter.emit import write_partition
 from coderain.converter.schemas import (Manifest, Node, Partition, Tension,
@@ -218,13 +219,13 @@ finally:
 
 # 7 -- partition-pconv3 intégrée : 4 fenêtres vertes + validate_form -------
 section("partition-pconv3 integree : 4 fenetres vertes + validate_form vert")
-part_dir = Path(r"C:\Users\souhe\coderain\corpus-modules\death-knights-squire\partition-pconv3")
+part_dir = corpus_dir() / "death-knights-squire" / "partition-pconv3"
 if part_dir.exists():
     import hashlib
     from datetime import datetime, timezone
     idx_pconv3 = json.loads((part_dir / "index.json").read_text(encoding="utf-8"))
     # construire une partition minimale depuis partition-pconv3
-    texte = Path(r"C:\Users\souhe\coderain\corpus-modules\death-knights-squire\extraction\source-pconv0-p10-98.txt").read_text(encoding="utf-8")
+    texte = (corpus_dir() / "death-knights-squire" / "extraction" / "source-pconv0-p10-98.txt").read_text(encoding="utf-8")
     manifest_obj = Manifest(titre="Death Knight's Squire", corpus_source="5e", corpus_cible="5e",
                             structures=["S1", "S2"], hash_source=hashlib.sha256(texte.encode("utf-8")).hexdigest(),
                             date_conversion=datetime.now(timezone.utc).isoformat(timespec="seconds"),
