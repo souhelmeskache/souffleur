@@ -23,8 +23,10 @@ jamais d'état rouge dans l'historique.
   techniques) en anglais — cohérence avec l'existant, pas de convention à
   inventer.
 - Fixtures de test 100% synthétiques (D-109) : jamais de vrai matériau de
-  campagne dans un test. Le corpus réel (`corpus-modules/`) est gitignoré et
-  ne doit jamais entrer dans l'historique — voir `specs/audit-securite-*.md`.
+  campagne dans un test. Le matériau réel (modules source, adaptations
+  converties, vraies parties jouées) ne vit **jamais** dans ce repo — même
+  gitignoré — mais dans le dépôt privé dédié `ttrpg-corpus`
+  (`coderain/config.py:corpus_dir()`/`saves_dir()`) — voir `specs/audit-securite-*.md`.
 - Avant d'ajouter un fichier nouveau : se demander s'il porte du matériau de
   campagne ou un secret. Un fichier entré dans l'historique y reste même
   supprimé ensuite.
@@ -48,3 +50,8 @@ jamais d'état rouge dans l'historique.
 - Les trois commandes destructrices (`git checkout <fichier>`, `git stash`,
   `git reset --hard`) sont interdites sans avoir d'abord enregistré le
   travail en cours — voir [DISCIPLINE-VERSIONNEMENT.md](DISCIPLINE-VERSIONNEMENT.md).
+- **Toute session qui modifie les saves ou le corpus (`ttrpg-corpus`) se
+  termine par un commit + push de ce dépôt-là** — c'est un repo Git séparé de
+  `coderain`, avec sa propre discipline : rien n'y protège le travail tant
+  qu'il n'est pas poussé. Ne pas laisser une partie jouée ou un module converti
+  en local uniquement à la fin d'une session.
