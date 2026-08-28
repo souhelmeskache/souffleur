@@ -56,6 +56,14 @@ jamais d'état rouge dans l'historique.
   qu'il n'est pas poussé. Ne pas laisser une partie jouée ou un module converti
   en local uniquement à la fin d'une session.
 
+## Label `prete` — frontière de confiance (D-224, lanceur de lanes)
+
+Le repo est public : n'importe qui peut ouvrir une Issue, et `tools/lancer-lane.ps1`
+injecte le corps de l'Issue **verbatim** dans le prompt de la lane qu'il lance.
+Le label `prete` (posable uniquement par les mainteneurs) est donc la seule
+frontière de confiance du dispatch — **ne jamais labelliser `prete` une Issue
+ouverte par un tiers sans l'avoir lue en entier au préalable.**
+
 ## Garde de branche `main` (D-224)
 
 Le dossier versionné [hooks/](hooks/) porte les hooks git du repo :
