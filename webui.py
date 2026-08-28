@@ -305,9 +305,6 @@ def is_running() -> bool:
 
 # ── Conversation B — 4 fenêtres jouables (D-219 §Spécification) ──
 
-_CONV_B: "ConversationB | None" = None
-
-
 class _FenetreOption:
     __slots__ = ("texte", "negotiable", "acquis", "jalon")
 
@@ -599,7 +596,7 @@ class ConversationB:
     def _parse_choice(self, text: str) -> int | None:
         t = text.strip().lower()
         mapping = {"1": 0, "un": 0, "2": 1, "deux": 1,
-                   "3": 2, "trois": 3, "4": 3, "quatre": 3}
+                   "3": 2, "trois": 2, "4": 3, "quatre": 3}
         return mapping.get(t)
 
     def _accept_option(self, opt: _FenetreOption):
