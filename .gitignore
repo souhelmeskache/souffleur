@@ -3,6 +3,9 @@
 .venv/
 venv/
 
+# --- Claude Code local settings (permissions posées par worktree, non partagées) ---
+.claude/settings.local.json
+
 # --- python ---
 __pycache__/
 *.pyc
