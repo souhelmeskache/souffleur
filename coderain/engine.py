@@ -8,9 +8,12 @@ Generation has two modes:
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Iterator
 
+from . import assembleur_position
 from . import features
 from . import input_processor
 from . import sidecar as sidecar_mod
@@ -136,6 +139,12 @@ class Engine:
         self._rpg_events: list[str] = []
         self._swipes = None            # ST-02 alternates for the last narrator turn
         self._pre_turn_rpg = None
+        # D-260 branchement (Issue #128) : posé par `_messages()`, consulté par
+        # `_produce()` pour savoir si le paquet vient de l'assembleur position
+        # (auquel cas les règles d'événement sont déjà en queue volatile — ne
+        # jamais les réinjecter entre DIRECTOR_SYS et le contexte, ce que fait
+        # `trinity._direct`, ni les dupliquer en queue single-brain).
+        self._partition_active = False
         # I-373: the last turn's routing result (input_processor.process),
         # consulted by _augment_pack to surface LE PACK's propositions to the
         # Director. None before the first routed turn.
@@ -159,12 +168,65 @@ class Engine:
             except Exception:  # noqa: BLE001 — retrieval setup never breaks the engine
                 self.retriever = None
 
+    def _partition_dir(self) -> Path | None:
+        """D-260 branchement (Issue #128) : résout le partition_dir depuis le
+        pointeur save->partition posé par `converter/install.py` à
+        l'installation (`module.json`, clé "partition") — jamais une
+        convention de chemin devinée. `converter/projection.py` lui-même
+        n'écrit PAS ce pointeur (seul `install.py` le fait avant d'appeler
+        `derive()`) ; une save projetée sans être passée par `install()`
+        (ex. `derive()` appelé à la main) n'a pas de module.json et retombe
+        donc sur `store.assemble()` — cohabitation assumée (épic #124)."""
+        p = self.store.dir / "module.json"
+        if not p.exists():
+            return None
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        partition = data.get("partition")
+        return Path(partition) if partition else None
+
     def _messages(self, history, player_input):
+        state = self.store.world_state()
+        partition_dir = (self._partition_dir()
+                         if assembleur_position.eligible(self.store, state)
+                         else None)
+        self._partition_active = partition_dir is not None
+        if partition_dir is not None:
+            rpg_on = self.store.rpg_enabled()
+            char_sheet = (self.rpg_mod.context_block(
+                             self.store, prompt_narrate=self.trinity is None)
+                         if rpg_on and self.rpg_mod is not None else "")
+            messages = assembleur_position.assemble(
+                partition_dir, self.store, state, history, player_input,
+                scenes_tail=self.scenes_tail, char_sheet=char_sheet,
+                rpg_on=rpg_on)
+            messages = self._augment_pack(self._augment_style(
+                self._augment_rpg(messages, include_sheet=False)))
+            return self._augment_event_rules(messages, history, player_input)
         messages = self.store.assemble(history, player_input,
                                        scenes_tail=self.scenes_tail,
                                        budget_tokens=self.budget,
                                        retriever=self.retriever)
         return self._augment_pack(self._augment_style(self._augment_rpg(messages)))
+
+    def _augment_event_rules(self, messages, history, player_input):
+        """D-260 branchement (Issue #128) : sur le chemin partition, le bloc
+        de règles d'événement candidat (lane b, #127,
+        `event_rule_verdicts_block`) rejoint la QUEUE VOLATILE du paquet —
+        jamais entre DIRECTOR_SYS et le contexte comme le fait
+        `trinity._direct` (`modules/trinity.py::_direct`), ce qui casserait
+        la stabilité de préfixe visée par le cache. Le chemin NON-partition
+        ne passe jamais ici : `_direct` garde son insertion actuelle
+        (single-brain l'ajoute déjà en queue dans `_produce()`, quad
+        l'insère avant le contexte)."""
+        ev_block = self.store.event_rule_verdicts_block(history, player_input)
+        if not ev_block or not messages:
+            return messages
+        return [{**messages[0],
+                "content": messages[0]["content"] + "\n\n" + ev_block},
+               *messages[1:]]
 
     def route_input(self, player_input: str) -> ProcessedInput:
         """Le processeur d'entrée v-min (I-373) : route `player_input` vers les
@@ -253,9 +315,12 @@ class Engine:
             out = out[:-1] + [note, out[-1]]     # right before the player's action
         return out
 
-    def _augment_rpg(self, messages):
+    def _augment_rpg(self, messages, include_sheet: bool = True):
         """When RPG mechanics are on for this story, append the rpg rules + the live
-        character sheet to the system prompt. No-op (and zero overhead) when off."""
+        character sheet to the system prompt. No-op (and zero overhead) when off.
+        `include_sheet=False` (D-260 branchement, Issue #128) : le chemin partition
+        a déjà passé `rpg_mod.context_block(...)` à l'assembleur position comme
+        section volatile dédiée — ne jamais servir la fiche perso deux fois."""
         if not messages or not self.store.rpg_enabled():
             return messages
         rules = self.store.read("rpg-rules.md").strip()
@@ -263,7 +328,7 @@ class Engine:
         # "narrate this now" nudge would cause a re-narration next turn.
         sheet = (self.rpg_mod.context_block(
                      self.store, prompt_narrate=self.trinity is None)
-                 if self.rpg_mod is not None else "")
+                 if include_sheet and self.rpg_mod is not None else "")
         add = "\n\n# RPG MODULE (mechanics ON)\n\n" + rules
         if sheet:
             add += "\n\n## Your character sheet\n" + sheet
@@ -565,12 +630,14 @@ class Engine:
         rpg_on = self.store.rpg_enabled()
         sidecar = None
         trinity_events = None
-        if self.trinity is None:
+        if self.trinity is None and not self._partition_active:
             # Single-brain: the one model IS the logic agent, so it gets the
             # event rules (in quad mode only the Director sees them). D-260
             # lane (b) (#127) : bloc CANDIDAT du tour, jamais l'ensemble
             # constant (I-158) — event_rules_block() reste disponible ailleurs
-            # (pont MCP get_event_rules, etc.), inchangé.
+            # (pont MCP get_event_rules, etc.), inchangé. Chemin partition :
+            # déjà en queue volatile via `_augment_event_rules()` dans
+            # `_messages()` (D-260 branchement, #128) — pas de second ajout.
             ev_block = self.store.event_rule_verdicts_block(history, player_input)
             if ev_block and messages:
                 messages = [{**messages[0],
@@ -589,10 +656,15 @@ class Engine:
             simple = (not rpg_on and self.store.mode() == "simple"
                       and not self.store.event_rules())
             chunks: list[str] = []
+            # D-260 branchement (Issue #128) : chemin partition -> event_rules
+            # déjà servi en queue volatile par `_augment_event_rules()`, ne
+            # jamais le repasser ici (trinity._direct l'insérerait avant le
+            # contexte, ce qui casserait la stabilité de préfixe).
             trinity_events = yield from self.trinity.generate(
                 messages, rpg_on, on_stage, chunks, skip_logic=simple,
-                event_rules=self.store.event_rule_verdicts_block(
-                    history, player_input))
+                event_rules="" if self._partition_active else
+                            self.store.event_rule_verdicts_block(
+                                history, player_input))
             narration = "".join(chunks).strip()
         elif self.use_tool:
             raw = self._generate_with_tool(messages)
