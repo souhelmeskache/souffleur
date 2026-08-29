@@ -406,7 +406,16 @@ class Summarizer:
                              "# Arc synopsis (long-term)\n\n"
                              + str(obj["arc"]).strip() + "\n")
             return ["memory: updated arc"]
-        return []
+        # I-204: a failed emission used to `return []` here while `maybe_fold`
+        # still advanced `folded_scenes` — the scenes were marked folded with
+        # nothing written anywhere, no readable trace unlike `_fold_scene`'s
+        # "(scene summary unavailable)" stub. Mirror that: leave arc.md's
+        # existing content untouched and append a readable marker instead of
+        # silently dropping the batch, so the counter never advances for free.
+        current = self.store.read("memory/arc.md") or "# Arc synopsis (long-term)\n"
+        stub = f"(arc fold unavailable for scenes: {', '.join(e.slug for e in scenes)})"
+        self.store.write("memory/arc.md", current.rstrip("\n") + "\n\n" + stub + "\n")
+        return ["memory: arc fold unavailable"]
 
     def maybe_fold(self) -> list[str]:
         """Run any due folds; returns human-readable event strings."""
