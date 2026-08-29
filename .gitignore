@@ -21,6 +21,11 @@ config.yaml
 # --- runtime turn scratch: holds the assembled play context (campaign material) ---
 .turn/
 
+# --- banc de fumée (D-264): journal par tour, peut citer la fiction du banc
+# DKS (module sacrificiel D-109/D-178) -- rien de cette fiction ne se
+# versionne, même le journal mécanique qui la cite ---
+bench/banc-fumee/
+
 # --- P4 converter input corpus: extracted module text + measures (campaign material) ---
 corpus-modules/
 
