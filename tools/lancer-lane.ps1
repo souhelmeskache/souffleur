@@ -1,6 +1,7 @@
 ﻿<#
 .SYNOPSIS
-    Lanceur minimal d'une lane Herdr sur une Issue GitHub du repo souffleur.
+    Lanceur minimal d'une lane Herdr sur une Issue GitHub du repo souffleur,
+    ou d'une lane de revue adversariale sur une PR (D-251).
 
 .DESCRIPTION
     Pas de démon, pas de superviseur. Une commande = une lane. Le plafond de
@@ -8,49 +9,80 @@
     lance une fois = 1 lane). Voir BRIEF-2026-08-28-phase-2-herdr-premiere-lane.md
     (bloc C) dans le vault meta-rpg.
 
+    Deux modes, mutuellement exclusifs :
+    - Mode par défaut (-Issue) : lance une lane d'exécution sur une Issue
+      labellisée `prete`, dans un worktree neuf.
+    - Mode -Revue : lance une lane de revue adversariale FABLE sur une PR
+      existante, dans un worktree JETABLE dédié (jamais le checkout
+      principal — corrigé après la revue de la PR #60 : écrire l'automode
+      dans le checkout principal y laissait une élévation Bash(*)
+      persistante pour toute session future de ce dossier).
+
 .PARAMETER Issue
     Numéro de l'Issue GitHub à lancer en lane (repo souhelmeskache/souffleur).
+    Exclusif avec -Revue.
+
+.PARAMETER Revue
+    Numéro de la PR GitHub à soumettre à une lane de revue adversariale
+    (D-251). Crée un worktree jetable dédié (base fraîche sur origin/main,
+    jamais le checkout principal — la lane n'y committe/pousse rien, elle a
+    juste besoin d'un checkout isolé pour `gh`), lance claude en modèle
+    fable / effort medium — FIGÉS, jamais paramétrables dans ce mode (le
+    contrôle qualité ne se fait pas au rabais, D-225). La lane lit la spec
+    de l'Issue liée, lit le diff de la PR, et poste un verdict en commentaire
+    de PR commençant littéralement par `REVUE : APPROUVE` ou
+    `REVUE : REFUS` (marqué `(TEST)` si la PR n'est plus OPEN — revue à
+    blanc). Exclusif avec -Issue.
 
 .PARAMETER Modele
     sonnet (défaut) | opus | fable. Jamais haiku (D-225) — refusé explicitement
-    si passé.
+    si passé. Ignoré (et sans effet) en mode -Revue, où le modèle est figé à
+    fable.
 
 .PARAMETER Effort
     low | medium. Par défaut : low si l'issue porte le label `mecanique`,
     medium sinon (D-225 : contrôle qualité = fable medium, exécution = sonnet
-    low/medium, orchestration = opus).
+    low/medium, orchestration = opus). Ignoré (et sans effet) en mode -Revue,
+    où l'effort est figé à medium.
 
 .PARAMETER DryRun
-    Affiche ce qui serait lancé (issue, branche, worktree, pane, commandes
-    herdr) sans rien créer ni lancer.
+    Affiche ce qui serait lancé (issue/PR, branche ou pane, worktree, commandes
+    herdr) sans rien créer ni lancer. Couvre les deux modes.
 
 .PARAMETER SessionTour
-    Nom de la session de tour de contrôle à tester en premier via SendMessage
-    au premier blocage de la lane (ex. meta-rpg-5f). Vide par défaut : ce nom
-    change à chaque fil de tour, aucune valeur figée ne resterait valide — sans
-    ce paramètre la lane saute directement le test du canal rapide et poste son
-    ``BLOQUÉ : ...`` sur l'Issue, qui reste le canal de secours garanti.
+    Nom de la session de tour de contrôle à tenter en priorité via SendMessage
+    aux jalons BLOQUÉ et TERMINÉ de la lane (ex. meta-rpg-5f) — sonnette
+    nominale (D-251) : ce nom change à chaque fil de tour, aucune valeur figée
+    ne resterait valide. Vide par défaut : sans ce paramètre la lane saute la
+    tentative SendMessage et poste directement ses commentaires sur l'Issue,
+    qui reste le canal de secours garanti. Ne s'applique qu'au mode -Issue
+    (une lane de revue commente une PR, pas une Issue).
 
 .EXAMPLE
     .\tools\lancer-lane.ps1 14 -DryRun
     .\tools\lancer-lane.ps1 14 -Modele fable -Effort medium
     .\tools\lancer-lane.ps1 14 -SessionTour meta-rpg-5f
+    .\tools\lancer-lane.ps1 -Revue 42 -DryRun
+    .\tools\lancer-lane.ps1 -Revue 42
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Mandatory = $true, Position = 0, ParameterSetName = 'Lane')]
     [int]$Issue,
 
-    [Parameter()]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Revue')]
+    [int]$Revue,
+
+    [Parameter(ParameterSetName = 'Lane')]
     [ValidateSet('sonnet', 'opus', 'fable')]
     [string]$Modele = 'sonnet',
 
-    [Parameter()]
+    [Parameter(ParameterSetName = 'Lane')]
     [ValidateSet('low', 'medium')]
     [string]$Effort,
 
-    [Parameter()]
+    [Parameter(ParameterSetName = 'Lane')]
     [string]$SessionTour = '',
 
     [Parameter()]
@@ -59,9 +91,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$EstRevue = ($PSCmdlet.ParameterSetName -eq 'Revue')
+
 # Jamais Haiku (D-225) — filet en plus du ValidateSet, au cas où un appelant
 # contournerait le paramètre typé via -Modele:$var non validé en amont.
-if ($Modele -eq 'haiku') {
+# Sans objet en mode -Revue : le modèle y est figé à fable plus bas, jamais
+# lu depuis $Modele.
+if (-not $EstRevue -and $Modele -eq 'haiku') {
     Write-Error "Modele 'haiku' exclu par D-225 (contrôle qualité = fable, exécution = sonnet, orchestration = opus)."
     exit 1
 }
@@ -101,11 +137,205 @@ $RepoSlug = 'souhelmeskache/souffleur'
 $PauseFlag = Join-Path $RepoRoot 'tools/PAUSE'
 
 # --- 1. Garde-fou pause (garde la moins chère d'abord — avant tout appel réseau) --
+# S'applique aux deux modes : une lane de revue reste une lane.
 
 if (Test-Path $PauseFlag) {
     Write-Error "Pause active (tools/PAUSE présent) — aucune lane ne se lance. Supprime le fichier pour reprendre."
     exit 1
 }
+
+# ============================================================================
+# Mode -Revue : lane de revue adversariale FABLE sur une PR existante (D-251)
+# ============================================================================
+
+function Build-RevuePrompt {
+    param(
+        [Parameter(Mandatory)] [int]$PrNumber,
+        [Parameter(Mandatory)] [string]$RepoSlug
+    )
+
+    @"
+# Revue adversariale — PR #$PrNumber ($RepoSlug)
+
+Tu es une lane de REVUE, pas une lane d'exécution : tu ne modifies aucun
+fichier, tu ne crées aucune branche, tu ne commit ni ne push rien. Ton seul
+livrable est un verdict posté en commentaire sur la PR #$PrNumber.
+
+## Étapes
+
+1. Identifie l'état et l'Issue liée à cette PR (``gh pr view $PrNumber --repo $RepoSlug --json state,title,body,url,closingIssuesReferences``
+   ou, à défaut, le titre/corps de la PR) et lis la spec complète de cette
+   Issue (``gh issue view <numero> --repo $RepoSlug``).
+2. Lis le diff complet de la PR : ``gh pr diff $PrNumber --repo $RepoSlug``.
+3. Attaque le diff contre la spec de l'Issue liée. Cherche activement :
+   - **Violations de spec** — ce que l'Issue demandait et que le diff ne fait
+     pas, ou fait autrement que demandé.
+   - **Étanchéité** — tout matériau de campagne réel ou secret qui se serait
+     glissé dans le repo (voir CLAUDE.md du repo : le matériau réel vit dans
+     le dépôt privé ``ttrpg-corpus``, jamais ici, même gitignoré).
+   - **Zéro-spoiler** — toute fuite d'information de partie (contenu de
+     module, résultat de jet, secret de PJ/PNJ) qui ne devrait pas apparaître
+     en clair dans du code/test/doc versionné.
+   - **Tests creux** — tests qui ne testent rien (assertions triviales, mocks
+     qui masquent le comportement réel, absence de cas d'échec).
+
+## Verdict
+
+Poste UN commentaire sur la PR (``gh pr comment $PrNumber --repo $RepoSlug --body "..."``)
+dont la première ligne commence **littéralement** par l'une de ces deux
+chaînes :
+
+- ``REVUE : APPROUVE`` — suivi de tes points d'attention mineurs s'il y en a.
+- ``REVUE : REFUS`` — suivi de la liste précise des points bloquants trouvés
+  à l'étape 3.
+
+**Revue à blanc.** Si l'état relevé à l'étape 1 n'est PAS ``OPEN`` (PR déjà
+mergée ou fermée), cette revue ne peut gater aucun merge réel — c'est
+forcément une revue à blanc (validation du mécanisme, pas un vrai geste de
+gate). Dans ce cas précis, ajoute le marqueur ``(TEST)`` collé juste après le
+préfixe obligatoire (ex. ``REVUE : APPROUVE (TEST)`` ou
+``REVUE : REFUS (TEST)``) et dis-le explicitement dans le corps du
+commentaire. Sur une PR encore ``OPEN``, ne mets jamais ce marqueur : c'est
+une revue réelle.
+
+Puis poste un second commentaire sur la même PR, commençant littéralement par
+``TERMINÉ : `` confirmant que le verdict est posté.
+
+## Ce que tu ne fais PAS
+
+- Pas de commit, pas de push, pas de modification de fichier, pas de nouvelle
+  branche.
+- Pas de merge — le merge reste un geste de la tour.
+- Le modèle et l'effort de cette revue sont figés (fable / medium) par le
+  lanceur qui t'a démarrée : ne cherche pas à la déléguer à un modèle moins
+  cher.
+"@
+}
+
+if ($EstRevue) {
+    $ModeleRevue = 'fable'
+    $EffortRevue = 'medium'
+
+    $prJson = & $GhExe pr view $Revue --repo $RepoSlug --json number,title,url,state
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Impossible de lire la PR #$Revue sur $RepoSlug."
+        exit 1
+    }
+    $prData = $prJson | ConvertFrom-Json
+
+    $revuePromptText = Build-RevuePrompt -PrNumber $prData.number -RepoSlug $RepoSlug
+
+    $agentName = "revue-$Revue"
+    # Branche jetable, jamais destinée à recevoir de commit : la lane de
+    # revue n'écrit rien (voir Build-RevuePrompt, « Ce que tu ne fais PAS »),
+    # elle a juste besoin d'un checkout Git isolé pour que `gh` et un
+    # éventuel `git log`/`git show` fonctionnent sans toucher au checkout
+    # principal. Base fraîche sur origin/main, comme le mode -Issue.
+    $revueBranch = "revue-$Revue"
+
+    if ($DryRun) {
+        Write-Output "=== DryRun (mode -Revue) — rien n'est lancé ==="
+        Write-Output "PR             : #$($prData.number) — $($prData.title)"
+        Write-Output "URL            : $($prData.url)"
+        Write-Output "État           : $($prData.state)"
+        Write-Output "Modele         : $ModeleRevue (figé)"
+        Write-Output "Effort         : $EffortRevue (figé)"
+        Write-Output "Nom agent      : $agentName"
+        Write-Output "Branche jetable: $revueBranch"
+        Write-Output ""
+        Write-Output "Commandes qui seraient exécutées :"
+        Write-Output "  (gh résolu : $GhExe)"
+        Write-Output "  (herdr résolu : $HerdrExe)"
+        Write-Output "  git -C `"$RepoRoot`" fetch origin main"
+        Write-Output "  $HerdrExe worktree create --cwd `"$RepoRoot`" --branch $revueBranch --base origin/main   (worktree JETABLE, jamais le checkout principal — lecture seule via gh, aucun commit attendu)"
+        Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
+        Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $ModeleRevue --effort $EffortRevue --permission-mode acceptEdits"
+        Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
+        Write-Output ""
+        Write-Output "--- Prompt-gabarit (revue) ---"
+        Write-Output $revuePromptText
+        exit 0
+    }
+
+    Write-Output "Fetch d'origin/main (base fraîche du worktree jetable de revue)..."
+    git -C $RepoRoot fetch origin main
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Échec de 'git fetch origin main' — base du worktree de revue non garantie fraîche, abandon."
+        exit 1
+    }
+
+    Write-Output "Création du worktree jetable + pane pour la revue de la PR #$Revue..."
+    # JAMAIS le checkout principal (D-251, revue PR #60) : herdr worktree
+    # create isole ce pane dans son propre dossier, comme le mode -Issue —
+    # aucun risque d'écraser un .claude/settings.local.json qui ne
+    # appartient pas à cette lane, ni de laisser une élévation Bash(*)
+    # traîner dans le checkout partagé après la revue.
+    $worktreeJson = & $HerdrExe worktree create --cwd $RepoRoot --branch $revueBranch --base origin/main
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Échec de 'herdr worktree create' pour la revue de la PR #$Revue (branche $revueBranch)."
+        exit 1
+    }
+    $worktreeData = $worktreeJson | ConvertFrom-Json
+    $paneId = $worktreeData.result.root_pane.pane_id
+    $worktreePath = $worktreeData.result.worktree.path
+
+    Write-Output "Worktree (jetable) : $worktreePath"
+    Write-Output "Pane                : $paneId"
+
+    # Automode local — même filet que le mode -Issue (voir plus bas), posé
+    # DANS le worktree jetable de cette revue, jamais dans le checkout
+    # principal.
+    $claudeDir = Join-Path $worktreePath '.claude'
+    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+    $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
+    $settingsLocal = [ordered]@{
+        permissions = [ordered]@{
+            allow = @('Bash(*)')
+            deny  = @(
+                'Bash(git commit --no-verify*)',
+                'Bash(git commit -n*)',
+                'Bash(git push --no-verify*)',
+                'Bash(git push --force*)',
+                'Bash(git push -f*)'
+            )
+        }
+    }
+    ($settingsLocal | ConvertTo-Json -Depth 5) | Set-Content -Path $settingsLocalPath -Encoding utf8
+    Write-Output "Automode posé : $settingsLocalPath"
+
+    Write-Output "Câblage du jeton scopé lanes (GH_TOKEN_LANES -> GH_TOKEN du pane)..."
+    # Même schéma que le mode -Issue (D-227) : le jeton n'est lu que DANS le
+    # pane, jamais par ce process. Pas de câblage git credential.helper ici :
+    # une lane de revue ne fait ni commit ni push, seulement des appels `gh`
+    # qui lisent GH_TOKEN directement depuis l'environnement.
+    $setTokenCmd = '$env:GH_TOKEN = [System.Environment]::GetEnvironmentVariable(''GH_TOKEN_LANES'',''User'')'
+    & $HerdrExe pane run $paneId $setTokenCmd | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Échec de la pose de GH_TOKEN dans le pane $paneId."
+        exit 1
+    }
+
+    Write-Output "Démarrage de l'agent de revue ($ModeleRevue, effort $EffortRevue — figés)..."
+    & $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $ModeleRevue --effort $EffortRevue --permission-mode acceptEdits
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Échec de 'herdr agent start' pour $agentName sur le pane $paneId."
+        exit 1
+    }
+
+    Write-Output "Envoi du prompt-gabarit de revue..."
+    & $HerdrExe agent prompt $agentName $revuePromptText --wait --until working --timeout 15000
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Échec de l'envoi du prompt à $agentName (ou l'agent n'est pas passé en 'working' sous 15s)."
+        exit 1
+    }
+
+    Write-Output "Lane de revue $agentName lancée sur la PR #$Revue (fable, effort medium) — le script rend la main, la revue continue en arrière-plan dans le pane $paneId."
+    exit 0
+}
+
+# ============================================================================
+# Mode -Issue (défaut) : lane d'exécution dans un worktree neuf
+# ============================================================================
 
 # --- 2. Lecture de l'issue ---------------------------------------------
 #
@@ -145,39 +375,37 @@ function Build-LanePrompt {
         [Parameter()] [string]$SessionTour = ''
     )
 
-    $canalRapide = if ($SessionTour) {
+    $sonnette = if ($SessionTour) {
         @"
-## Test du canal rapide (à faire une seule fois, au premier blocage)
+## Sonnette nominale (canal SendMessage vers la session tour)
 
-Avant de poster ton tout premier commentaire ``BLOQUÉ : ...`` sur cette
-Issue, tente d'abord ``SendMessage`` vers la session ``$SessionTour`` avec la
-question qui te bloque. C'est un test du canal rapide (interrogation directe
-d'une session plutôt qu'un aller-retour par commentaire GitHub) :
+À chacun des jalons **2 (``BLOQUÉ : ...``)** et **3 (``TERMINÉ : ...``)**
+ci-dessus — pas seulement au premier blocage — tente D'ABORD ``SendMessage``
+vers la session ``$SessionTour`` avec le contenu du commentaire (la question
+qui bloque, ou le lien de la PR pour TERMINÉ), PUIS poste dans tous les cas
+le commentaire GitHub correspondant sur cette Issue. Le commentaire GitHub
+reste le canal garanti, inchangé ; ``SendMessage`` est un canal rapide en
+plus, jamais un remplacement — ne saute JAMAIS le commentaire GitHub même si
+``SendMessage`` a réussi.
 
 - Si ``SendMessage`` aboutit (session trouvée, message envoyé) : note-le dans
-  ton commentaire ``BLOQUÉ : ...`` (« canal rapide testé : SendMessage vers
-  $SessionTour a fonctionné ») et attends sa réponse avant de continuer si elle
-  arrive vite ; sinon poste quand même le commentaire GitHub en parallèle pour
-  ne pas rester bloqué.
+  le commentaire GitHub correspondant (« sonnette : SendMessage vers
+  $SessionTour a fonctionné »).
 - Si ``SendMessage`` échoue ou n'est pas disponible dans ton environnement :
-  note-le aussi dans le commentaire (« canal rapide testé : SendMessage
-  indisponible/échoué — repli sur commentaire GitHub ») et continue avec le
-  commentaire ``BLOQUÉ : ...`` normalement, qui reste le canal de secours
-  garanti.
+  note-le aussi (« sonnette : SendMessage indisponible/échoué — repli sur
+  commentaire GitHub ») et continue normalement avec le commentaire GitHub.
 
-Ce test ne se refait pas à chaque blocage ultérieur de la même lane — une
-seule tentative suffit à établir si le canal fonctionne dans cet
-environnement ; les blocages suivants passent directement par le commentaire
-``BLOQUÉ : ...``.
+C'est le régime nominal de cette lane, pas un test ponctuel : répète la
+tentative ``SendMessage`` à chacun des deux jalons, pas seulement au premier.
 "@
     } else {
         @"
-## Canal rapide
+## Sonnette
 
 Pas de session de tour de contrôle fournie à ce lancement (paramètre
-``-SessionTour`` absent) — pas de test ``SendMessage``. Poste directement ton
-``BLOQUÉ : ...`` sur cette Issue dès qu'un arbitrage manque, qui est le canal
-garanti.
+``-SessionTour`` absent) — pas de tentative ``SendMessage`` aux jalons. Poste
+directement tes commentaires ``BLOQUÉ : ...`` et ``TERMINÉ : ...`` sur cette
+Issue, qui reste le canal garanti.
 "@
     }
 
@@ -194,6 +422,11 @@ $Body
 - Petite PR ciblée vers ``main`` (verrouillée côté serveur : PR + CI obligatoires) — pas de commit direct sur ``main``.
 - CI verte attendue avant de considérer la lane terminée.
 - **Jamais ``--no-verify``** sur aucune commande git, en aucune circonstance.
+- Une fois la PR ouverte : si elle touche autre chose que ``docs/`` seul,
+  signale-le explicitement dans ton commentaire ``TERMINÉ : ...`` avec la
+  mention ``REVUE REQUISE`` (ex. ``TERMINÉ : <lien PR> — REVUE REQUISE``) —
+  une lane de revue adversariale (``lancer-lane.ps1 -Revue <numero-PR>``)
+  pourra alors être lancée dessus avant merge.
 
 ## Commentaires d'Issue obligatoires (trois jalons, sur l'Issue #$IssueNumber)
 
@@ -206,12 +439,16 @@ chacun des trois moments suivants — aucun n'est optionnel :
 2. **« BLOQUÉ : <question> »** — dès qu'un arbitrage manque pour continuer
    (ambiguïté de spec, décision qui dépasse le périmètre de la lane, conflit
    non résoluble seul). Le commentaire commence littéralement par
-   ``BLOQUÉ : `` suivi de la question précise qui débloque.
+   ``BLOQUÉ : `` suivi de la question précise qui débloque. Voir sonnette
+   ci-dessous : tentative ``SendMessage`` avant ce commentaire si
+   ``-SessionTour`` a été fourni au lancement.
 3. **« TERMINÉ : <PR> »** — à la toute fin, une fois la PR ouverte (mergée ou
    non). Le commentaire commence littéralement par ``TERMINÉ : `` suivi du
-   lien de la PR.
+   lien de la PR (et de la mention ``REVUE REQUISE`` si applicable, voir
+   règles fixes ci-dessus). Voir sonnette ci-dessous : même tentative
+   ``SendMessage`` avant ce commentaire si ``-SessionTour`` a été fourni.
 
-$canalRapide
+$sonnette
 "@
 }
 
@@ -223,7 +460,7 @@ $agentName = "lane-$Issue"
 # --- 5. Dry-run : affiche et sort sans rien créer -------------------------
 
 if ($DryRun) {
-    Write-Output "=== DryRun — rien n'est lancé ==="
+    Write-Output "=== DryRun (mode -Issue) — rien n'est lancé ==="
     Write-Output "Issue          : #$($issueData.number) — $($issueData.title)"
     Write-Output "URL            : $($issueData.url)"
     Write-Output "Labels         : $($labelNames -join ', ')"
