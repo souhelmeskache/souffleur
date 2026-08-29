@@ -30,12 +30,23 @@ from coderain.proposeur import (
 )
 
 # ---- matière source synthétique --------------------------------------------
+# CandidatActe est le vrai type du sélecteur (I-57, RACCORD) : pas de champ
+# `id` -- l'identité utilisée comme ancre_source est l'id dérivé `.id()`
+# (concaténation ordonnée des ids de modules).
 
-candidats = [
-    CandidatActe(id="acte-forge-abandonnee", resume="Une forge à l'abandon."),
-    CandidatActe(id="acte-caravane-perdue", resume="Une caravane disparue."),
-    CandidatActe(id="acte-pillards-route", resume="Des pillards rôdent sur la route."),
-]
+c_forge = CandidatActe(
+    modules=("module-forge-abandonnee", "module-outil-perdu"),
+    justification="répond à l'envie d'un artisanat à réparer",
+    libelle="Une forge à l'abandon.")
+c_caravane = CandidatActe(
+    modules=("module-caravane-perdue", "module-route-des-sables"),
+    justification="répond à l'envie de voyage",
+    libelle="Une caravane disparue.")
+c_pillards = CandidatActe(
+    modules=("module-pillards-route", "module-embuscade"),
+    justification="répond à l'envie d'action",
+    libelle="Des pillards rôdent sur la route.")
+candidats = [c_forge, c_caravane, c_pillards]
 envies = [
     EnvieJoueur(id="envie-artisan", texte="Je veux jouer un artisan."),
     EnvieJoueur(id="envie-voyageur", texte="Je veux voyager beaucoup."),
@@ -48,12 +59,12 @@ p1 = Proposition(
     id="prop-1",
     personnage=[
         ElementPropose(label="role", texte="Un forgeron itinérant",
-                       ancre_source="acte-forge-abandonnee", portee=CENTRAL),
+                       ancre_source=c_forge.id(), portee=CENTRAL),
     ],
     contrat=[
         ElementPropose(label="clause_centrale",
                        texte="Reforger l'outil perdu dans la forge abandonnée",
-                       ancre_source="acte-forge-abandonnee", portee=CENTRAL),
+                       ancre_source=c_forge.id(), portee=CENTRAL),
         ElementPropose(label="clause_secondaire",
                        texte="Réapprovisionner en minerai en chemin",
                        ancre_source="envie-artisan", portee=SECONDAIRE),
@@ -74,11 +85,11 @@ assert registre.derniere().statut == "refusee"
 p2_aveugle = Proposition(
     id="prop-2-aveugle",
     personnage=[ElementPropose(label="role", texte="Un caravanier",
-                                ancre_source="acte-caravane-perdue",
+                                ancre_source=c_caravane.id(),
                                 portee=CENTRAL)],
     contrat=[ElementPropose(label="clause_centrale",
                              texte="Retrouver la caravane disparue",
-                             ancre_source="acte-caravane-perdue",
+                             ancre_source=c_caravane.id(),
                              portee=CENTRAL)],
 )
 try:
@@ -103,12 +114,12 @@ p2 = Proposition(
     id="prop-2",
     personnage=[
         ElementPropose(label="role", texte="Un caravanier chevronné",
-                       ancre_source="acte-caravane-perdue", portee=CENTRAL),
+                       ancre_source=c_caravane.id(), portee=CENTRAL),
     ],
     contrat=[
         ElementPropose(label="clause_centrale",
                        texte="Retrouver la caravane disparue sur la route",
-                       ancre_source="acte-caravane-perdue", portee=CENTRAL),
+                       ancre_source=c_caravane.id(), portee=CENTRAL),
         ElementPropose(label="clause_secondaire",
                        texte="Négocier avec les voyageurs croisés en chemin",
                        ancre_source="envie-voyageur", portee=SECONDAIRE),
@@ -139,7 +150,7 @@ try:
     registre.proposer(Proposition(
         id="prop-3-aveugle",
         personnage=[ElementPropose(label="role", texte="x",
-                                   ancre_source="acte-forge-abandonnee",
+                                   ancre_source=c_forge.id(),
                                    portee=CENTRAL)]))
     raised2 = False
 except ValueError:
@@ -152,11 +163,11 @@ friction2 = registre.capturer_friction(
 p3 = Proposition(
     id="prop-3",
     personnage=[ElementPropose(label="role", texte="Un éclaireur solitaire",
-                               ancre_source="acte-caravane-perdue",
+                               ancre_source=c_caravane.id(),
                                portee=SECONDAIRE)],
     contrat=[ElementPropose(label="clause_centrale",
                             texte="Traquer les pillards de la route",
-                            ancre_source="acte-pillards-route",
+                            ancre_source=c_pillards.id(),
                             portee=CENTRAL)],
     friction_source_id=friction2.id,
 )
@@ -172,8 +183,8 @@ print("5) aucun quota codé en dur -- un second cycle refus/friction/repropositi
 
 sortie = rendu_joueur(p3)
 spoiler_markers = (
-    "prop-1", "prop-2", "prop-3", "acte-forge-abandonnee",
-    "acte-caravane-perdue", "acte-pillards-route", "envie-artisan",
+    "prop-1", "prop-2", "prop-3", c_forge.id(), c_caravane.id(),
+    c_pillards.id(), "envie-artisan",
     "envie-voyageur", "ancre_source", "friction", "refusee", "en_attente",
     "retenue",
 )
