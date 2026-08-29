@@ -147,6 +147,66 @@ function Resolve-ExternalCommand {
 $GhExe = Resolve-ExternalCommand -Name 'gh' -FallbackPaths @('C:\Program Files\GitHub CLI\gh.exe')
 $HerdrExe = Resolve-ExternalCommand -Name 'herdr' -FallbackPaths @("$env:LOCALAPPDATA\Programs\Herdr\bin\herdr.exe")
 
+# --- 0bis. Envoi du prompt sans interprétation shell (I-385) --------------
+#
+# Le corps d'une Issue est injecté verbatim dans le prompt (Build-LanePrompt /
+# Build-RevuePrompt) puis envoyé via `herdr agent prompt`. PowerShell 5.1
+# (Windows PowerShell — pas de $PSNativeCommandArgumentPassing, arrivé en
+# 7.3) réinterprète les guillemets doubles internes d'un argument avant de
+# construire la ligne de commande Win32 passée à CreateProcess : un nombre
+# IMPAIR de guillemets dans le texte suffit à faire éclater cet unique
+# argument en plusieurs argv distincts (guillemets perdus, morceaux
+# recollés au token suivant). Constaté : un corps d'issue portant des
+# guillemets doubles littéraux (convention de dialogue D-092, issue #34)
+# a produit une erreur shell (« unknown option ») côté herdr/gh, la lane a
+# démarré sans consigne exploitable — worktree orphelin purgé à la main.
+#
+# Contournement : construire nous-mêmes la ligne de commande avec
+# l'échappement Win32 standard (celui de CommandLineToArgvW / argv C), puis
+# lancer le process directement via .NET (ProcessStartInfo.Arguments — pas
+# .ArgumentList, absent du .NET Framework embarqué par Windows PowerShell
+# 5.1) en contournant entièrement l'invocation native `&` de PowerShell, qui
+# est le maillon buggé. $script:LASTEXITCODE est reposé en sortie pour que
+# les `if ($LASTEXITCODE -ne 0)` déjà en place restent inchangés.
+
+function ConvertTo-Win32Arg {
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string]$Value)
+    if ($Value -eq '') { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $len = $Value.Length
+    for ($i = 0; $i -lt $len; $i++) {
+        $numBackslashes = 0
+        while ($i -lt $len -and $Value[$i] -eq '\') { $numBackslashes++; $i++ }
+        if ($i -eq $len) {
+            [void]$sb.Append('\' * ($numBackslashes * 2))
+        } elseif ($Value[$i] -eq '"') {
+            [void]$sb.Append('\' * ($numBackslashes * 2 + 1))
+            [void]$sb.Append('"')
+        } else {
+            [void]$sb.Append('\' * $numBackslashes)
+            [void]$sb.Append($Value[$i])
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory)] [string]$FilePath,
+        [Parameter(Mandatory)] [string[]]$Arguments
+    )
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = ($Arguments | ForEach-Object { ConvertTo-Win32Arg $_ }) -join ' '
+    $psi.UseShellExecute = $false
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $p.WaitForExit()
+    $script:LASTEXITCODE = $p.ExitCode
+}
+
 $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 $RepoSlug = 'souhelmeskache/souffleur'
 $PauseFlag = Join-Path $RepoRoot 'tools/PAUSE'
@@ -338,7 +398,12 @@ if ($EstRevue) {
     }
 
     Write-Output "Envoi du prompt-gabarit de revue..."
-    & $HerdrExe agent prompt $agentName $revuePromptText --wait --until working --timeout 15000
+    # Invoke-NativeCommand (I-385), pas `&` : le prompt de revue ne porte pas
+    # de corps d'issue tiers, mais reste construit par gabarit — même filet.
+    Invoke-NativeCommand -FilePath $HerdrExe -Arguments @(
+        'agent', 'prompt', $agentName, $revuePromptText,
+        '--wait', '--until', 'working', '--timeout', '15000'
+    )
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Échec de l'envoi du prompt à $agentName (ou l'agent n'est pas passé en 'working' sous 15s)."
         exit 1
@@ -614,7 +679,14 @@ if ($LASTEXITCODE -ne 0) {
 # de la lane. Constaté en lançant réellement ce script (pas seulement en
 # -DryRun) sur l'Issue #18 — voir PR #17.
 Write-Output "Envoi du prompt-gabarit..."
-& $HerdrExe agent prompt $agentName $promptText --wait --until working --timeout 15000
+# Invoke-NativeCommand (I-385) : $promptText porte le corps de l'issue
+# verbatim (Build-LanePrompt) — un `&` natif y déséquilibrerait un nombre
+# impair de guillemets doubles internes et éclaterait l'argument en
+# plusieurs argv, voir la section 0bis plus haut.
+Invoke-NativeCommand -FilePath $HerdrExe -Arguments @(
+    'agent', 'prompt', $agentName, $promptText,
+    '--wait', '--until', 'working', '--timeout', '15000'
+)
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de l'envoi du prompt à $agentName (ou l'agent n'est pas passé en 'working' sous 15s)."
     exit 1
