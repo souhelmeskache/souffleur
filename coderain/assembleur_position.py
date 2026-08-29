@@ -144,7 +144,12 @@ def _anchored_record_ids(partition_dir: Path, location: str) -> list[str]:
 
 
 def _presence_section(partition_dir: Path, store: MemoryStore,
-                      location: str) -> Section:
+                      location: str, secrets: bool = True) -> Section:
+    """`secrets=False` (Issue #146, bridge MCP) omet la sous-section
+    « Secrets connus » — même contrat que `assemble_context_to_file` sur
+    l'ancien chemin (narrateur-seul, jamais les twists non tirés). Le
+    défaut True garde `engine.py` (Director table) octet-identique, qui
+    n'appelle jamais ce paramètre."""
     anchored = _anchored_record_ids(partition_dir, location)
     by_slug = {e.slug: e for e in store.entries("characters.md")}
     parts = [_context_render(by_slug[rid]) for rid in anchored
@@ -152,7 +157,7 @@ def _presence_section(partition_dir: Path, store: MemoryStore,
 
     secret_lines = []
     secrets_dir = Path(partition_dir) / "secrets"
-    if secrets_dir.exists():
+    if secrets and secrets_dir.exists():
         anchored_set = set(anchored)
         for f in sorted(secrets_dir.glob("*.md")):
             meta = _read_json_front(f)
@@ -229,7 +234,7 @@ def _world_and_queue_section(store: MemoryStore) -> Section:
 def build_sections(partition_dir: str | Path, store: MemoryStore,
                    location: str, history: list[dict], player_input: str,
                    scenes_tail: int = 4, char_sheet: str = "",
-                   rpg_on: bool = False) -> list[Section]:
+                   rpg_on: bool = False, secrets: bool = True) -> list[Section]:
     """Construit le paquet ordonné (voir docstring de module). `char_sheet`
     est fourni par l'appelant (`rpg_mod.context_block`, hors périmètre de ce
     module) — chaîne vide = section omise.
@@ -237,7 +242,11 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     `scenes_tail` est gardé dans la signature pour compat d'appel (`engine.py`
     le passe encore) mais n'est plus consommé depuis D-260 (c), Issue #131 :
     la file de scène brute qu'il bornait est remplacée par l'étage scénario
-    OUVERT seul (`_world_and_queue_section`)."""
+    OUVERT seul (`_world_and_queue_section`).
+
+    `secrets` (Issue #146) descend jusqu'à `_presence_section` — voir son
+    docstring. Défaut True : `engine.py` (Director table) ne le passe jamais,
+    donc son paquet reste octet-identique."""
     partition_dir = Path(partition_dir)
     sections = [Section("stable", "Rôle (Director)",
                         DIRECTOR_SYS % (_ENV_RPG if rpg_on else _ENV_WORLD))]
@@ -246,7 +255,7 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
         sections.append(Section("stable",
                                 "Brief de direction (directeur.md)", brief))
     sections.append(_current_node_section(partition_dir, store, location))
-    sections.append(_presence_section(partition_dir, store, location))
+    sections.append(_presence_section(partition_dir, store, location, secrets))
     sections.append(_rule_verdicts_section(store, history, player_input))
     sections.append(_world_and_queue_section(store))
     if char_sheet.strip():
@@ -279,12 +288,13 @@ def to_messages(sections: list[Section], history: list[dict],
 def assemble(partition_dir: str | Path, store: MemoryStore, state: dict,
             history: list[dict], player_input: str,
             scenes_tail: int = 4, char_sheet: str = "",
-            rpg_on: bool = False) -> list[dict]:
+            rpg_on: bool = False, secrets: bool = True) -> list[dict]:
     """Point d'entrée : assemblage keyé position pour une save AVEC
     partition projetée (voir `eligible()`). Même forme de sortie que
     `MemoryStore.assemble()` — le point d'appel choisit l'un ou l'autre
     selon `eligible()`, sans toucher au contrat du Director."""
     location = str(state.get("location", ""))
     sections = build_sections(partition_dir, store, location, history,
-                              player_input, scenes_tail, char_sheet, rpg_on)
+                              player_input, scenes_tail, char_sheet, rpg_on,
+                              secrets)
     return to_messages(sections, history, player_input)

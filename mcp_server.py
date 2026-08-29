@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 from fastmcp import FastMCP
 
 from coderain.memory import Library, MemoryStore
+from coderain import assembleur_position
 from coderain import validator as validator_mod
 from coderain.rules_engine import get_bridge
 from coderain.sidecar import DEFAULT_CFG as _DEFAULT_RPG
@@ -534,7 +535,16 @@ def get_event_rules() -> str:
     a quad-mode leftover — it describes the branch where a separate Director
     model exists (engine.py:506-519), which is not this loop. Keep this tool for
     a targeted re-read mid-session; do not make it a briefing step again, or the
-    22 rules land twice and a repetition reads as emphasis."""
+    22 rules land twice and a repetition reads as emphasis.
+
+    LEGACY/DEBUG on a save with position + partition (D-260, Issue #146): the
+    loop's own turn (`assemble_context_to_file` on that same save, and
+    `engine._messages()` upstream, PR #130) never calls this — it gets the
+    turn's CANDIDATE verdicts only (`event_rule_verdicts_block`, lane b,
+    Issue #127), never this block's full, constant 20 060 chars measured on
+    the live campaign (I-158). This tool still returns the full block on
+    request — a targeted re-read, not a briefing step — but on such a save
+    that is a debug/audit read, not something the loop itself ever serves."""
     return _require_store().event_rules_block()
 
 
@@ -1200,6 +1210,71 @@ def _wide_history(store) -> list[dict]:
     return ([{"role": "narrator", "text": primer}] + turns) if primer else turns
 
 
+def _partition_dir(store) -> Path | None:
+    """D-260 (Issue #146) : même résolution que `Engine._partition_dir()`
+    (engine.py) — dupliquée ici plutôt qu'importée parce que le pont tourne
+    parfois sans Engine chargé (`_engine is None`, voir les tests qui posent
+    `mcp_server._engine = None` à la main) et cette lecture du pointeur
+    save->partition n'a aucune dépendance sur l'Engine lui-même."""
+    p = store.dir / "module.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    partition = data.get("partition")
+    return Path(partition) if partition else None
+
+
+def _position_context_text(store, partition_dir: Path, state: dict,
+                           history: list[dict], player_action: str,
+                           recent_turns: int, event_rules: bool,
+                           secrets: bool) -> tuple[str, dict]:
+    """D-260 (Issue #146) : le chemin par position pour
+    `assemble_context_to_file` — même sélection que `engine._messages()`
+    (`assembleur_position`, PR #130), jamais l'ancien assemblage par
+    mots-clés + budget. `secrets`/`event_rules` gardent EXACTEMENT le même
+    sens que sur l'ancien chemin (voir le docstring d'`assemble_context_to_file`) :
+    narrateur-seul par défaut, les deux blocs réservés au Director (secrets,
+    règles d'événement) restent absents sauf demande explicite.
+
+    `budget_tokens`/`wide_lore`/`max_secrets`/`secrets_window`/`lore_include`
+    n'ont pas cours ici : la sélection par position n'a ni budget ni passe
+    large/étroite, elle est déterministe (node courant + records ancrés) —
+    même divergence assumée que `engine._messages()` sur le chemin position."""
+    location = str(state.get("location", ""))
+    sections = assembleur_position.build_sections(
+        partition_dir, store, location, history, player_action,
+        secrets=secrets)
+    text = "\n\n".join(s.render() for s in sections if s.render())
+    # Verdicts du tour (lane b, #127) — jamais event_rules_block() entier.
+    # `event_rules` garde le même sens que sur l'ancien chemin : False par
+    # défaut sur assemble_context_to_file (narrateur-seul), True réservé à
+    # un appelant qui joue aussi le rôle du Director.
+    if event_rules:
+        ev_block = store.event_rule_verdicts_block(history, player_action)
+        if ev_block:
+            text += "\n\n" + ev_block
+    if recent_turns > 0 and history:
+        lines = []
+        for t in history[-recent_turns:]:
+            who = "JOUEUR" if t["role"] == "player" else "MJ"
+            lines.append(f"### {who}\n{t['text'].strip()}")
+        text += ("\n\n# DERNIERS TOURS (verbatim — la scène où l'on reprend)\n\n"
+                 + "\n\n".join(lines))
+    hidden = _hidden_entries(store)
+    allowed = [e for e in hidden if secrets and e.render() in text]
+    served = len(set(re.findall(r"\{#([^}]+)\}", text)))
+    print("assemble(position): final=%d chars, lore=%d blocks, secrets=%d/%d, "
+         "turns=%d" % (len(text), served, len(allowed), len(hidden),
+                       recent_turns), file=sys.stderr)
+    return text, {"degraded": False, "reason": "position", "lore_blocks": served,
+                 "secrets": len(allowed), "secrets_suppressed": not secrets,
+                 "hidden_total": len(hidden), "echoes": 0,
+                 "secrets_window": None, "lore_selected": None}
+
+
 def _finalize(messages, store, history, recent_turns: int,
               event_rules: bool) -> str:
     """Everything the bridge concatenates AFTER the engine's assemble: the two
@@ -1621,13 +1696,37 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
 
     lore_include: the CAMERA'S TRANCHE — see assemble_context. The Director
     calls context_candidates first (the documentaliste's report), then names
-    here the slugs that serve THIS scene. None keeps the blind montage."""
-    text, info = _assemble_text(player_action, budget_tokens, recent_turns,
-                                max_secrets, wide_lore, event_rules,
-                                secrets_window, secrets,
-                                lore_include=(set(lore_include)
-                                              if lore_include is not None
-                                              else None))
+    here the slugs that serve THIS scene. None keeps the blind montage.
+
+    ── D-260 (Issue #146): la bascule par position ──
+    Save AVEC position + partition projetée (`assembleur_position.eligible()`,
+    même frontière que `engine._messages()`, PR #130) : ce chemin sert le
+    MÊME paquet keyé position que le corps single-brain, jamais l'ancien
+    assemblage par mots-clés + budget. `budget_tokens`/`wide_lore`/
+    `max_secrets`/`secrets_window`/`lore_include` n'ont pas cours sur ce
+    chemin (sélection déterministe, pas de haystack) — voir
+    `_position_context_text`. `event_rules`/`secrets` gardent EXACTEMENT le
+    même sens : les verdicts du tour (jamais `event_rules_block()` entier)
+    et la sous-section Secrets restent absents par défaut. Toute save SANS
+    position/partition retombe sur `_assemble_text`, inchangé octet pour
+    octet (cohabitation, épic #124)."""
+    store = _require_store()
+    state = store.world_state()
+    pdir = _partition_dir(store)
+    if pdir is not None and assembleur_position.eligible(store, state):
+        if recent_turns is None:
+            recent_turns = _engine.short_term if _engine is not None else 12
+        history = store.turns()
+        text, info = _position_context_text(
+            store, pdir, state, history, player_action, recent_turns,
+            event_rules, secrets)
+    else:
+        text, info = _assemble_text(player_action, budget_tokens, recent_turns,
+                                    max_secrets, wide_lore, event_rules,
+                                    secrets_window, secrets,
+                                    lore_include=(set(lore_include)
+                                                  if lore_include is not None
+                                                  else None))
     out_dir = ROOT / ".turn"
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "context.md"
