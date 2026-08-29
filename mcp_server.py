@@ -26,6 +26,17 @@ from coderain import validator as validator_mod
 from coderain.rules_engine import get_bridge
 from coderain.sidecar import DEFAULT_CFG as _DEFAULT_RPG
 from coderain.config import load_config, saves_dir
+# D-263 (Issue #147) — organes Auteur : `coderain.acte` et `coderain.formes`
+# n'importent jamais coderain.llm (zéro dépendance LLM, voir leurs propres
+# docstrings) et sont donc importés directement. `coderain.retour2` et
+# `coderain.ecrivain_module`, eux, portent `from .llm import emit_json_ex` à
+# leur racine — les importer ferait exécuter `from openai import OpenAI`
+# (coderain/llm.py:13) au chargement de ce pont, exactement ce que D-263
+# interdit ("aucun appel LLM ... ne touche pas llm.py"). Leurs gardes de
+# forme pures sont donc RE-PORTÉES ici en plus petit — voir le bloc
+# « organes Auteur » plus bas, jamais un import de ces deux modules.
+from coderain import acte as acte_mod
+from coderain import formes as formes_mod
 
 mcp = FastMCP("coderain-engine")
 
@@ -2219,6 +2230,460 @@ def derive_evolution_interne(acte: str, vecteur_id: str) -> dict:
     store.set_rpg_state(rpg)
     return {**result, "vecteur_id": vecteur_id,
             "old_valeur": old, "new_valeur": new}
+
+
+# ── organes Auteur au pont MCP (D-263, Issue #147) ────────────────
+# Régime forfait : le LLM EST la session Claude Code qui pilote. Le jugement
+# (conformité, choix du régime) se fait DANS la session ; ce que le code doit
+# lui servir, ce sont les GARDES, les CHARGEMENTS et les RENDUS — jamais un
+# appel API. `coderain.acte`/`coderain.formes` sont importés tels quels (zéro
+# LLM). `coderain.retour2`/`coderain.ecrivain_module` ne le sont PAS — voir le
+# commentaire d'import en tête de fichier — donc les trois choses pures que
+# ces deux organes portent (le texte des exigences par régime, le prompt
+# RETOUR2, les gardes de forme sur les verdicts) sont re-portées ici, à
+# l'identique de leur source, avec la ligne qui les rend traçables.
+#
+# État de la session d'écriture en cours (un tour Auteur à la fois, même
+# esprit que `_completed_turn`/`_pending_log_mark` pour un tour de jeu) :
+# posé par auteur_bloc_cadre, complété par auteur_valider_ecriture, lu par
+# auteur_verdicts_conformite. Une session Claude Code pilote un seul module en
+# écriture à la fois — pas de pile, pas d'identifiant de session à gérer ici.
+_auteur_ctx: dict = {}
+
+_AUTEUR_REGIMES = ("pont", "rattrapage", "aiguillage")
+
+# Copie verbatim d'ecrivain_module._EXIGENCES_REGIME (D-262 §2).
+_AUTEUR_EXIGENCES_REGIME = {
+    "pont": (
+        "PONT : écris le MINIMUM nécessaire pour rendre le raccord "
+        "atteignable — pas de matière superflue, chaque scène sert "
+        "explicitement le passage vers le module/l'acte suivant."),
+    "rattrapage": (
+        "RATTRAPAGE : fais VIVRE, dans ce module, chacun des jalons "
+        "pas-vécus listés ci-dessous — un jalon rattrapé doit se jouer "
+        "réellement, jamais être mentionné en passant."),
+    "aiguillage": (
+        "AIGUILLAGE : propose des situations à VRAIS enjeux qui "
+        "discriminent réellement entre plusieurs agendas de personnages/"
+        "factions — on aiguille les AGENDAS, jamais les révélations "
+        "(aucun secret ne doit dépendre du choix du joueur pour exister ou "
+        "non)."),
+}
+
+# Copie verbatim d'ecrivain_module._CONTRAINTES_TRANSVERSES (D-262 §2).
+_AUTEUR_CONTRAINTES_TRANSVERSES = (
+    "CONTRAINTES D'ÉCRITURE TRANSVERSALES :\n"
+    "- Écris des ÉTATS et des POTENTIELS, JAMAIS une séquence d'événements "
+    "imposée au joueur : ce que tu écris doit rester jouable dans "
+    "n'importe quel ordre que le joueur choisit.\n"
+    "- Écris du texte de MODULE SOURCE (scènes, lieux, PNJ avec objectifs "
+    "et accroches) — de la prose telle que le convertisseur de ce dépôt "
+    "sait l'ingérer, jamais une partition d'événements scriptés.")
+
+# Copie verbatim de retour2.RETOUR2_SYS (D-262/D-128) — le prompt de
+# conformité que la SESSION juge elle-même en régime forfait, jamais un
+# appel emit_json_ex depuis ce fichier.
+_AUTEUR_RETOUR2_SYS = """\
+You are the RETOUR 2, a compliance judge (not a play-effect judge). You are \
+given OBJECTIFS (goals stated by the layer above: act objective, targeted \
+milestones, régime requirements — free text, one per id) and a TEXTE (an \
+episode-module written by an Author). Your job is a TEXT-VS-TEXT compliance \
+check, before anything is played — never invent effects, never speculate \
+about how play might go.
+
+For EVERY objectif given to you, return ONE verdict: does the TEXTE fulfill \
+it? "conforme" (fulfilled), "non-conforme" (addressed but falls short), or \
+"absent" (the text never addresses it at all). Ground every verdict in a \
+"justification" and, when the text does address the objectif, "extraits": \
+one or more short passages QUOTED VERBATIM from the TEXTE (never \
+paraphrased, never invented) that support your verdict.
+
+If FORMES DÉCLARÉES are given (forms the Author claims to have used), judge \
+each one separately: does the TEXTE actually do what the declaration \
+claims? "conforme" or "non-conforme", with justification and verbatim \
+extraits the same way.
+
+Never invent an objectif_id or a forme_id — use only the ids given to you. \
+Never assign a numeric score or grade — only the fixed verdict vocabulary.
+
+Return ONLY a JSON object:
+{"verdicts": [{"objectif_id": "...", "verdict": "conforme|non-conforme|absent",
+               "justification": "...", "extraits": ["..."]}],
+ "verdicts_formes": [{"forme_id": "...", "correspond": "conforme|non-conforme",
+                       "justification": "...", "extraits": ["..."]}]}
+"""
+
+# Vocabulaire fermé des verdicts — jamais une note chiffrée (D-131/D-118),
+# copie verbatim de retour2.VERDICTS_VALIDES/CORRESPONDANCES_VALIDES.
+_AUTEUR_VERDICTS_VALIDES = ("conforme", "non-conforme", "absent")
+_AUTEUR_CORRESPONDANCES_VALIDES = ("conforme", "non-conforme")
+
+
+def _auteur_normaliser_espaces(s: str) -> str:
+    """Copie de retour2._normaliser_espaces : tolérance espaces pour la
+    vérification par inclusion de sous-chaîne."""
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _auteur_extrait_present(extrait: str, texte_normalise: str) -> bool:
+    return _auteur_normaliser_espaces(extrait) in texte_normalise
+
+
+def _auteur_resolve_actes_path(actes_path: str) -> Path | None:
+    """`actes.md` — fichier FRÈRE non encore câblé dans MemoryStore
+    (acte.py:3-10) : pas de résolution automatique par le moteur. Un chemin
+    explicite prime toujours ; à défaut, s'il y a une save chargée, on
+    cherche `actes.md` à sa racine (même dossier que `campagne.md`, quand il
+    existe). Aucune save et aucun chemin explicite -> None, erreur motivée
+    côté appelant."""
+    if actes_path:
+        return Path(actes_path)
+    if _store is not None:
+        return _store.dir / "actes.md"
+    return None
+
+
+def _auteur_bloc_regime(acte, regime: str) -> str:
+    """Copie de ecrivain_module._bloc_regime : exigences fixes + jalons
+    pas-vécus concrets pour le rattrapage, jamais une re-déduction."""
+    lignes = [f"## Régime d'écriture : {regime}", "",
+             _AUTEUR_EXIGENCES_REGIME[regime]]
+    if regime == "rattrapage":
+        cibles = [j for j in acte.jalons if j.statut == "pas-vécu"]
+        lignes.append("")
+        lignes.append("Jalons pas-vécus à faire vivre :")
+        if cibles:
+            for j in cibles:
+                lignes.append(f"- [{j.id}] {j.intention_md}")
+        else:
+            lignes.append("(aucun jalon pas-vécu — vérifier le cadre avant "
+                          "d'écrire en régime rattrapage)")
+    return "\n".join(lignes)
+
+
+def _auteur_objectifs_regime(acte, regime: str) -> list[dict]:
+    """Copie de ecrivain_module._objectifs_regime : les objectifs du retour 2
+    formulés en TEXTE depuis l'acte transmis, jamais un champ structuré
+    inventé par le LLM. `{id, texte}` — même forme que `Objectif.to_prompt_dict`."""
+    if regime == "pont":
+        raccord = acte.raccord
+        return [{"id": "raccord",
+                 "texte": "Le module rend atteignable le raccord vers "
+                         f"{raccord.module_id or '(module suivant pas encore choisi)'} "
+                         "— conditions d'entrée : "
+                         f"{raccord.conditions_entree_md.strip() or '(aucune condition posée)'}"}]
+    if regime == "rattrapage":
+        cibles = [j for j in acte.jalons if j.statut == "pas-vécu"]
+        return [{"id": f"jalon-{j.id}",
+                 "texte": f"Le module fait vivre le jalon '{j.id}' : "
+                         f"{j.intention_md}"}
+               for j in cibles]
+    if regime == "aiguillage":
+        return [{"id": "aiguillage",
+                 "texte": "Le module propose des situations qui discriminent "
+                         "réellement entre plusieurs agendas de personnages/"
+                         "factions (jamais les révélations) — objectif de "
+                         f"l'acte : {acte.objectif_md.strip()}"}]
+    raise ValueError(f"régime inconnu : {regime!r} (attendu {_AUTEUR_REGIMES})")
+
+
+def _auteur_payload_retour2(objectifs: list[dict], texte: str,
+                            formes_declarees: list[dict] | None) -> str:
+    """Copie de retour2._payload."""
+    parts = ["OBJECTIFS TRANSMIS:\n"
+             + json.dumps(objectifs, ensure_ascii=False),
+             "\nTEXTE À JUGER:\n" + texte.strip()]
+    if formes_declarees:
+        parts.append("\nFORMES DÉCLARÉES PAR L'ÉCRITURE:\n"
+                     + json.dumps(formes_declarees, ensure_ascii=False))
+    return "\n".join(parts)
+
+
+def _auteur_valider_verdict(raw: dict, ids_objectifs: set[str],
+                            texte_normalise: str) -> tuple[dict | None, str | None]:
+    """Copie de retour2._valider_verdict — jamais un verdict accepté sur la
+    parole du LLM (ici : sur la parole de la session)."""
+    if not isinstance(raw, dict):
+        return None, "verdict n'est pas un objet"
+    objectif_id = str(raw.get("objectif_id", "")).strip()
+    if not objectif_id:
+        return None, "verdict sans objectif_id"
+    if objectif_id not in ids_objectifs:
+        return None, f"verdict cite un objectif non transmis : {objectif_id}"
+    verdict = str(raw.get("verdict", "")).strip()
+    if verdict not in _AUTEUR_VERDICTS_VALIDES:
+        return None, (f"verdict de {objectif_id} hors vocabulaire fermé : "
+                      f"{verdict!r} (attendu {_AUTEUR_VERDICTS_VALIDES})")
+    justification = str(raw.get("justification", "")).strip()
+    if not justification:
+        return None, f"verdict de {objectif_id} sans justification"
+    extraits_raw = raw.get("extraits", [])
+    if not isinstance(extraits_raw, list):
+        return None, f"verdict de {objectif_id} : champ 'extraits' n'est pas une liste"
+    extraits = [str(e).strip() for e in extraits_raw if str(e).strip()]
+    for extrait in extraits:
+        if not _auteur_extrait_present(extrait, texte_normalise):
+            return None, (f"verdict de {objectif_id} : extrait introuvable "
+                          f"dans le texte : {extrait!r}")
+    return {"objectif_id": objectif_id, "verdict": verdict,
+            "justification": justification, "extraits": extraits}, None
+
+
+def _auteur_valider_verdict_forme(raw: dict, ids_formes: set[str],
+                                  texte_normalise: str) -> tuple[dict | None, str | None]:
+    """Copie de retour2._valider_verdict_forme."""
+    if not isinstance(raw, dict):
+        return None, "verdict de forme n'est pas un objet"
+    forme_id = str(raw.get("forme_id", "")).strip()
+    if not forme_id:
+        return None, "verdict de forme sans forme_id"
+    if forme_id not in ids_formes:
+        return None, f"verdict cite une forme non déclarée : {forme_id}"
+    correspond = str(raw.get("correspond", "")).strip()
+    if correspond not in _AUTEUR_CORRESPONDANCES_VALIDES:
+        return None, (f"verdict de forme {forme_id} hors vocabulaire fermé : "
+                      f"{correspond!r} (attendu {_AUTEUR_CORRESPONDANCES_VALIDES})")
+    justification = str(raw.get("justification", "")).strip()
+    if not justification:
+        return None, f"verdict de forme {forme_id} sans justification"
+    extraits_raw = raw.get("extraits", [])
+    if not isinstance(extraits_raw, list):
+        return None, f"verdict de forme {forme_id} : champ 'extraits' n'est pas une liste"
+    extraits = [str(e).strip() for e in extraits_raw if str(e).strip()]
+    for extrait in extraits:
+        if not _auteur_extrait_present(extrait, texte_normalise):
+            return None, (f"verdict de forme {forme_id} : extrait introuvable "
+                          f"dans le texte : {extrait!r}")
+    return {"forme_id": forme_id, "correspond": correspond,
+            "justification": justification, "extraits": extraits}, None
+
+
+def _auteur_synthese(objectifs: list[dict], verdicts: list[dict],
+                     formes_declarees: list[dict] | None,
+                     verdicts_formes: list[dict]) -> tuple[bool, list[dict]]:
+    """Copie de retour2._synthese. ⛔ AUCUN score agrégé (D-131/D-118) : une
+    LISTE d'écarts nommés, jamais un chiffre."""
+    par_objectif = {v["objectif_id"]: v for v in verdicts}
+    ecarts: list[dict] = []
+    for obj in objectifs:
+        v = par_objectif.get(obj["id"])
+        if v is None:
+            ecarts.append({"type": "objectif", "id": obj["id"],
+                           "verdict": "non-couvert",
+                           "justification": "aucun verdict validé pour cet "
+                           "objectif (absent de la sortie ou rejeté par la "
+                           "garde de forme)"})
+        elif v["verdict"] != "conforme":
+            ecarts.append({"type": "objectif", "id": obj["id"],
+                           "verdict": v["verdict"],
+                           "justification": v["justification"]})
+
+    if formes_declarees:
+        par_forme = {v["forme_id"]: v for v in verdicts_formes}
+        for decl in formes_declarees:
+            forme_id = str(decl.get("id", "")).strip()
+            v = par_forme.get(forme_id)
+            if v is None:
+                ecarts.append({"type": "forme", "id": forme_id,
+                               "verdict": "non-couvert",
+                               "justification": "aucun verdict de "
+                               "correspondance validé pour cette forme "
+                               "déclarée"})
+            elif v["correspond"] != "conforme":
+                ecarts.append({"type": "forme", "id": forme_id,
+                               "verdict": v["correspond"],
+                               "justification": v["justification"]})
+
+    return len(ecarts) == 0, ecarts
+
+
+@mcp.tool()
+def auteur_bloc_cadre(acte_id: str, regime: str, actes_path: str = "") -> dict:
+    """Le bloc cadre de l'Auteur pour UN acte, UN régime — CODE seul, aucune
+    génération : la session LIT ce bloc et écrit elle-même le module.
+
+    Rend {"bloc_cadre", "bloc_regime", "bloc_formes", "contraintes_transverses",
+    "objectifs"} :
+    - bloc_cadre : les trois lectures de l'acte (remplissage mesuré au vécu
+      promu, pièces de divergence, raccord) — `acte.bloc_cadre`.
+    - bloc_regime : les exigences du régime choisi (pont|rattrapage|
+      aiguillage) — le régime est un JUGEMENT d'Auteur/Souhel fait par la
+      session sur les lectures du cadre, jamais déduit ici.
+    - bloc_formes : le stock de formes narratives (D-261), déclaration
+      obligatoire.
+    - contraintes_transverses : états/potentiels jamais une séquence
+      imposée · texte de module source tel que le convertisseur sait
+      l'ingérer (D-262 §2, transverse aux trois régimes).
+    - objectifs : les objectifs du retour 2 pour ce régime, en TEXTE — ce que
+      `auteur_valider_ecriture`/`auteur_verdicts_conformite` utiliseront
+      ensuite ; posés en contexte de session par cet appel.
+
+    `actes_path` : chemin explicite vers `actes.md`. Vide -> si une save est
+    chargée (`load_save`), `<save>/actes.md` ; sinon erreur motivée
+    (`actes.md` n'est pas encore câblé dans le moteur, acte.py:3-10)."""
+    if regime not in _AUTEUR_REGIMES:
+        return {"error": f"régime inconnu : {regime!r} "
+                         f"(attendu {_AUTEUR_REGIMES})"}
+    path = _auteur_resolve_actes_path(actes_path)
+    if path is None:
+        return {"error": "actes_path vide et aucune save chargée — appeler "
+                         "load_save d'abord ou passer actes_path explicitement"}
+    if not path.exists():
+        return {"error": f"actes.md introuvable : {path}"}
+    actes = acte_mod.load_file(path)
+    acte = actes.by_id(acte_id)
+    if acte is None:
+        return {"error": f"acte introuvable : {acte_id!r} ({path})",
+                "actes_disponibles": [a.id for a in actes.actes]}
+
+    cadre = acte_mod.bloc_cadre(acte, _store)
+    bloc_regime = _auteur_bloc_regime(acte, regime)
+    vocabulaire = formes_mod.charger_vocabulaire()
+    bloc_formes = formes_mod.bloc_prompt(vocabulaire)
+    objectifs = _auteur_objectifs_regime(acte, regime)
+
+    global _auteur_ctx
+    _auteur_ctx = {"acte_id": acte.id, "regime": regime, "objectifs": objectifs}
+    return {"bloc_cadre": cadre, "bloc_regime": bloc_regime,
+            "bloc_formes": bloc_formes,
+            "contraintes_transverses": _AUTEUR_CONTRAINTES_TRANSVERSES,
+            "objectifs": objectifs}
+
+
+@mcp.tool()
+def auteur_valider_ecriture(module_md: str, declaration_formes_json: str,
+                            note_intention_md: str) -> dict:
+    """Enchaîne les gardes CODE sur ce que la session vient d'écrire, APRÈS
+    un appel `auteur_bloc_cadre` (qui pose les objectifs du régime en
+    contexte de session).
+
+    Gardes : `module_md`/`note_intention_md` non vides · `declaration_formes_json`
+    ancrée au vocabulaire de formes (`formes.valider_declaration` — id hors
+    vocabulaire ou justification vide REFUSÉS). Refus motivés, jamais
+    silencieux : {"ok": false, "rejets": [...]}.
+
+    Sur garde passée : {"ok": true, "formes_validees": [...],
+    "conformite_prompt": {"system", "payload", "objectifs"}} — le PROMPT de
+    conformité du retour 2 (D-262/D-128), prêt à l'emploi. Le jugement de
+    conformité (le texte remplit-il chaque objectif ?) reste un jugement LLM
+    et se fait PAR LA SESSION : elle répond à ce prompt elle-même puis passe
+    sa réponse à `auteur_verdicts_conformite` — aucun appel API ici."""
+    global _auteur_ctx
+    if not _auteur_ctx.get("objectifs"):
+        return {"ok": False, "rejets": [{"champ": "regime",
+                "raison": "aucun cadre en contexte — appeler auteur_bloc_cadre "
+                         "(acte_id + régime) d'abord"}]}
+
+    module_md = (module_md or "").strip()
+    note_intention_md = (note_intention_md or "").strip()
+    rejets: list[dict] = []
+    if not module_md:
+        rejets.append({"champ": "module_md", "raison": "module_md absent ou vide"})
+    if not note_intention_md:
+        rejets.append({"champ": "note_intention_md",
+                       "raison": "note_intention_md absente ou vide"})
+
+    try:
+        declaration = (json.loads(declaration_formes_json)
+                       if isinstance(declaration_formes_json, str)
+                       else declaration_formes_json)
+    except json.JSONDecodeError as e:
+        rejets.append({"champ": "declaration_formes_json",
+                       "raison": f"JSON invalide : {e}"})
+        return {"ok": False, "rejets": rejets}
+    if not isinstance(declaration, list):
+        declaration = []
+
+    vocabulaire = formes_mod.charger_vocabulaire()
+    validees, rejets_formes = formes_mod.valider_declaration(declaration, vocabulaire)
+    for r in rejets_formes:
+        rejets.append({"champ": "declaration_formes", **r})
+
+    if rejets:
+        return {"ok": False, "rejets": rejets}
+
+    objectifs = _auteur_ctx["objectifs"]
+    payload = _auteur_payload_retour2(objectifs, module_md, validees)
+
+    _auteur_ctx = {**_auteur_ctx, "module_md": module_md,
+                   "declaration_formes": validees,
+                   "texte_normalise": _auteur_normaliser_espaces(module_md)}
+    return {"ok": True, "formes_validees": validees,
+            "conformite_prompt": {"system": _AUTEUR_RETOUR2_SYS,
+                                  "payload": payload, "objectifs": objectifs}}
+
+
+@mcp.tool()
+def auteur_verdicts_conformite(verdicts_json: str) -> dict:
+    """La garde de forme du retour 2 (D-262/D-128) sur les verdicts rendus
+    PAR LA SESSION en réponse au `conformite_prompt` d'`auteur_valider_ecriture`.
+
+    Forme attendue : `{"verdicts": [{"objectif_id", "verdict", "justification",
+    "extraits"}], "verdicts_formes": [{"forme_id", "correspond",
+    "justification", "extraits"}]}` — même contrat que le prompt le demande.
+
+    Rejeté, jamais accepté sur parole : objectif_id/forme_id hors de ceux
+    transmis · verdict hors du vocabulaire fermé (conforme|non-conforme|
+    absent, ou conforme|non-conforme pour une forme) · justification vide ·
+    extrait introuvable dans le texte (sous-chaîne, tolérance espaces).
+
+    Rend un `RapportConformite` en dict : verdicts validés, verdicts_formes
+    validés, rejets motivés, `conforme_total`, `ecarts`. ⛔ AUCUN score
+    agrégé, aucune note chiffrée (D-131/D-118) : `ecarts` est une LISTE
+    d'écarts nommés — l'Auteur (ou Souhel) tranche sur cette liste, jamais
+    sur un chiffre."""
+    if "texte_normalise" not in _auteur_ctx:
+        return {"error": "aucune écriture validée en contexte — appeler "
+                         "auteur_valider_ecriture d'abord"}
+    try:
+        obj = (json.loads(verdicts_json) if isinstance(verdicts_json, str)
+              else verdicts_json)
+    except json.JSONDecodeError as e:
+        return {"error": f"JSON invalide : {e}"}
+    if not isinstance(obj, dict):
+        return {"error": "verdicts_json doit être un objet "
+                         "{verdicts: [...], verdicts_formes: [...]}"}
+
+    objectifs = _auteur_ctx["objectifs"]
+    formes_declarees = _auteur_ctx.get("declaration_formes") or []
+    ids_objectifs = {o["id"] for o in objectifs}
+    ids_formes = {d["id"] for d in formes_declarees}
+    texte_normalise = _auteur_ctx["texte_normalise"]
+
+    bruts = obj.get("verdicts")
+    if not isinstance(bruts, list):
+        return {"error": "sortie sans champ 'verdicts' (liste)"}
+
+    verdicts: list[dict] = []
+    rejets: list[dict] = []
+    for raw in bruts:
+        v, raison = _auteur_valider_verdict(raw, ids_objectifs, texte_normalise)
+        if v is not None:
+            verdicts.append(v)
+        else:
+            rejets.append({"verdict": raw, "raison": raison})
+
+    verdicts_formes: list[dict] = []
+    if formes_declarees:
+        bruts_formes = obj.get("verdicts_formes")
+        if not isinstance(bruts_formes, list):
+            rejets.append({"verdict": None, "raison": "sortie sans champ "
+                          "'verdicts_formes' (liste) alors que des formes "
+                          "étaient déclarées"})
+        else:
+            for raw in bruts_formes:
+                v, raison = _auteur_valider_verdict_forme(raw, ids_formes,
+                                                          texte_normalise)
+                if v is not None:
+                    verdicts_formes.append(v)
+                else:
+                    rejets.append({"verdict": raw, "raison": raison})
+
+    conforme_total, ecarts = _auteur_synthese(objectifs, verdicts,
+                                              formes_declarees, verdicts_formes)
+    return {"verdicts": verdicts, "verdicts_formes": verdicts_formes,
+            "rejets": rejets, "conforme_total": conforme_total,
+            "ecarts": ecarts}
 
 
 if __name__ == "__main__":
