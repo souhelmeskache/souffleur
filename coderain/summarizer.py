@@ -93,10 +93,12 @@ Return ONLY a JSON object: {"arc": "<the updated synopsis>"}
 """
 
 
-# How many existing entries _existing_context shows the model. The list is NOT
-# ranked by importance before the cut, so past this count an entry can be
-# rewritten by a model that was never shown it. The number is unchanged; it is
-# named here so the instrumentation and the truncation can never drift apart.
+# How many existing entries _existing_context shows the model. The list IS
+# ranked by importance before the cut (I-206) so a truncation drops the least
+# important entities first, but past this count an entry still goes unshown
+# and can be rewritten by a model that never saw it. The number is unchanged;
+# it is named here so the instrumentation and the truncation can never drift
+# apart.
 EXISTING_ENTITIES_CAP = 12
 
 
@@ -267,6 +269,10 @@ class Summarizer:
         text = _turns_text(turns).lower()
         matched = [e for _, e in self.store.index().entries.values()
                    if any(trigger_hit(tok, text) for tok in e.triggers())]
+        # Truncation must drop the least important entities first, not the
+        # ones that merely sort later in the index (I-206) — sort() is
+        # stable, so entities with equal importance keep their index order.
+        matched.sort(key=lambda e: e.importance, reverse=True)
         hits = [e.render() for e in matched]
         # Forensics only — the two lines below read the same list in the same
         # order and change nothing the model sees.
