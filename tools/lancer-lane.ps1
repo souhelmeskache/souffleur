@@ -58,6 +58,21 @@
     qui reste le canal de secours garanti. Ne s'applique qu'au mode -Issue
     (une lane de revue commente une PR, pas une Issue).
 
+    Tests de harnais (I-386, Issue #123) : SendMessage échoue de façon
+    identique (« No agent named ... is reachable ») vers une session tour
+    nommée en kebab-case court (ex. `meta-rpg-ce`) et vers une session au nom
+    long à espaces/tirets/parenthèses — la mise en forme du nom n'est donc
+    pas la cause. Un même appel SendMessage vers un sous-agent local
+    (spawné par la lane elle-même, même arbre d'orchestration) aboutit sans
+    problème. Conclusion : SendMessage n'adresse que l'arbre d'orchestration
+    de l'appelant (parent/enfants d'un même lancement), jamais une session
+    indépendante lancée séparément par `herdr agent start` — CLI ou
+    desktop (CCD) y sont logés à la même enseigne. Aucune convention de
+    nommage ne peut donc réparer la sonnette telle que conçue ; le paramètre
+    est conservé ici tel quel (l'échec est déjà géré avec repli sur le
+    commentaire GitHub), la décision de l'abandonner comme canal nominal se
+    prend et se documente côté vault (D-251 §3), pas dans ce script.
+
 .EXAMPLE
     .\tools\lancer-lane.ps1 14 -DryRun
     .\tools\lancer-lane.ps1 14 -Modele fable -Effort medium
