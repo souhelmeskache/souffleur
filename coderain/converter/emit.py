@@ -56,6 +56,20 @@ def write_partition(partition, out_dir: Path) -> Path:
             raise ValueError(
                 f"ressource {r.id}: node_id inconnu {r.node_id} — "
                 "zéro dangling autorisé (D-216 §2)")
+    # garde zéro-dangling D-252.1 : porteur_ou_emplacement / condition_remise_secret_id
+    record_ids = {r.id for r in partition.records}
+    secret_ids = {s.id for s in partition.secrets}
+    for r in uniq_ress:
+        porteur = getattr(r, "porteur_ou_emplacement", None)
+        if porteur and porteur not in node_ids and porteur not in record_ids:
+            raise ValueError(
+                f"ressource {r.id}: porteur_ou_emplacement inconnu {porteur} — "
+                "zéro dangling autorisé (D-252.1)")
+        cond = getattr(r, "condition_remise_secret_id", None)
+        if cond and cond not in secret_ids:
+            raise ValueError(
+                f"ressource {r.id}: condition_remise_secret_id inconnu {cond} "
+                "— ne pointe aucun Secret (D-252.1)")
     # garde zéro-dangling personnages (I-341/D-219) : tout rattachement de jalon
     # pointe un id existant de la partition (node/tension/ressource/personnage)
     all_ids = node_ids | {r.id for r in partition.records} \
@@ -144,7 +158,17 @@ def write_partition(partition, out_dir: Path) -> Path:
     for r in uniq_ress:
         fm = _front_matter({"id": r.id, "type": r.type_ressource,
                             "node_id": r.node_id, "page": r.page,
-                            "fichier": r.fichier, "anchors": r.anchors})
+                            "fichier": r.fichier,
+                            **({"sous_type": r.sous_type}
+                               if getattr(r, "sous_type", "") else {}),
+                            **({"porteur_ou_emplacement": r.porteur_ou_emplacement}
+                               if getattr(r, "porteur_ou_emplacement", None) else {}),
+                            **({"fonction_md": r.fonction_md}
+                               if getattr(r, "fonction_md", "") else {}),
+                            **({"condition_remise_secret_id": r.condition_remise_secret_id}
+                               if getattr(r, "condition_remise_secret_id", None) else {}),
+                            "etat": getattr(r, "etat", "non_remis"),
+                            "anchors": r.anchors})
         body = r.description_md or f"Ressource {r.id} ({r.type_ressource})"
         (out_dir / "resources" / f"{r.id}.md").write_text(
             fm + body + "\n", encoding="utf-8")
@@ -227,7 +251,9 @@ def write_partition(partition, out_dir: Path) -> Path:
         "resources": [{"id": r.id, "type": r.type_ressource,
                        **({"node_id": r.node_id} if getattr(r, "node_id", None) else {}),
                        **({"page": r.page} if getattr(r, "page", None) else {}),
-                       **({"fichier": r.fichier} if getattr(r, "fichier", "") else {})}
+                       **({"fichier": r.fichier} if getattr(r, "fichier", "") else {}),
+                       **({"sous_type": r.sous_type} if getattr(r, "sous_type", "") else {}),
+                       "etat": getattr(r, "etat", "non_remis")}
                       for r in uniq_ress],
         "personnages": [{"id": p.id, "nom": p.nom,
                          "nb_jalons": len(p.destinee),
