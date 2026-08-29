@@ -142,7 +142,7 @@ print(f"  OK : {len(stage)} notes d'étage, chars au fil des folds : "
      f"{chars_over_folds}")
 
 section("2) mesure imprimée : chars de l'étage ouvert au fil des folds")
-assert chars_over_folds == sorted(chars_over_folds) or True  # croissance monotone
+assert chars_over_folds == sorted(chars_over_folds)  # croissance monotone
 for i, n in enumerate(chars_over_folds, start=1):
     print(f"  fold {i} : étage ouvert = {n} chars")
 assert chars_over_folds[-1] > chars_over_folds[0], "l'étage n'a pas accumulé"

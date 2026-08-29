@@ -493,8 +493,10 @@ def fermer_scenario(store: MemoryStore, snapshot_keep: int = 5) -> list[str]:
     détection automatique de fin de scénario est HORS périmètre.
 
     Promeut UNE entrée compacte vers le réceptacle d'étage supérieur
-    (ADVENTURE_FILE, v0 : simple réceptacle, pas l'étage aventure complet),
-    puis VIDE l'étage : un scénario fermé devient physiquement inerte — plus
+    (ADVENTURE_FILE, v0 : simple réceptacle, pas l'étage aventure complet) —
+    sauf si toutes les notes de l'étage ont un corps vide, auquel cas rien
+    n'est promu (pas d'entrée vide dans ADVENTURE_FILE) —, puis VIDE
+    l'étage dans tous les cas : un scénario fermé devient physiquement inerte — plus
     aucun paquet de `assembleur_position` ne le sert, qui ne lit que l'étage
     OUVERT (`SCENARIO_STAGE_FILE`).
 
@@ -506,14 +508,17 @@ def fermer_scenario(store: MemoryStore, snapshot_keep: int = 5) -> list[str]:
     if not notes:
         return []
     store.snapshot(keep=snapshot_keep)
-    n = len(store.entries(ADVENTURE_FILE)) + 1
     body = "\n".join(f"- {note.body.strip()}" for note in notes
                      if note.body.strip())
-    entry = Entry(title=f"Scénario {n}", slug=f"scenario-{n}", body=body)
-    store.upsert_entry(ADVENTURE_FILE, entry)
+    if body:
+        n = len(store.entries(ADVENTURE_FILE)) + 1
+        entry = Entry(title=f"Scénario {n}", slug=f"scenario-{n}", body=body)
+        store.upsert_entry(ADVENTURE_FILE, entry)
     # Étage fermé = physiquement inerte : aucune entrée '## ' à parser, donc
     # store.entries(SCENARIO_STAGE_FILE) revient vide dès ce point.
     store.write(SCENARIO_STAGE_FILE,
                "# Étage scénario (courant)\n\n"
                "(scénario précédent clos — voir memory/aventure.md)\n")
-    return [f"memory: scénario {n} clos, promu vers {ADVENTURE_FILE}"]
+    if body:
+        return [f"memory: scénario {n} clos, promu vers {ADVENTURE_FILE}"]
+    return ["memory: scénario clos, aucune note non vide à promouvoir"]
