@@ -31,8 +31,10 @@ l'ingestion (`É4`). Les ancres citent la hiérarchie de sections du document SR
    statblocks** (SPEC §6) — toute évolution vers une seconde cible se fera en nouvelle table, jamais
    en mutation de celle-ci.
 
-Comptage global : **5 classes · 15 champs obligatoires (+ `nom` first-class par classe) · 25 champs
-optionnels**, dont 8 sans ancre SRD signalés (récapitulation et limites de mesure au §7).
+Comptage global : **6 classes · 23 champs obligatoires (+ `nom` first-class par classe) · 27 champs
+optionnels**, dont 8 sans ancre SRD signalés (récapitulation et limites de mesure au §8). 6ᵉ classe
+`sort` ajoutée par `MRPG-D-252` point 3 (Issue #63, 2026-08-29) : sorts inédits des appendices de
+campagne, sans classe de record d'accueil jusqu'ici.
 
 ---
 
@@ -367,7 +369,92 @@ organisations** (aucune règle, aucun tableau). Tout y est convention du moteur 
 
 ---
 
-## 6. VÉRIFICATION CROISÉE — LES 2 RECORDS `creature` DU SPECIMEN
+## 6. CLASSE `sort` (D-252.3, Issue #63)
+
+`corpus_version: "2014"` — ancre racine : **SRD 5.1 › Spellcasting** (les sous-rubriques citées
+ci-dessous en sont les sections). Contrairement aux cinq classes précédentes, `sort` n'accueille
+jamais de matériau du SRD lui-même (les sorts de base restent hors Partition, cf. `dnd5e-srd-data`) —
+elle accueille les sorts **inédits publiés en appendice** d'une campagne, que le SRD ne définit pas
+mais dont les *champs* suivent la même grammaire Spellcasting que tout autre sort 5e.
+
+### Obligatoires
+
+| # | champ (canonique) | type | ancre SRD 2014 |
+|---|---|---|---|
+| v1 | `niveau` | int 0-9 | Spellcasting › Spell Level (0 = tour de magie/cantrip) |
+| v2 | `ecole` | enum `abjuration \| invocation \| divination \| enchantement \| evocation \| illusion \| necromancie \| transmutation` | Spellcasting › Schools of Magic |
+| v3 | `temps_incantation` | string `"1 action"` | Spellcasting › Casting a Spell › Casting Time |
+| v4 | `portee` | string `"36 mètres"` / `"Personnelle"` / `"Contact"` | Spellcasting › Casting a Spell › Range |
+| v5 | `composantes` | string, cite au moins V/S/M (+ matériau éventuel) | Spellcasting › Casting a Spell › Components |
+| v6 | `duree` | string `"instantanée"` / `"1 minute"` | Spellcasting › Casting a Spell › Duration |
+| v7 | `effet_md` | markdown, texte ancré | Spellcasting › Casting a Spell › Effect (le corps décrivant le sort) |
+| v8 | `listes_de_classes` | list[string], classes lanceuses ayant accès au sort | Spellcasting › Spell Lists |
+
+*(+ `nom` first-class, hors `stats_5e`.)*
+
+### Optionnels
+
+| # | champ (canonique) | type | ancre SRD 2014 |
+|---|---|---|---|
+| w1 | `concentration` | booléen | Spellcasting › Combining Magical Effects (Concentration) |
+| w2 | `rituel` | booléen | Spellcasting › Casting a Spell (Ritual) |
+
+*Bornes de valeur (v1 niveau, v2 ecole, v5 composantes, v8 non vide, w1/w2 typage booléen)
+vérifiées par `schemas.py::Record._check_sort` — au-delà de la simple présence que couvre
+`annexe_a.required_fields` pour toutes les classes.*
+
+### Référence par un creature/pnj lanceur — `sorts_connus`
+
+Un record `creature` ou `pnj` qui incante cite ses sorts par id via la clé réservée
+`sorts_connus` (liste d'ids `sort`, `schemas.py::Record._sorts_connus`) — réservée à ces deux
+classes lanceuses. Le garde zéro-dangling (`validate_form.py`, `emit.py`) résout chaque id contre
+les records classe `sort` de la partition, exactement comme `tokens_initial.node_id` résout vers un
+node : un id absent ou pointant vers une autre classe est refusé.
+
+### Exemple (valeurs 100 % factices)
+
+```json
+{
+ "id": "flamme-torsadee",
+ "classe": "sort",
+ "nom": "Flamme torsadée",
+ "tags": ["exemple", "appendice"],
+ "anchors": [[12000, 12200]],
+ "stats_5e": {
+  "niveau": 3,
+  "ecole": "evocation",
+  "temps_incantation": "1 action",
+  "portee": "36 mètres",
+  "composantes": "V, S, M (une pincée de suie)",
+  "duree": "instantanée",
+  "concentration": false,
+  "rituel": false,
+  "effet_md": "Un jet de flammes imaginaire inflige 6d6 dégâts de feu.",
+  "listes_de_classes": ["magicien", "ensorceleur"]
+ }
+}
+```
+
+Et le PNJ lanceur qui le connaît :
+
+```json
+{
+ "id": "sorcier-exemple",
+ "classe": "pnj",
+ "nom": "Sorcier d'exemple",
+ "tags": ["exemple"],
+ "anchors": [[13000, 13100]],
+ "stats_5e": {
+  "role": "antagoniste mineur",
+  "description_md": "Garde un repaire imaginaire.",
+  "sorts_connus": ["flamme-torsadee"]
+ }
+}
+```
+
+---
+
+## 7. VÉRIFICATION CROISÉE — LES 2 RECORDS `creature` DU SPECIMEN
 
 **Corpus mesuré :** `kit-p4/partition-beyond-the-vale-of-madness/records/*.md` (copie du poste ;
 le dossier miroir côté dépôt est vide aujourd'hui). **N = 2**, les deux de classe `creature`.
@@ -402,7 +489,7 @@ que soit sa valeur.
 
 ---
 
-## 7. RÉCAPITULATION ET CE QUE JE N'AI PAS PU ÉTABLIR
+## 8. RÉCAPITULATION ET CE QUE JE N'AI PAS PU ÉTABLIR
 
 | classe | obligatoires (hors `nom`) | optionnels | dont sans ancre (signalés) |
 |---|---|---|---|
@@ -411,10 +498,12 @@ que soit sa valeur.
 | objet | 3 | 5 + 8 (§3bis magiques) | 1 (b3) |
 | lieu | 1 | 2 | 2 (l1, s2) |
 | faction | 1 | 2 | 3 (f1, t1, t2) |
-| **total** | **15** | **25 + héritage §1** | **8** |
+| sort | 8 | 2 | 0 |
+| **total** | **23** | **27 + héritage §1** | **8** |
 
 ⚠️ Le comptage du §0 (« 24 obl. / 30 opt. ») comptait autrement (héritage §1 déroulé) — la
-référence est **ce tableau-ci**, définition figée ci-dessus.
+référence est **ce tableau-ci**, définition figée ci-dessus. Ligne `sort` ajoutée par `D-252.3`
+(Issue #63, 2026-08-29) — seule classe des six à ne porter aucun champ sans ancre SRD.
 
 **Ce que je n'ai pas pu établir :**
 

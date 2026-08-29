@@ -17,7 +17,11 @@ NODE_TYPES = ("chapitre", "section", "scene", "read_aloud")
 # étages ; seuls trois portent du contenu de module.
 ALTITUDES = ("scene", "scenario", "adventure")
 ETAGE_GLOBAL = "adventure"      # déclaré dans le manifest
-RECORD_CLASSES = ("creature", "pnj", "objet", "lieu", "faction")
+RECORD_CLASSES = ("creature", "pnj", "objet", "lieu", "faction", "sort")
+# D-252.3 : sorts inédits des appendices de campagne — ancre racine SRD 5.1 ›
+# Spellcasting (les huit écoles canoniques, orthographe française du poste).
+SORT_ECOLES = ("abjuration", "invocation", "divination", "enchantement",
+               "evocation", "illusion", "necromancie", "transmutation")
 SECRET_STATUTS = ("public", "suspect", "secret")
 PATCH_OPS = ("append", "prepend", "replace", "delete")
 PREREQUIS_TYPES = ("entite_vivante", "flag", "quete_etat")   # fiche SCÉNARIO §2
@@ -259,9 +263,14 @@ class Record:
     - persistent  : attributs qui survivent aux frontières de combat (delta
       persist `1b84258`) — déclarés côté auteur par la ligne 'persistent:'
       côté moteur ; ici la liste des attrs DOIT exister dans les stats.
+    - sorts_connus : ids de sorts (classe `sort`, D-252.3) qu'un creature/pnj
+      lanceur connaît — réservé à ces deux classes ; le garde zéro-dangling
+      (validate_form + emit) résout chaque id contre les records classe
+      `sort` de la partition, comme les autres formes réservées ci-dessus.
     """
 
-    _RESERVED = ("ancre_srd", "delta_vs_ancre", "tokens_initial", "persistent")
+    _RESERVED = ("ancre_srd", "delta_vs_ancre", "tokens_initial", "persistent",
+                 "sorts_connus")
 
     def __init__(self, rid: str, classe: str, nom: str, stats_5e: dict,
                  anchors: list[tuple[int, int]], tags: list[str] | None = None,
@@ -277,12 +286,15 @@ class Record:
         self.delta_vs_ancre = self._delta(rid, stats_5e)
         self.tokens_initial = self._tokens(rid, stats_5e)
         self.persistent_attrs = self._persistent(rid, stats_5e, stats)
+        self.sorts_connus = self._sorts_connus(rid, classe, stats_5e)
         self._objet_magique(rid, classe, stats)
         required = annexe_a.required_fields(classe)
         merged = {**stats, "nom": nom}   # nom is first-class, not a stat
         missing = [f for f in required if f not in merged]
         if missing:
             raise ValueError(f"record {rid} ({classe}): stats_5e missing {missing}")
+        if classe == "sort":
+            self._check_sort(rid, merged)
         self.id, self.classe, self.nom = rid, classe, nom
         self.stats_5e, self.tags = stats, tags or []
         # transverses D-113/D-119/D-120 §6 — explicites, jamais improvisés:
@@ -371,6 +383,55 @@ class Record:
                                  "des attributs existants")
             out.append(attr)
         return out
+
+    def _sorts_connus(self, rid, classe, raw) -> list[str]:
+        """D-252.3 : un creature/pnj lanceur cite les sorts qu'il connaît par
+        id — réservé à ces deux classes (un sort ne se cite pas lui-même,
+        un objet/lieu/faction n'incante pas). La résolution contre les
+        records classe `sort` de la partition vit dans le garde zéro-dangling
+        (validate_form.py + emit.py), pas ici : à la construction d'un record
+        seul, les autres records de la partition ne sont pas encore connus."""
+        refs = raw.get("sorts_connus")
+        if refs is None:
+            return []
+        if classe not in ("creature", "pnj"):
+            raise ValueError(f"record {rid} ({classe}): sorts_connus réservé "
+                             "aux classes creature/pnj (lanceurs, D-252.3)")
+        if not isinstance(refs, list) or not refs:
+            raise ValueError(f"record {rid}: sorts_connus doit être une "
+                             "liste non vide d'ids de sort")
+        return [check_id(str(s), f"record {rid} sorts_connus") for s in refs]
+
+    def _check_sort(self, rid: str, stats: dict) -> None:
+        """Bornes classe `sort` (D-252.3, contrat Issue #63) au-delà de la
+        simple présence vérifiée par annexe_a.required_fields : niveau 0-9,
+        école SRD, composantes V/S/M, listes_de_classes non vide."""
+        niveau = stats.get("niveau")
+        if isinstance(niveau, bool) or not isinstance(niveau, int) \
+                or not (0 <= niveau <= 9):
+            raise ValueError(f"record {rid} (sort): niveau doit être un "
+                             f"entier 0-9, got {niveau!r}")
+        ecole = stats.get("ecole")
+        if ecole not in SORT_ECOLES:
+            raise ValueError(f"record {rid} (sort): ecole {ecole!r} not in "
+                             f"{SORT_ECOLES}")
+        composantes = stats.get("composantes")
+        if not isinstance(composantes, str) or not composantes.strip() \
+                or not any(c in composantes for c in "VSM"):
+            raise ValueError(f"record {rid} (sort): composantes doit citer "
+                             f"au moins une composante V/S/M, got {composantes!r}")
+        for champ in ("temps_incantation", "portee", "duree", "effet_md"):
+            if not str(stats.get(champ, "")).strip():
+                raise ValueError(f"record {rid} (sort): {champ} vide")
+        classes = stats.get("listes_de_classes")
+        if not isinstance(classes, list) or not classes \
+                or not all(str(c).strip() for c in classes):
+            raise ValueError(f"record {rid} (sort): listes_de_classes doit "
+                             "être une liste non vide de classes lanceuses")
+        for flag in ("concentration", "rituel"):
+            if flag in stats and not isinstance(stats[flag], bool):
+                raise ValueError(f"record {rid} (sort): {flag} doit être "
+                                 f"booléen, got {stats[flag]!r}")
 
     def _objet_magique(self, rid, classe, stats) -> None:
         """D-252.2 (issue #62) — champs optionnels objets magiques : reste

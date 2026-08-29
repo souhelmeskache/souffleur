@@ -33,6 +33,10 @@ def validate_form(partition, partition_dir=None) -> list[str]:
     corpus = "\n".join(n.corps_md for n in partition.nodes)
     corpus += "\n".join(e["resultat_md"] for t in partition.tables
                         for e in t.entrees)
+    # D-252.3 : un sort cité par sorts_connus (référence structurée, pas de
+    # la prose) est ancré par cette citation — pas orphelin pour autant
+    corpus += "\n".join(sid for r in partition.records
+                        for sid in getattr(r, "sorts_connus", []) or [])
     for r in partition.records:
         if r.id not in corpus and r.nom not in corpus:
             errors.append(f"orphan record: {r.id} ({r.classe}) never referenced")
@@ -222,6 +226,17 @@ def validate_form(partition, partition_dir=None) -> list[str]:
                     errors.append(f"secret {s.id}: leak dans directeur.md "
                                   "(garde caméra D-184 — secrets jamais "
                                   "servis au Director en clair)")
+
+    # 12b) D-252.3 sorts_connus — un creature/pnj lanceur cite un sort par
+    #      id ; la garde zéro-dangling le résout contre les records classe
+    #      `sort` de la partition (Issue #63, comme les autres formes P-CONV).
+    sort_ids = {r.id for r in partition.records if r.classe == "sort"}
+    for r in partition.records:
+        for sid in getattr(r, "sorts_connus", []) or []:
+            if sid not in sort_ids:
+                errors.append(f"record {r.id}: sorts_connus référence l'id "
+                              f"inconnu ou non-sort {sid} (D-252.3 zéro "
+                              "dangling)")
 
     # 12) I-033 borne à deux murs — fenêtres conversation d'accord (D-219 §4)
     # Garde triple : (a) tension liée — REQUISE seulement pour F3 (dimension
