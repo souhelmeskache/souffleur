@@ -241,12 +241,31 @@ class TrinityBrain:
         return obj, None
 
     # --- Narrator ---
+    def _writer_context(self, messages: list[dict]) -> list[dict]:
+        """The Writer's OWN copy of the assembled context, with the Director-
+        only material explicitly retiré (Issue #108) — same vocabulary and
+        intent as mcp_server.py's `assemble_context_to_file(event_rules=False,
+        secrets=False)` on the director-de-table side:
+          - event_rules: needs no strip here — `_direct` above concatenates
+            SCENARIO EVENT RULES only into `director_msgs`, a local copy never
+            reinjected into `messages`, so this method never receives it in
+            the first place. DECLARED behaviour now (this docstring + the
+            guard test), not an accident of Python scope.
+          - secrets: `store.assemble()` may have appended a "Secrets you know"
+            section for the Director; stripped from the Writer's copy below.
+        A no-op text-wise when neither ever applied — the common case."""
+        if not messages:
+            return messages
+        stripped = self.store.strip_secrets_section(messages[0]["content"])
+        return [{**messages[0], "content": stripped}, *messages[1:]]
+
     def _writer_messages(self, messages, plan: dict, facts: dict,
                          outcome: list[str]) -> list[dict]:
         directive = _writer_directive(plan, facts, outcome)
+        writer_context = self._writer_context(messages)
         # Post-history instruction: appended AFTER the player's action so it carries
         # the most weight on the model's next tokens (the SillyTavern lesson).
-        return [*messages, {"role": "system", "content": directive}]
+        return [*writer_context, {"role": "system", "content": directive}]
 
     def generate(self, messages, rpg_on: bool, on_stage, out_chunks: list,
                  skip_logic: bool = False, event_rules: str = ""):
@@ -309,7 +328,9 @@ class TrinityBrain:
                 note(e)
 
         note("Writing")
-        writer_msgs = messages if (skip_logic and not events) \
+        # Simple mode (skip_logic, no envelope) skips the plan directive but the
+        # retrait above still applies: `_writer_context` (Issue #108) either way.
+        writer_msgs = self._writer_context(messages) if (skip_logic and not events) \
             else self._writer_messages(messages, plan, facts, events)
         hidden: list[str] = []
         # Reasoning-model headroom (real client only — stubs keep bare stream()):
