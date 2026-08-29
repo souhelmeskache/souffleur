@@ -13,7 +13,10 @@
     - Mode par défaut (-Issue) : lance une lane d'exécution sur une Issue
       labellisée `prete`, dans un worktree neuf.
     - Mode -Revue : lance une lane de revue adversariale FABLE sur une PR
-      existante, dans un pane SANS worktree neuf (lecture seule via gh).
+      existante, dans un worktree JETABLE dédié (jamais le checkout
+      principal — corrigé après la revue de la PR #60 : écrire l'automode
+      dans le checkout principal y laissait une élévation Bash(*)
+      persistante pour toute session future de ce dossier).
 
 .PARAMETER Issue
     Numéro de l'Issue GitHub à lancer en lane (repo souhelmeskache/souffleur).
@@ -21,12 +24,15 @@
 
 .PARAMETER Revue
     Numéro de la PR GitHub à soumettre à une lane de revue adversariale
-    (D-251). Crée un pane SANS worktree neuf (lecture seule via gh), lance
-    claude en modèle fable / effort medium — FIGÉS, jamais paramétrables
-    dans ce mode (le contrôle qualité ne se fait pas au rabais, D-225). La
-    lane lit la spec de l'Issue liée, lit le diff de la PR, et poste un
-    verdict en commentaire de PR commençant littéralement par
-    `REVUE : APPROUVE` ou `REVUE : REFUS`. Exclusif avec -Issue.
+    (D-251). Crée un worktree jetable dédié (base fraîche sur origin/main,
+    jamais le checkout principal — la lane n'y committe/pousse rien, elle a
+    juste besoin d'un checkout isolé pour `gh`), lance claude en modèle
+    fable / effort medium — FIGÉS, jamais paramétrables dans ce mode (le
+    contrôle qualité ne se fait pas au rabais, D-225). La lane lit la spec
+    de l'Issue liée, lit le diff de la PR, et poste un verdict en commentaire
+    de PR commençant littéralement par `REVUE : APPROUVE` ou
+    `REVUE : REFUS` (marqué `(TEST)` si la PR n'est plus OPEN — revue à
+    blanc). Exclusif avec -Issue.
 
 .PARAMETER Modele
     sonnet (défaut) | opus | fable. Jamais haiku (D-225) — refusé explicitement
@@ -157,7 +163,7 @@ livrable est un verdict posté en commentaire sur la PR #$PrNumber.
 
 ## Étapes
 
-1. Identifie l'Issue liée à cette PR (``gh pr view $PrNumber --repo $RepoSlug --json title,body,url,closingIssuesReferences``
+1. Identifie l'état et l'Issue liée à cette PR (``gh pr view $PrNumber --repo $RepoSlug --json state,title,body,url,closingIssuesReferences``
    ou, à défaut, le titre/corps de la PR) et lis la spec complète de cette
    Issue (``gh issue view <numero> --repo $RepoSlug``).
 2. Lis le diff complet de la PR : ``gh pr diff $PrNumber --repo $RepoSlug``.
@@ -182,6 +188,15 @@ chaînes :
 - ``REVUE : APPROUVE`` — suivi de tes points d'attention mineurs s'il y en a.
 - ``REVUE : REFUS`` — suivi de la liste précise des points bloquants trouvés
   à l'étape 3.
+
+**Revue à blanc.** Si l'état relevé à l'étape 1 n'est PAS ``OPEN`` (PR déjà
+mergée ou fermée), cette revue ne peut gater aucun merge réel — c'est
+forcément une revue à blanc (validation du mécanisme, pas un vrai geste de
+gate). Dans ce cas précis, ajoute le marqueur ``(TEST)`` collé juste après le
+préfixe obligatoire (ex. ``REVUE : APPROUVE (TEST)`` ou
+``REVUE : REFUS (TEST)``) et dis-le explicitement dans le corps du
+commentaire. Sur une PR encore ``OPEN``, ne mets jamais ce marqueur : c'est
+une revue réelle.
 
 Puis poste un second commentaire sur la même PR, commençant littéralement par
 ``TERMINÉ : `` confirmant que le verdict est posté.
@@ -211,7 +226,12 @@ if ($EstRevue) {
     $revuePromptText = Build-RevuePrompt -PrNumber $prData.number -RepoSlug $RepoSlug
 
     $agentName = "revue-$Revue"
-    $tabLabel = "revue-$Revue"
+    # Branche jetable, jamais destinée à recevoir de commit : la lane de
+    # revue n'écrit rien (voir Build-RevuePrompt, « Ce que tu ne fais PAS »),
+    # elle a juste besoin d'un checkout Git isolé pour que `gh` et un
+    # éventuel `git log`/`git show` fonctionnent sans toucher au checkout
+    # principal. Base fraîche sur origin/main, comme le mode -Issue.
+    $revueBranch = "revue-$Revue"
 
     if ($DryRun) {
         Write-Output "=== DryRun (mode -Revue) — rien n'est lancé ==="
@@ -221,13 +241,15 @@ if ($EstRevue) {
         Write-Output "Modele         : $ModeleRevue (figé)"
         Write-Output "Effort         : $EffortRevue (figé)"
         Write-Output "Nom agent      : $agentName"
+        Write-Output "Branche jetable: $revueBranch"
         Write-Output ""
         Write-Output "Commandes qui seraient exécutées :"
         Write-Output "  (gh résolu : $GhExe)"
         Write-Output "  (herdr résolu : $HerdrExe)"
-        Write-Output "  $HerdrExe tab create --cwd `"$RepoRoot`" --label $tabLabel   (SANS worktree neuf, lecture seule via gh)"
-        Write-Output "  $HerdrExe pane run <pane_id_du_tab> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
-        Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_tab> -- --model $ModeleRevue --effort $EffortRevue --permission-mode acceptEdits"
+        Write-Output "  git -C `"$RepoRoot`" fetch origin main"
+        Write-Output "  $HerdrExe worktree create --cwd `"$RepoRoot`" --branch $revueBranch --base origin/main   (worktree JETABLE, jamais le checkout principal — lecture seule via gh, aucun commit attendu)"
+        Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
+        Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $ModeleRevue --effort $EffortRevue --permission-mode acceptEdits"
         Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
         Write-Output ""
         Write-Output "--- Prompt-gabarit (revue) ---"
@@ -235,22 +257,35 @@ if ($EstRevue) {
         exit 0
     }
 
-    Write-Output "Création du pane de revue (sans worktree neuf) pour la PR #$Revue..."
-    $tabJson = & $HerdrExe tab create --cwd $RepoRoot --label $tabLabel
+    Write-Output "Fetch d'origin/main (base fraîche du worktree jetable de revue)..."
+    git -C $RepoRoot fetch origin main
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Échec de 'herdr tab create' pour la revue de la PR #$Revue."
+        Write-Error "Échec de 'git fetch origin main' — base du worktree de revue non garantie fraîche, abandon."
         exit 1
     }
-    $tabData = $tabJson | ConvertFrom-Json
-    $paneId = $tabData.result.root_pane.pane_id
 
-    Write-Output "Pane : $paneId"
+    Write-Output "Création du worktree jetable + pane pour la revue de la PR #$Revue..."
+    # JAMAIS le checkout principal (D-251, revue PR #60) : herdr worktree
+    # create isole ce pane dans son propre dossier, comme le mode -Issue —
+    # aucun risque d'écraser un .claude/settings.local.json qui ne
+    # appartient pas à cette lane, ni de laisser une élévation Bash(*)
+    # traîner dans le checkout partagé après la revue.
+    $worktreeJson = & $HerdrExe worktree create --cwd $RepoRoot --branch $revueBranch --base origin/main
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Échec de 'herdr worktree create' pour la revue de la PR #$Revue (branche $revueBranch)."
+        exit 1
+    }
+    $worktreeData = $worktreeJson | ConvertFrom-Json
+    $paneId = $worktreeData.result.root_pane.pane_id
+    $worktreePath = $worktreeData.result.worktree.path
 
-    # Automode local — même filet que le mode -Issue (voir plus bas) : ce pane
-    # tourne dans le checkout courant ($RepoRoot), pas un worktree jetable,
-    # mais reste soumis aux mêmes interdits (--no-verify, push forcé) même si
-    # la lane de revue n'a en principe aucune raison de committer/pousser.
-    $claudeDir = Join-Path $RepoRoot '.claude'
+    Write-Output "Worktree (jetable) : $worktreePath"
+    Write-Output "Pane                : $paneId"
+
+    # Automode local — même filet que le mode -Issue (voir plus bas), posé
+    # DANS le worktree jetable de cette revue, jamais dans le checkout
+    # principal.
+    $claudeDir = Join-Path $worktreePath '.claude'
     New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
     $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
     $settingsLocal = [ordered]@{
