@@ -73,6 +73,13 @@ assert len(sc) == 3 and "unavailable" in sc[0].body, sc
 assert store2.state()["folded_turns"] == 6  # advanced despite bad output
 print("3) degradation OK (stub summaries, counter advanced)")
 
+# ---- 3b) I-204: arc fold advances folded_scenes ONLY with a readable trace ----
+# 3 scenes + long_fold_after=2/size=2 above already ran an arc fold on store2's
+# BadLLM (no real JSON) -> the counter must not have advanced for free.
+assert store2.state()["folded_scenes"] == 2  # advanced (never loops forever)
+assert "arc fold unavailable" in store2.read("memory/arc.md")
+print("3b) arc fold degradation OK (readable trace, counter advanced)")
+
 # ---- 4) index: resolve / find / dangling / duplicates ----
 idx = store.index()
 assert idx.resolve("kaelen").title == "Kaelen"
