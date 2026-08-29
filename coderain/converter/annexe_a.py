@@ -19,6 +19,16 @@ REQUIRED_STATS: dict[str, tuple[str, ...]] = {
 SAVE_NAMES = ("vigueur", "reflexes", "volonte")
 
 
+# D-252.2 (issue #62) — objets magiques : extension de la classe objet par
+# des champs OPTIONNELS (type_objet, rarete, harmonisation +
+# condition_harmonisation, activation, charges + recharge, effets_md,
+# secret_lie_id). Aucun n'entre dans REQUIRED_STATS ci-dessus (un objet
+# ordinaire reste valide sans eux) ; les énumérations et la cohérence entre
+# champs sont vérifiées par Record._objet_magique (schemas.py) et le lien
+# vers Secret par validate_form.validate_form — voir docs/annexe-a-stats-5e.md
+# §3bis pour le motif MALÉDICTION/IDENTIFICATION = câblage sur Secret.
+
+
 def required_fields(classe: str) -> tuple[str, ...]:
     if classe not in REQUIRED_STATS:
         raise KeyError(f"unknown record classe {classe!r}")

@@ -260,6 +260,15 @@ def validate_form(partition, partition_dir=None) -> list[str]:
             errors.append(f"fenetre {fen.id}: rattachement vers id inconnu "
                           f"{ratt} — zéro dangling autorisé "
                           "(I-033 §1c)")
+
+    # 13) D-252.2 (issue #62) objets magiques — secret_lie_id résout vers un
+    # Secret existant. MALÉDICTION/IDENTIFICATION ne sont pas des champs de
+    # l'objet : c'est ce câblage vers Secret, seul contrôlé ici.
+    for r in partition.records:
+        sec_id = getattr(r, "stats_5e", {}).get("secret_lie_id")
+        if sec_id and sec_id not in secret_ids:
+            errors.append(f"record {r.id}: secret_lie_id inconnu {sec_id} — "
+                          "zéro dangling (D-252.2)")
     return errors
 
 
