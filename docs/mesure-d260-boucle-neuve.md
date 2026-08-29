@@ -170,13 +170,97 @@ fréquence `every N`, en dehors du contrôle de cette lane).
 
 ## Ce qui reste à re-jouer
 
-Lane (c) (#131, étage scénario de la mémoire du vécu) est **encore ouverte**
-à la date de cette mesure (2026-08-29) — aucune PR mergée. Si elle merge
-avant que cette mesure ne soit consultée pour arbitrer D-258/D-260, LA
-REJOUER : elle touche `assembleur_position.py` section volatile (remplace/
-complète `scenes_tail` par l'étage scénario ouvert), donc change directement
-le poste « état du monde + file de scène » ci-dessus — une ligne à corriger,
-pas un re-chiffrage complet.
+Lane (c) (#131, étage scénario de la mémoire du vécu) était **encore
+ouverte** à la date de cette mesure (2026-08-29) — aucune PR mergée à ce
+moment. Elle a depuis mergé (PR #135) — voir rejeu ci-dessous (Issue #144).
+
+## Rejeu post-lane(c) (#135) — la ligne « état monde + file de scène »
+(Issue #144, 2026-08-29)
+
+Lane (c) remplace la file de scène brute (`scenes_tail`) par l'étage
+scénario ouvert dans `assembleur_position.py::_world_and_queue_section`
+— la section change de titre (« État du monde » devient « État du monde
+(compact) + étage scénario ») mais `tests/mesure-d260-boucle-neuve.py` la
+retrouve déjà via `startswith("État du monde")` : **aucun changement de
+script nécessaire**, seule la mesure change. Rejeu (`python
+tests/mesure-d260-boucle-neuve.py`) :
+
+| Poste | Avant lane (c) | Après lane (c) |
+|---|---:|---:|
+| Corpus A — TOTAL paquet Director | 1 013 tok | **1 029 tok** |
+| Corpus A — état sans sélection (scène+présences+monde) | 168 tok | **184 tok** |
+| Corpus B — TOTAL paquet Director | 5 384 tok | **4 841 tok** |
+| Corpus B — état sans sélection (scène+présences+monde) | 1 033 tok | **490 tok** |
+| Corpus B — préfixe cachable (2e tour, même position) | 56 % | **51 %** |
+
+Le poste « état sans sélection » du corpus réel est divisé par ~2 : la file
+de scène brute que bornait `scenes_tail` pesait plus lourd que l'étage
+scénario compact qui la remplace. L'écart global du corpus B se resserre
+d'autant (-72 % → **-75 %**) mais **reste au-dessus de la cible** 1 500-2 500
+tok (≈4 841 tok) — le verdict de la section précédente ne change pas de
+nature, seule cette ligne bouge : les deux couches non keyées-position
+(`rpg-rules.md` entier 1 435 tok, style + author's note 954 tok) sont
+INCHANGÉES par lane (c) et expliquent toujours, à elles seules, l'essentiel
+de l'écart résiduel. Le léger recul du % cachable (56 % → 51 %) vient du
+même dénominateur qui bouge (total plus petit) alors que le préfixe stable
+absolu ne change pas de nature.
+
+## Diagnostic complémentaire (Issue #144) — éléments pour l'arbitrage
+
+Toujours une mesure, pas un correctif (même discipline) : ce qui suit
+consigne des observations utiles à l'arbitrage demandé par l'Issue #144 sur
+les deux couches non keyées-position, sans trancher à leur place.
+
+### 1. `rpg-rules.md` entier (`_augment_rpg`) — la question posée par l'Issue
+
+Le contenu par défaut de `rpg-rules.md` (`coderain/templates.py::RPG_RULES`)
+n'est pas un lorebook narratif sélectionnable par pertinence de scène : c'est
+la **grammaire de l'enveloppe mécanique** (schéma du sidecar JSON, liste des
+clés de deltas, barème des DC, attributs et ce qu'ils gouvernent, règles de
+level-up/octroi). N'importe quelle clé peut être pertinente n'importe quel
+tour — un `flag_set` ou un `time_advance` n'a pas besoin de combat, une
+proposition de check peut survenir hors combat comme en combat. Une
+sélection par état du tour (combat / hors-combat), du type verdicts de la
+lane (b) (`event_rule_verdicts_block`), **ne se transpose donc pas
+directement** : les verdicts de règles d'événement sont candidats/déclenchés
+CE TOUR (sélection factuelle), alors que `rpg-rules.md` est une référence de
+grammaire consultée en fonction de ce que le NARRATEUR s'apprête à écrire,
+pas de l'état du monde. Deux familles d'options observées, à arbitrer :
+
+- **Découper le fichier en un socle toujours servi (schéma d'enveloppe,
+  deltas, attributs — la grammaire minimale pour tout tour) et des sections
+  seulement servies sur déclencheur d'état** (ex. section « Level-ups et
+  grants » seulement quand `LEVEL-UP PENDING` est vrai sur la fiche —
+  l'information existe déjà, `rpg_mod.context_block`). Réduit le contenu
+  réellement variable, mais demande de figer une frontière socle/annexe
+  stable dans le temps (un futur ajout au fichier doit choisir son camp).
+- **Ne pas réduire le contenu, mais son coût** : `rpg-rules.md` est
+  CONSTANT par story (ne varie qu'au changement de fichier par l'auteur du
+  module) — il n'a donc aucune raison de casser le cache. Or il est ajouté
+  APRÈS les sections volatiles de `assembleur_position.py` (verdicts, état du
+  monde) dans l'ordre d'augmentation d'`engine.py`
+  (`_augment_pack → _augment_style → _augment_rpg → _augment_event_rules`),
+  ce qui le place après un préfixe qui a déjà divergé d'un tour à l'autre.
+  Une réorganisation qui rapproche les blocs vraiment stables (règles RPG,
+  la partie `response_length` de style) du préfixe stable de
+  `assembleur_position.py`, et repousse les blocs réellement volatils
+  (verdicts d'événement, author's note à fréquence `every N`) en toute fin,
+  ne change PAS le total de tokens envoyés mais peut agrandir sensiblement
+  le préfixe cachable — orthogonal à la question de sélection, et sans
+  arbitrage de contenu à faire.
+
+### 2. Style + author's note (`_augment_style`)
+
+Le knob `response_length` (court texte fixe) est trivial et stable. Le coût
+mesuré (954 tok réel) vient presque entièrement de la note d'auteur
+(`custom_instructions()`), qui est déjà conditionnée par `depth`/`every` —
+donc DÉJÀ une forme de sélection temporelle, juste pas gratuite en tokens
+les tours où elle sert : à fréquence `every N`, elle coûte plein tarif les
+tours où `exchange % every == 0`, zéro sinon (pas de version compacte
+intermédiaire). Elle casse aussi le cache ces tours-là puisqu'ajoutée avant
+`_augment_rpg` dans l'ordre actuel — le même levier de réordonnancement
+qu'au point 1 (la sortir du chemin des blocs stables) s'applique ici aussi,
+séparément de toute décision sur son contenu.
 
 ## Trous mesurés (à consigner, pas à combler — même posture qu'I-158 §6)
 
