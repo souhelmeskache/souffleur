@@ -113,30 +113,80 @@ def get_record(partition_dir: Path, record_id: str) -> dict:
     return {"meta": meta, "stats": stats}
 
 
+class TableConsultationError(Exception):
+    """D-252.4 : clé de consultation inconnue, ou table interrogée dans le
+    mauvais mode — échec explicite, jamais une invention (même esprit que
+    l'absence de table : exception signalée, jamais improvisation)."""
+
+
+def _table_meta(partition_dir: Path, table_id: str) -> dict:
+    front, _ = _split_front(
+        (Path(partition_dir) / "tables" / f"{table_id}.md").read_text(
+            encoding="utf-8"))
+    try:
+        return json.loads(front) if front else {}
+    except json.JSONDecodeError:
+        return {}
+
+
 def roll_table(partition_dir: Path, table_id: str,
                die_result: int | None = None) -> dict:
     """Table data (+ the row for `die_result` if given; rolling is the
-    engine's job, never ours)."""
-    entries = _read_table_entries(Path(partition_dir), table_id)
+    engine's job, never ours). Réservé au mode aleatoire (D-252.4) — une
+    table consultation n'a pas de dé, voir consulter_table()."""
+    partition_dir = Path(partition_dir)
+    meta = _table_meta(partition_dir, table_id)
+    mode = meta.get("mode", "aleatoire")
+    if mode != "aleatoire":
+        raise TableConsultationError(
+            f"table {table_id}: mode {mode!r} — pas de dé, la lecture se "
+            "fait par consulter_table() (D-252.4)")
+    entries = _read_table_entries(partition_dir, table_id, mode)
     row = None
     if die_result is not None:
         for e in entries:
             if e["plage_debut"] <= die_result <= e["plage_fin"]:
                 row = e
                 break
-    raw = (Path(partition_dir) / "tables" / f"{table_id}.md").read_text(
-        encoding="utf-8")
-    import re as _re
-    de = (_re.search(r'"de":\s*"([^"]+)"', raw).group(1)
-          if '"de"' in raw else None)
-    return {"id": table_id, "de": de, "entrees": entries, "resultat": row}
+    return {"id": table_id, "de": meta.get("de"), "entrees": entries,
+            "resultat": row}
 
 
-def _read_table_entries(partition_dir: Path, table_id: str) -> list[dict]:
+def consulter_table(partition_dir: Path, table_id: str, cle: str) -> dict:
+    """Lecture ciblée d'une table consultation (D-252.4) — le documentaliste
+    interroge la bibliothèque indexée : donner la clé rend l'entrée, clé
+    inconnue rend un échec explicite (TableConsultationError), jamais une
+    invention."""
+    partition_dir = Path(partition_dir)
+    meta = _table_meta(partition_dir, table_id)
+    mode = meta.get("mode", "aleatoire")
+    if mode != "consultation":
+        raise TableConsultationError(
+            f"table {table_id}: mode {mode!r} — pas de clé de consultation, "
+            "voir roll_table() (D-252.4)")
+    entries = _read_table_entries(partition_dir, table_id, mode)
+    for e in entries:
+        if e["cle"] == cle:
+            return {"id": table_id, "cle": cle, "resultat_md": e["resultat_md"]}
+    raise TableConsultationError(
+        f"table {table_id}: clé de consultation inconnue {cle!r} — échec "
+        "explicite, jamais d'invention (D-252.4)")
+
+
+def _read_table_entries(partition_dir: Path, table_id: str,
+                        mode: str = "aleatoire") -> list[dict]:
     import re
     raw = (partition_dir / "tables" / f"{table_id}.md").read_text(
         encoding="utf-8")
     out = []
+    if mode == "consultation":
+        for line in raw.splitlines():
+            m = re.match(r"^-\s*(.+?):\s*(.*)$", line.strip())
+            if not m:
+                continue
+            out.append({"cle": m.group(1).strip(),
+                        "resultat_md": m.group(2).strip()})
+        return out
     for line in raw.splitlines():
         m = re.match(r"^-\s*(\d+(?:-\d+)?):\s*(.*)$", line.strip())
         if not m:

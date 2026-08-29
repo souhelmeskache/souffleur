@@ -8,10 +8,18 @@ from pathlib import Path
 
 
 def _md_table(t) -> str:
-    lines = [f"# table {t.id}", "", f"de: `{t.de}`", ""]
-    for e in t.entrees:
-        lien = f" → [{e['lien_optionnel']}]" if e.get("lien_optionnel") else ""
-        lines.append(f"- {e['plage_debut']}-{e['plage_fin']}: {e['resultat_md']}{lien}")
+    mode = getattr(t, "mode", "aleatoire")
+    lines = [f"# table {t.id}", "", f"mode: `{mode}`"]
+    if mode == "consultation":
+        # D-252.4 : pas de dé, chaque ligne = une clé de consultation
+        lines.append("")
+        for e in t.entrees:
+            lines.append(f"- {e['cle']}: {e['resultat_md']}")
+    else:
+        lines += [f"de: `{t.de}`", ""]
+        for e in t.entrees:
+            lien = f" → [{e['lien_optionnel']}]" if e.get("lien_optionnel") else ""
+            lines.append(f"- {e['plage_debut']}-{e['plage_fin']}: {e['resultat_md']}{lien}")
     return "\n".join(lines) + "\n"
 
 
@@ -126,7 +134,9 @@ def write_partition(partition, out_dir: Path) -> Path:
         (out_dir / "records" / f"{r.id}.md").write_text(fm + body + "\n",
                                                         encoding="utf-8")
     for t in partition.tables:
-        fm = _front_matter({"id": t.id, "de": t.de, "anchors": t.anchors})
+        fm = _front_matter({"id": t.id, "de": t.de,
+                            "mode": getattr(t, "mode", "aleatoire"),
+                            "anchors": t.anchors})
         (out_dir / "tables" / f"{t.id}.md").write_text(fm + _md_table(t),
                                                        encoding="utf-8")
     for s in partition.secrets:
@@ -220,7 +230,9 @@ def write_partition(partition, out_dir: Path) -> Path:
                      **({"persistent_attrs": r.persistent_attrs}
                         if getattr(r, "persistent_attrs", None) else {})}
                     for r in partition.records],
-        "tables": [{"id": t.id, "de": t.de} for t in partition.tables],
+        "tables": [{"id": t.id, "de": t.de,
+                    "mode": getattr(t, "mode", "aleatoire")}
+                   for t in partition.tables],
         "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
         "tensions": [{"id": t.id, "categorie": t.categorie, "node_id": t.node_id}
                      for t in getattr(partition, "tensions", []) or []],

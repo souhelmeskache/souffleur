@@ -353,26 +353,57 @@ class Record:
         return out
 
 
+TABLE_MODES = ("aleatoire", "consultation")   # D-252.4
+
+
 class RollTable:
+    """aleatoire (défaut, rétrocompat totale) : dé NdM + plages contiguës,
+    inchangé. consultation (D-252.4) : PAS de dé — chaque entrée porte une
+    clé de consultation textuelle unique (obstacle, marchandise, tranche de
+    distance...) ; lecture ciblée côté aval (coderain/converter/aval.py),
+    jamais un tirage."""
+
     def __init__(self, tid: str, de: str, entrees: list[dict],
-                 anchors: list[tuple[int, int]]):
+                 anchors: list[tuple[int, int]], mode: str = "aleatoire"):
         check_id(tid, "table")
-        if not re.match(r"^\d+d\d+$", de):
-            raise ValueError(f"table {tid}: 'de' must look like '1d20', got {de!r}")
+        if mode not in TABLE_MODES:
+            raise ValueError(f"table {tid}: mode {mode!r} not in {TABLE_MODES}")
         if not anchors:
             raise ValueError(f"table {tid}: no source anchor")
-        prev_end = None
-        for e in entrees:
-            for k in ("plage_debut", "plage_fin", "resultat_md"):
-                if k not in e:
-                    raise ValueError(f"table {tid}: entry missing {k}: {e}")
-            if e["plage_debut"] > e["plage_fin"]:
-                raise ValueError(f"table {tid}: inverted range {e}")
-            if prev_end is not None and e["plage_debut"] != prev_end + 1:
-                raise ValueError(f"table {tid}: gap/overlap before range "
-                                 f"{e['plage_debut']}-{e['plage_fin']}")
-            prev_end = e["plage_fin"]
-        self.id, self.de, self.entrees = tid, de, entrees
+        if mode == "aleatoire":
+            if not de or not re.match(r"^\d+d\d+$", de):
+                raise ValueError(f"table {tid}: 'de' must look like '1d20', got {de!r}")
+            prev_end = None
+            for e in entrees:
+                for k in ("plage_debut", "plage_fin", "resultat_md"):
+                    if k not in e:
+                        raise ValueError(f"table {tid}: entry missing {k}: {e}")
+                if e["plage_debut"] > e["plage_fin"]:
+                    raise ValueError(f"table {tid}: inverted range {e}")
+                if prev_end is not None and e["plage_debut"] != prev_end + 1:
+                    raise ValueError(f"table {tid}: gap/overlap before range "
+                                     f"{e['plage_debut']}-{e['plage_fin']}")
+                prev_end = e["plage_fin"]
+            self.de = de
+        else:  # consultation
+            if de:
+                raise ValueError(f"table {tid}: mode consultation n'attend "
+                                 f"pas de dé, got {de!r} (D-252.4)")
+            seen_cles: set[str] = set()
+            for e in entrees:
+                for k in ("cle", "resultat_md"):
+                    if k not in e:
+                        raise ValueError(f"table {tid}: entry missing {k}: {e}")
+                cle = str(e["cle"]).strip()
+                if not cle:
+                    raise ValueError(f"table {tid}: clé de consultation vide "
+                                     "(D-252.4)")
+                if cle in seen_cles:
+                    raise ValueError(f"table {tid}: clé de consultation "
+                                     f"dupliquée {cle!r} (D-252.4)")
+                seen_cles.add(cle)
+            self.de = None
+        self.id, self.mode, self.entrees = tid, mode, entrees
         self.anchors = [(int(a), int(b)) for a, b in anchors]
 
 
