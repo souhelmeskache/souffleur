@@ -89,6 +89,13 @@ class CandidatActe:
     justification: str
     libelle: str
 
+    def id(self) -> str:
+        """Identité dérivée stable d'un candidat (I-57, RACCORD proposeur) :
+        la concaténation ordonnée des ids de modules — jamais un id saisi à
+        la main, jamais stocké comme champ (deux candidats aux mêmes modules
+        dans le même ordre partagent la même identité, par construction)."""
+        return "+".join(self.modules)
+
     def to_dict(self) -> dict:
         return {"modules": list(self.modules),
                 "justification": self.justification,
@@ -142,6 +149,9 @@ def _valider_candidat(raw: dict, ids_connus: dict[str, EntreeCatalogue]) -> tupl
     manquants = [m for m in modules if m not in ids_connus]
     if manquants:
         return None, f"ancre catalogue manquante : {', '.join(manquants)}"
+    if len(set(modules)) != len(modules):
+        doublons = sorted({m for m in modules if modules.count(m) > 1})
+        return None, f"module chaîné plusieurs fois dans le même acte : {', '.join(doublons)}"
     univers = {ids_connus[m].univers for m in modules}
     if len(univers) > 1:
         return None, f"modules de plusieurs univers dans un même acte : {sorted(univers)}"

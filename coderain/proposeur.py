@@ -17,28 +17,23 @@ Ce module ne porte ni la conversation B (D-219, protocole complet — issue
 #15) ni le raccord contrat/biographie (issue (d) de la même fiche) : c'est la
 structure de proposition + le garde-fou du cycle de refus, hors séance.
 
-Le sélecteur (candidats d'acte, issue amont de cette fiche) n'était pas
-mergé à l'écriture de ce module — `CandidatActe` ci-dessous est un STUB
-minimal portant seulement les champs consommés ici ; à remplacer par l'import
-réel une fois le sélecteur disponible.
+RACCORD (I-57) : ce module consomme le `CandidatActe` réel de
+`coderain.selecteur` (champs `modules`, `justification`, `libelle` — pas de
+champ `id`). L'identité d'un candidat, utilisée comme `ancre_source`, est
+l'id dérivé stable `CandidatActe.id()` (concaténation ordonnée des ids de
+modules, jamais saisi à la main) — voir `selecteur.CandidatActe.id`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+from .selecteur import CandidatActe
 
 CENTRAL = "central"
 SECONDAIRE = "secondaire"
 PORTEES = (CENTRAL, SECONDAIRE)
 
 STATUTS = ("en_attente", "refusee", "retenue")
-
-
-@dataclass
-class CandidatActe:
-    """Un candidat d'acte tel que produit par le sélecteur (issue amont, non
-    mergée). Stub : seuls les champs consommés par le proposeur sont repris."""
-    id: str
-    resume: str = ""  # ce qui peut être montré au joueur — spoiler-free
 
 
 @dataclass
@@ -117,8 +112,10 @@ def valider_ancrage(prop: Proposition, candidats: list[CandidatActe],
                      envies: list[EnvieJoueur]) -> list[str]:
     """Ancrage obligatoire (D-232) : chaque ancre_source doit pointer un
     candidat d'acte ou une envie joueur CONNUS — pas seulement une chaîne non
-    vide (valider() ci-dessus ne vérifie que la forme)."""
-    ids = {c.id for c in candidats} | {v.id for v in envies}
+    vide (valider() ci-dessus ne vérifie que la forme). L'identité d'un
+    candidat est son id dérivé (`CandidatActe.id()`), jamais un champ saisi
+    à la main (I-57)."""
+    ids = {c.id() for c in candidats} | {v.id for v in envies}
     errors: list[str] = []
     for e in prop.elements():
         if e.ancre_source not in ids:
