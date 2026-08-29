@@ -299,7 +299,8 @@ n'étant plus après les sections volatiles, ils rejoignent le préfixe stable
 et cessent de casser le cache. Seule l'author's note à fréquence `every N`
 (quand elle sert) resterait susceptible de faire reculer ce chiffre sur un
 tour où `exchange % every == 0` — non exercé par cette mesure (le save réel
-mesuré n'a pas de note d'auteur active sur ce tour). Le total du paquet
+mesuré n'a pas de note d'auteur active sur ce tour) ; ce choix n'est pas
+traité ici, voir Issue #166 dédiée. Le total du paquet
 Director (4 840 tok) reste au-dessus de la fourchette cible 1 500-2 500 tok :
 ce correctif améliore la **part cachable**, pas le **total servi** — la
 réduction du total, si souhaitée, reste du ressort de l'option (a) (Issue
