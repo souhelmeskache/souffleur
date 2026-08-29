@@ -53,6 +53,31 @@ assert "{{save}}" in basse_mj, "gabarit MJ : placeholder save absent"
 print("2) contrat MJ (paquet fait foi / mémoire jetable / D-263 / interdits) présent dans le gabarit MJ")
 
 # ============================================================
+# 2bis) D-264 amendement (Issue #161) : Director <> narrateur -- la session
+# ne narre JAMAIS elle-même, directive=caméra D-110 donnée à un sous-agent
+# narrateur, interdits de fuite dans la directive, test d'étanchéité en
+# ouverture de banc
+# ============================================================
+assert "ne narre" in basse_mj or "ne narres" in basse_mj, \
+    "gabarit MJ : interdit de narrer soi-même absent"
+assert "sous-agent narrateur" in basse_mj or "sous-agent" in basse_mj and "narrateur" in basse_mj, \
+    "gabarit MJ : sous-agent narrateur non mentionné"
+assert "d-110" in basse_mj, "gabarit MJ : caméra D-110 non référencée"
+assert "directive" in basse_mj, "gabarit MJ : notion de directive absente"
+assert "angle" in basse_mj, "gabarit MJ : angle de caméra absent"
+assert "neutre" in basse_mj, "gabarit MJ : l'angle doit aussi tomber sur du neutre"
+assert "tonalité" in basse_mj, "gabarit MJ : tonalité absente des champs de la directive"
+for interdit_directive in ("règle d'événement", "raisonnement"):
+    assert interdit_directive in basse_mj, \
+        f"gabarit MJ : interdit de directive '{interdit_directive}' absent"
+assert "étanchéité" in basse_mj, "gabarit MJ : test d'étanchéité harnais absent"
+assert "avant le tour 1" in basse_mj, \
+    "gabarit MJ : le test d'étanchéité doit se situer avant le tour 1"
+print("2bis) amendement D-264 (Issue #161) : Director ne narre jamais, "
+      "directive=caméra D-110 + sous-agent narrateur, interdits de fuite, "
+      "test d'étanchéité avant le tour 1 -- tous présents dans le gabarit MJ")
+
+# ============================================================
 # 3) sobriété joueur : un paragraphe, première personne, actes concrets
 # ============================================================
 basse_joueur = texte_joueur.lower()
