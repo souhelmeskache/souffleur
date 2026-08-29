@@ -152,6 +152,13 @@ def _valider_candidat(raw: dict, ids_connus: dict[str, EntreeCatalogue]) -> tupl
     if len(set(modules)) != len(modules):
         doublons = sorted({m for m in modules if modules.count(m) > 1})
         return None, f"module chaîné plusieurs fois dans le même acte : {', '.join(doublons)}"
+    avec_plus = sorted(m for m in modules if "+" in m)
+    if avec_plus:
+        return None, (
+            "id de module contenant '+' interdit — collision avec le "
+            "séparateur de CandidatActe.id() (I-57) et non-conforme à la "
+            "convention de slug kebab-case inter-modules "
+            f"(docs/identite-inter-modules-d253.md) : {', '.join(avec_plus)}")
     univers = {ids_connus[m].univers for m in modules}
     if len(univers) > 1:
         return None, f"modules de plusieurs univers dans un même acte : {sorted(univers)}"
