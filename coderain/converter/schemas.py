@@ -31,7 +31,18 @@ TENSION_CATEGORIES = ("menace", "horloge", "echeance", "cout", "choix", "revelat
 # que l'adaptation rend jouable, que l'Auteur respecte. Toute tension hors ces
 # 6 codes est ROUGE (validate_form §8, emit garde, test-auteur-codes-tension).
 TENSION_CODES = TENSION_CATEGORIES
-RESSOURCE_TYPES = ("carte",)  # D-216 §2 générique, premier cas = carte (D-217 poste uniquement)
+RESSOURCE_TYPES = ("carte", "document", "illustration")  # D-216 §2 générique
+                                                          # (D-217 poste uniquement) — étendu D-252.1
+# D-252.1 : sous_type documenté mais OUVERT (pas un enum fermé — valideur
+# refuse seulement l'absence, jamais une valeur hors liste).
+RESSOURCE_SOUS_TYPES_DOCUMENT = ("lettre", "journal", "affiche", "contrat",
+                                  "carte_au_tresor", "note", "autre")
+RESSOURCE_SOUS_TYPES_ILLUSTRATION = ("scene", "creature", "lieu", "autre")
+RESSOURCE_TYPES_SOUS_TYPE_OBLIGATOIRE = ("document", "illustration")
+# D-252.1 état de remise — même esprit que toile.py (D-19/D-63) : transition
+# unidirectionnelle, jamais de retour en arrière, tracée.
+RESSOURCE_ETATS = ("non_remis", "remis")
+_RESSOURCE_ETAT_TRANSITIONS = {"non_remis": {"remis"}, "remis": set()}
 # D-129/D-135 via D-220 : marqueurs temporels interdits dans les jalons de destinée
 # (passé/intention seuls — jamais futur ni événement)
 JALON_INTERDITS_FUTUR = ("fera", "ferait", "futur", "quand il", "lorsqu'il",
@@ -39,6 +50,14 @@ JALON_INTERDITS_FUTUR = ("fera", "ferait", "futur", "quand il", "lorsqu'il",
 NEGATION_TYPE = "non"   # D-187: non(<atome>), une seule profondeur
 DECLENCHEUR_TYPES = ("delai", "etat", "date")                # D-182
 ISSUES_PERTURBATION = ("transplantee", "abandonnee")         # D-120 §5.1
+# D-252.2 (issue #62) — objets magiques : champs OPTIONNELS de stats_5e,
+# réservés à la classe objet (annexe A §3bis). Malédiction/identification ne
+# sont PAS des champs ici : câblage sur Secret via secret_lie_id (résolu par
+# validate_form, hors de portée du Record isolé).
+TYPE_OBJET = ("arme", "armure", "anneau", "potion", "parchemin", "baguette",
+              "baton", "merveille")
+RARETE = ("commun", "peu_commun", "rare", "tres_rare", "legendaire", "artefact")
+ACTIVATION = ("action", "mot_de_commande", "consommable", "passif")
 
 
 def check_prerequis(raw, owner: str, _depth: int = 0) -> dict:
@@ -268,6 +287,7 @@ class Record:
         self.tokens_initial = self._tokens(rid, stats_5e)
         self.persistent_attrs = self._persistent(rid, stats_5e, stats)
         self.sorts_connus = self._sorts_connus(rid, classe, stats_5e)
+        self._objet_magique(rid, classe, stats)
         required = annexe_a.required_fields(classe)
         merged = {**stats, "nom": nom}   # nom is first-class, not a stat
         missing = [f for f in required if f not in merged]
@@ -413,27 +433,105 @@ class Record:
                 raise ValueError(f"record {rid} (sort): {flag} doit être "
                                  f"booléen, got {stats[flag]!r}")
 
+    def _objet_magique(self, rid, classe, stats) -> None:
+        """D-252.2 (issue #62) — champs optionnels objets magiques : reste
+        dans stats_5e (pas de _RESERVED, contrairement à ancre_srd/tokens_
+        initial/persistent — ce sont de vraies stats, pas des métadonnées
+        traversantes) mais chaque valeur postée dedans est vérifiée.
+        secret_lie_id n'est ici vérifié qu'en FORME (slug) : la résolution
+        vers un Secret existant est un contrôle inter-primitives, porté par
+        validate_form (Record n'a pas accès à la partition)."""
+        keys = ("type_objet", "rarete", "harmonisation",
+                "condition_harmonisation", "activation", "charges",
+                "recharge", "effets_md", "secret_lie_id")
+        present = [k for k in keys if k in stats]
+        if not present:
+            return
+        if classe != "objet":
+            raise ValueError(f"record {rid} ({classe}): {present} réservés "
+                             "à la classe objet (D-252.2)")
+        if "type_objet" in stats and stats["type_objet"] not in TYPE_OBJET:
+            raise ValueError(f"record {rid}: type_objet "
+                             f"{stats['type_objet']!r} not in {TYPE_OBJET}")
+        if "rarete" in stats and stats["rarete"] not in RARETE:
+            raise ValueError(f"record {rid}: rarete {stats['rarete']!r} "
+                             f"not in {RARETE}")
+        if "activation" in stats and stats["activation"] not in ACTIVATION:
+            raise ValueError(f"record {rid}: activation "
+                             f"{stats['activation']!r} not in {ACTIVATION}")
+        if "harmonisation" in stats \
+                and not isinstance(stats["harmonisation"], bool):
+            raise ValueError(f"record {rid}: harmonisation doit être un "
+                             f"booléen, got {stats['harmonisation']!r}")
+        if "condition_harmonisation" in stats and not stats.get("harmonisation"):
+            raise ValueError(f"record {rid}: condition_harmonisation sans "
+                             "harmonisation=true — une condition ne porte "
+                             "que sur une harmonisation requise")
+        if "recharge" in stats and "charges" not in stats:
+            raise ValueError(f"record {rid}: recharge sans charges — une "
+                             "recharge est toujours relative à un nombre de "
+                             "charges déclaré")
+        if "charges" in stats:
+            c = stats["charges"]
+            if isinstance(c, bool) or not isinstance(c, int) or c < 0:
+                raise ValueError(f"record {rid}: charges doit être un "
+                                 f"entier >= 0, got {c!r}")
+        if "secret_lie_id" in stats:
+            check_id(str(stats["secret_lie_id"]),
+                     f"record {rid} secret_lie_id")
+
+
+TABLE_MODES = ("aleatoire", "consultation")   # D-252.4
+
 
 class RollTable:
+    """aleatoire (défaut, rétrocompat totale) : dé NdM + plages contiguës,
+    inchangé. consultation (D-252.4) : PAS de dé — chaque entrée porte une
+    clé de consultation textuelle unique (obstacle, marchandise, tranche de
+    distance...) ; lecture ciblée côté aval (coderain/converter/aval.py),
+    jamais un tirage."""
+
     def __init__(self, tid: str, de: str, entrees: list[dict],
-                 anchors: list[tuple[int, int]]):
+                 anchors: list[tuple[int, int]], mode: str = "aleatoire"):
         check_id(tid, "table")
-        if not re.match(r"^\d+d\d+$", de):
-            raise ValueError(f"table {tid}: 'de' must look like '1d20', got {de!r}")
+        if mode not in TABLE_MODES:
+            raise ValueError(f"table {tid}: mode {mode!r} not in {TABLE_MODES}")
         if not anchors:
             raise ValueError(f"table {tid}: no source anchor")
-        prev_end = None
-        for e in entrees:
-            for k in ("plage_debut", "plage_fin", "resultat_md"):
-                if k not in e:
-                    raise ValueError(f"table {tid}: entry missing {k}: {e}")
-            if e["plage_debut"] > e["plage_fin"]:
-                raise ValueError(f"table {tid}: inverted range {e}")
-            if prev_end is not None and e["plage_debut"] != prev_end + 1:
-                raise ValueError(f"table {tid}: gap/overlap before range "
-                                 f"{e['plage_debut']}-{e['plage_fin']}")
-            prev_end = e["plage_fin"]
-        self.id, self.de, self.entrees = tid, de, entrees
+        if mode == "aleatoire":
+            if not de or not re.match(r"^\d+d\d+$", de):
+                raise ValueError(f"table {tid}: 'de' must look like '1d20', got {de!r}")
+            prev_end = None
+            for e in entrees:
+                for k in ("plage_debut", "plage_fin", "resultat_md"):
+                    if k not in e:
+                        raise ValueError(f"table {tid}: entry missing {k}: {e}")
+                if e["plage_debut"] > e["plage_fin"]:
+                    raise ValueError(f"table {tid}: inverted range {e}")
+                if prev_end is not None and e["plage_debut"] != prev_end + 1:
+                    raise ValueError(f"table {tid}: gap/overlap before range "
+                                     f"{e['plage_debut']}-{e['plage_fin']}")
+                prev_end = e["plage_fin"]
+            self.de = de
+        else:  # consultation
+            if de:
+                raise ValueError(f"table {tid}: mode consultation n'attend "
+                                 f"pas de dé, got {de!r} (D-252.4)")
+            seen_cles: set[str] = set()
+            for e in entrees:
+                for k in ("cle", "resultat_md"):
+                    if k not in e:
+                        raise ValueError(f"table {tid}: entry missing {k}: {e}")
+                cle = str(e["cle"]).strip()
+                if not cle:
+                    raise ValueError(f"table {tid}: clé de consultation vide "
+                                     "(D-252.4)")
+                if cle in seen_cles:
+                    raise ValueError(f"table {tid}: clé de consultation "
+                                     f"dupliquée {cle!r} (D-252.4)")
+                seen_cles.add(cle)
+            self.de = None
+        self.id, self.mode, self.entrees = tid, mode, entrees
         self.anchors = [(int(a), int(b)) for a, b in anchors]
 
 
@@ -499,12 +597,32 @@ class Tension:
 class Ressource:
     """Primitive générique Ressource (D-216 §2, D-217 poste uniquement).
 
-    Premier cas d'usage = carte (maps booklet p99-117, tilepage/submap).
+    Trois types (D-252.1) : `carte` (premier cas, maps booklet p99-117,
+    tilepage/submap) ; `document` et `illustration` — matière MONTRABLE au
+    joueur (lettres, journaux, affiches de prime, cartes au trésor, notes,
+    illustrations de révélation) ET gabarit de production pour l'Auteur.
     Générique par construction : `type` ∈ RESSOURCE_TYPES, ancrage par
     `node_id` (node existant) OU `page` (numéro de page PDF, 1-based) — au
     moins un des deux est requis — `fichier` est le chemin relatif côté poste
     (corpus-modules/.../resources/, jamais dans git, jamais dans le vault
     joueur), `anchors` cite la matière source (SPEC-P4 §3).
+
+    Champs propres à document/illustration (D-252.1) :
+    - sous_type : obligatoire pour ces deux types, valeurs ouvertes mais
+      documentées (RESSOURCE_SOUS_TYPES_DOCUMENT / _ILLUSTRATION) — le
+      valideur refuse seulement l'absence, jamais une valeur hors liste ;
+    - porteur_ou_emplacement : id (record ou node) où la pièce se trouve
+      dans le monde — résolu par la garde zéro-dangling existante
+      (validate_form / emit), pas à la construction (l'espace d'ids n'existe
+      qu'au niveau Partition) ;
+    - fonction_md : ce que la pièce révèle ou déclenche, côté système ;
+    - condition_remise_secret_id : pointeur optionnel vers un Secret existant
+      quand la remise est conditionnée — validé comme référence, même régime
+      que porteur_ou_emplacement ;
+    - etat : non_remis | remis — visibilité VARIABLE dérivée au moment du
+      besoin (comme la caméra), transition unidirectionnelle tracée, jamais
+      de retour en arrière (même esprit que toile.py, D-19/D-63) — voir
+      `set_etat_ressource`.
     """
 
     def __init__(self, rid: str, type_ressource: str,
@@ -512,11 +630,16 @@ class Ressource:
                  node_id: str | None = None,
                  page: int | None = None,
                  fichier: str | None = None,
-                 description_md: str = ""):
+                 description_md: str = "",
+                 sous_type: str | None = None,
+                 porteur_ou_emplacement: str | None = None,
+                 fonction_md: str = "",
+                 condition_remise_secret_id: str | None = None,
+                 etat: str = "non_remis"):
         check_id(rid, "ressource")
         if type_ressource not in RESSOURCE_TYPES:
             raise ValueError(f"ressource {rid}: type {type_ressource!r} not in "
-                             f"{RESSOURCE_TYPES} (D-216 §2 générique, premier cas carte)")
+                             f"{RESSOURCE_TYPES} (D-216 §2 générique, étendu D-252.1)")
         if node_id is not None:
             check_id(node_id, f"ressource {rid} node_id")
         if page is not None:
@@ -527,6 +650,18 @@ class Ressource:
         if not anchors:
             raise ValueError(f"ressource {rid}: no source anchor — every ressource "
                              "cites what it translates (SPEC-P4 §3)")
+        sous_type = str(sous_type).strip() if sous_type else ""
+        if type_ressource in RESSOURCE_TYPES_SOUS_TYPE_OBLIGATOIRE and not sous_type:
+            raise ValueError(f"ressource {rid}: sous_type obligatoire pour le "
+                             f"type {type_ressource!r} (D-252.1)")
+        if porteur_ou_emplacement is not None:
+            check_id(str(porteur_ou_emplacement),
+                     f"ressource {rid} porteur_ou_emplacement")
+        if condition_remise_secret_id is not None:
+            check_id(str(condition_remise_secret_id),
+                     f"ressource {rid} condition_remise_secret_id")
+        if etat not in RESSOURCE_ETATS:
+            raise ValueError(f"ressource {rid}: etat {etat!r} not in {RESSOURCE_ETATS}")
         norm = []
         for a in anchors or []:
             norm.append((int(a), int(a)) if isinstance(a, int) else
@@ -537,6 +672,13 @@ class Ressource:
         self.page = page
         self.fichier = str(fichier).strip() if fichier else ""
         self.description_md = str(description_md or "")
+        self.sous_type = sous_type
+        self.porteur_ou_emplacement = (str(porteur_ou_emplacement)
+                                       if porteur_ou_emplacement else None)
+        self.fonction_md = str(fonction_md or "").strip()
+        self.condition_remise_secret_id = (str(condition_remise_secret_id)
+                                           if condition_remise_secret_id else None)
+        self.etat = etat
         self.anchors = norm
 
     def to_dict(self) -> dict:
@@ -544,7 +686,27 @@ class Ressource:
                 "node_id": self.node_id, "page": self.page,
                 "fichier": self.fichier,
                 "description_md": self.description_md,
+                **({"sous_type": self.sous_type} if self.sous_type else {}),
+                **({"porteur_ou_emplacement": self.porteur_ou_emplacement}
+                   if self.porteur_ou_emplacement else {}),
+                **({"fonction_md": self.fonction_md} if self.fonction_md else {}),
+                **({"condition_remise_secret_id": self.condition_remise_secret_id}
+                   if self.condition_remise_secret_id else {}),
+                "etat": self.etat,
                 "ancres_sources": [list(a) for a in self.anchors]}
+
+
+def set_etat_ressource(ressource: "Ressource", etat: str) -> bool:
+    """Transition d'état de remise (D-252.1) — jamais de retour en arrière,
+    même esprit que `toile.set_etat` (D-19/D-63). Retourne False (sans
+    muter) si l'état cible est inconnu ou si la transition n'est pas permise
+    depuis l'état courant ; True et mutation sinon."""
+    if etat not in RESSOURCE_ETATS:
+        return False
+    if etat not in _RESSOURCE_ETAT_TRANSITIONS.get(ressource.etat, set()):
+        return False
+    ressource.etat = etat
+    return True
 
 
 class Personnage:

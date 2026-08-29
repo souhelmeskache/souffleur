@@ -8,10 +8,18 @@ from pathlib import Path
 
 
 def _md_table(t) -> str:
-    lines = [f"# table {t.id}", "", f"de: `{t.de}`", ""]
-    for e in t.entrees:
-        lien = f" → [{e['lien_optionnel']}]" if e.get("lien_optionnel") else ""
-        lines.append(f"- {e['plage_debut']}-{e['plage_fin']}: {e['resultat_md']}{lien}")
+    mode = getattr(t, "mode", "aleatoire")
+    lines = [f"# table {t.id}", "", f"mode: `{mode}`"]
+    if mode == "consultation":
+        # D-252.4 : pas de dé, chaque ligne = une clé de consultation
+        lines.append("")
+        for e in t.entrees:
+            lines.append(f"- {e['cle']}: {e['resultat_md']}")
+    else:
+        lines += [f"de: `{t.de}`", ""]
+        for e in t.entrees:
+            lien = f" → [{e['lien_optionnel']}]" if e.get("lien_optionnel") else ""
+            lines.append(f"- {e['plage_debut']}-{e['plage_fin']}: {e['resultat_md']}{lien}")
     return "\n".join(lines) + "\n"
 
 
@@ -65,6 +73,20 @@ def write_partition(partition, out_dir: Path) -> Path:
             raise ValueError(
                 f"ressource {r.id}: node_id inconnu {r.node_id} — "
                 "zéro dangling autorisé (D-216 §2)")
+    # garde zéro-dangling D-252.1 : porteur_ou_emplacement / condition_remise_secret_id
+    record_ids = {r.id for r in partition.records}
+    secret_ids = {s.id for s in partition.secrets}
+    for r in uniq_ress:
+        porteur = getattr(r, "porteur_ou_emplacement", None)
+        if porteur and porteur not in node_ids and porteur not in record_ids:
+            raise ValueError(
+                f"ressource {r.id}: porteur_ou_emplacement inconnu {porteur} — "
+                "zéro dangling autorisé (D-252.1)")
+        cond = getattr(r, "condition_remise_secret_id", None)
+        if cond and cond not in secret_ids:
+            raise ValueError(
+                f"ressource {r.id}: condition_remise_secret_id inconnu {cond} "
+                "— ne pointe aucun Secret (D-252.1)")
     # garde zéro-dangling personnages (I-341/D-219) : tout rattachement de jalon
     # pointe un id existant de la partition (node/tension/ressource/personnage)
     all_ids = node_ids | {r.id for r in partition.records} \
@@ -137,7 +159,9 @@ def write_partition(partition, out_dir: Path) -> Path:
         (out_dir / "records" / f"{r.id}.md").write_text(fm + body + "\n",
                                                         encoding="utf-8")
     for t in partition.tables:
-        fm = _front_matter({"id": t.id, "de": t.de, "anchors": t.anchors})
+        fm = _front_matter({"id": t.id, "de": t.de,
+                            "mode": getattr(t, "mode", "aleatoire"),
+                            "anchors": t.anchors})
         (out_dir / "tables" / f"{t.id}.md").write_text(fm + _md_table(t),
                                                        encoding="utf-8")
     for s in partition.secrets:
@@ -155,7 +179,17 @@ def write_partition(partition, out_dir: Path) -> Path:
     for r in uniq_ress:
         fm = _front_matter({"id": r.id, "type": r.type_ressource,
                             "node_id": r.node_id, "page": r.page,
-                            "fichier": r.fichier, "anchors": r.anchors})
+                            "fichier": r.fichier,
+                            **({"sous_type": r.sous_type}
+                               if getattr(r, "sous_type", "") else {}),
+                            **({"porteur_ou_emplacement": r.porteur_ou_emplacement}
+                               if getattr(r, "porteur_ou_emplacement", None) else {}),
+                            **({"fonction_md": r.fonction_md}
+                               if getattr(r, "fonction_md", "") else {}),
+                            **({"condition_remise_secret_id": r.condition_remise_secret_id}
+                               if getattr(r, "condition_remise_secret_id", None) else {}),
+                            "etat": getattr(r, "etat", "non_remis"),
+                            "anchors": r.anchors})
         body = r.description_md or f"Ressource {r.id} ({r.type_ressource})"
         (out_dir / "resources" / f"{r.id}.md").write_text(
             fm + body + "\n", encoding="utf-8")
@@ -233,14 +267,18 @@ def write_partition(partition, out_dir: Path) -> Path:
                      **({"sorts_connus": r.sorts_connus}
                         if getattr(r, "sorts_connus", None) else {})}
                     for r in partition.records],
-        "tables": [{"id": t.id, "de": t.de} for t in partition.tables],
+        "tables": [{"id": t.id, "de": t.de,
+                    "mode": getattr(t, "mode", "aleatoire")}
+                   for t in partition.tables],
         "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
         "tensions": [{"id": t.id, "categorie": t.categorie, "node_id": t.node_id}
                      for t in getattr(partition, "tensions", []) or []],
         "resources": [{"id": r.id, "type": r.type_ressource,
                        **({"node_id": r.node_id} if getattr(r, "node_id", None) else {}),
                        **({"page": r.page} if getattr(r, "page", None) else {}),
-                       **({"fichier": r.fichier} if getattr(r, "fichier", "") else {})}
+                       **({"fichier": r.fichier} if getattr(r, "fichier", "") else {}),
+                       **({"sous_type": r.sous_type} if getattr(r, "sous_type", "") else {}),
+                       "etat": getattr(r, "etat", "non_remis")}
                       for r in uniq_ress],
         "personnages": [{"id": p.id, "nom": p.nom,
                          "nb_jalons": len(p.destinee),

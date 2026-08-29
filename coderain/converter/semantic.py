@@ -37,7 +37,11 @@ objects. Fidelity rules:
   rather than invent it. If a node is the module's END,
   convert it into an exit hinge (D-123): charniere_sortie:
   {ouvre_vers_md, prerequis_etat} — NEVER "the end".
-- Rollable tables: emit {"tables": [...]} with de:"1d20" and contiguous ranges.
+- Rollable tables: emit {"tables": [...]} with de:"1d20" and contiguous ranges
+  (mode "aleatoire", default). Consultation tables (D-252.4, no dice — prices,
+  difficulty by obstacle, travel time) instead carry mode:"consultation" and
+  entries {cle, resultat_md} with a unique, non-empty lookup key per entry —
+  never a plage_debut/plage_fin/de in that mode.
 - Hidden/DM-only information that can be burned: emit {"secrets": [...]} with
   statut public|suspect|secret, porteurs (entity ids), revelation
   {declencheur, node_cible}, consequence_si_brule.
@@ -98,14 +102,22 @@ def _validate(obj: dict, unit, tables: "RuleTablesLike") -> dict:
             out["raw_stats"].append({"id": str(r["id"]),
                                      "source": dict(stats_source)})
     for t in obj.get("tables", []):
-        entrees = [{"plage_debut": int(e["plage_debut"]),
-                    "plage_fin": int(e["plage_fin"]),
-                    "resultat_md": str(e["resultat_md"]),
-                    **({"lien_optionnel": str(e["lien_optionnel"])}
-                       if e.get("lien_optionnel") else {})}
-                   for e in t["entrees"]]
+        mode = str(t.get("mode", "aleatoire"))
+        if mode == "consultation":
+            de = ""
+            entrees = [{"cle": str(e["cle"]),
+                        "resultat_md": str(e["resultat_md"])}
+                       for e in t["entrees"]]
+        else:
+            de = str(t["de"])
+            entrees = [{"plage_debut": int(e["plage_debut"]),
+                        "plage_fin": int(e["plage_fin"]),
+                        "resultat_md": str(e["resultat_md"]),
+                        **({"lien_optionnel": str(e["lien_optionnel"])}
+                           if e.get("lien_optionnel") else {})}
+                       for e in t["entrees"]]
         out["tables"].append(RollTable(
-            tid=str(t["id"]), de=str(t["de"]), entrees=entrees,
+            tid=str(t["id"]), de=de, entrees=entrees, mode=mode,
             anchors=_anchors(t, f"table {t.get('id')}")))
     for s in obj.get("secrets", []):
         out["secrets"].append(Secret(
