@@ -159,4 +159,31 @@ for cid in IDS_CATALOGUE:
     assert cid not in montrable, (cid, montrable)
 print("8) grep ids internes + secrets de la fixture sur la sortie montrable : zéro")
 
+# ============================================================
+# 9) id de module contenant '+' -- refusé (Issue #78, revue PR #59) : le
+# caractère '+' est le séparateur de CandidatActe.id(), un id de module qui
+# le porte rendrait l'id dérivé ambigu (collision théorique entre deux
+# actes différents). Vérifié via une entrée de catalogue non-conforme à la
+# convention de slug kebab-case (docs/identite-inter-modules-d253.md).
+# ============================================================
+CATALOGUE_AVEC_PLUS = CATALOGUE + [
+    EntreeCatalogue(
+        id="module-oasis+cachee", univers="sable-rouge",
+        themes=("dette-de-sang",),
+        personnage_sert="demande un protagoniste en fuite",
+        echelle="mini", puissance_attendue="niveaux 1-2 (5e)"),
+]
+llm = StubLLM(_json({"candidats": [
+    {"modules": ["module-puits-des-suppliques", "module-oasis+cachee"],
+     "libelle": "Une oasis cachée révèle la dette.", "justification": "..."},
+]}))
+candidats, rejets = selectionner("envie", CATALOGUE_AVEC_PLUS, llm)
+assert candidats == [], candidats
+assert len(rejets) == 1, rejets
+assert "id de module contenant '+' interdit" in rejets[0]["raison"], rejets
+assert "module-oasis+cachee" in rejets[0]["raison"], rejets
+assert "identite-inter-modules-d253.md" in rejets[0]["raison"], rejets
+print("9) un id de module contenant '+' est refusé, message explicite "
+      "citant la convention de slug")
+
 print("\nOK -- sélecteur de matière (I-370b)")
