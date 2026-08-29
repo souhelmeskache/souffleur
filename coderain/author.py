@@ -17,6 +17,16 @@ ancres_sources} — jamais l'objet Partition lui-même, pour rester découplé
 de sa construction/ses invariants. Déterministe, 100% hors-ligne (aucun
 LLM, aucun réseau — CLAUDE.md) : le score combine l'égalité de code D-218
 et la similarité textuelle (difflib, stdlib) du motif le plus proche.
+
+Extension D-261 (stock de formes) : le même détecteur s'étend des codes de
+tension aux FORMES déclarées (`coderain.formes.valider_declaration`) — il
+signale la réutilisation d'un même id de forme (Propp/Polti/ATU) à travers
+les scénarios d'une campagne. Même contrat que le détecteur de tension : un
+SIGNAL, jamais une décision (une redite de forme peut être assumée — deux
+scénarios qui rejouent délibérément la même situation dramatique — ou un
+défaut : l'Auteur reste seul juge). L'entrée est la déclaration déjà
+validée par `formes.valider_declaration` : des dicts {id, justification},
+jamais le vocabulaire ni le texte du scénario lui-même.
 """
 from __future__ import annotations
 
@@ -117,5 +127,70 @@ def rapport(signaux: list["SignalRepetition"]) -> dict:
     return {
         "total": len(signaux),
         "par_categorie": par_categorie,
+        "signaux": [s.to_dict() for s in signaux],
+    }
+
+
+@dataclass
+class SignalRepetitionForme:
+    """Un signal, jamais une décision (I-229 étendu aux formes, D-261) :
+    même id de forme (Propp/Polti/ATU) déclaré dans deux scénarios distincts
+    de la campagne — l'Auteur reste seul juge (redite assumée ou défaut)."""
+    scenario_a: str
+    scenario_b: str
+    forme_id: str
+    justification_a: str
+    justification_b: str
+
+    def to_dict(self) -> dict:
+        return {"scenario_a": self.scenario_a, "scenario_b": self.scenario_b,
+                "forme_id": self.forme_id,
+                "justification_a": self.justification_a,
+                "justification_b": self.justification_b}
+
+
+def comparer_paire_formes(nom_a: str, formes_a: list[dict],
+                           nom_b: str, formes_b: list[dict]) -> list["SignalRepetitionForme"]:
+    """Compare deux déclarations de formes déjà validées (`formes.
+    valider_declaration`, dicts {id, justification}) et signale tout id de
+    forme partagé entre les deux scénarios — comparaison exacte sur l'id
+    (une forme est déclarée ou ne l'est pas, pas de similarité floue ici,
+    contrairement à `comparer_paire` sur les tensions)."""
+    ids_b = {str(f.get("id", "")): str(f.get("justification", "")) for f in formes_b}
+    signaux: list[SignalRepetitionForme] = []
+    for fa in formes_a:
+        forme_id = str(fa.get("id", ""))
+        if not forme_id or forme_id not in ids_b:
+            continue
+        signaux.append(SignalRepetitionForme(
+            scenario_a=nom_a, scenario_b=nom_b, forme_id=forme_id,
+            justification_a=str(fa.get("justification", "")),
+            justification_b=ids_b[forme_id]))
+    return signaux
+
+
+def detecter_campagne_formes(declarations: dict[str, list[dict]]) -> list["SignalRepetitionForme"]:
+    """Compare toutes les déclarations de formes de la campagne deux à deux
+    — jamais un scénario contre lui-même, jamais une paire comptée deux
+    fois. `declarations` associe un nom de scénario à sa déclaration de
+    formes déjà validée."""
+    noms = sorted(declarations)
+    signaux: list[SignalRepetitionForme] = []
+    for i, nom_a in enumerate(noms):
+        for nom_b in noms[i + 1:]:
+            signaux.extend(comparer_paire_formes(
+                nom_a, declarations[nom_a], nom_b, declarations[nom_b]))
+    return signaux
+
+
+def rapport_formes(signaux: list["SignalRepetitionForme"]) -> dict:
+    """Rapport de lecture, hors séance, pour l'Auteur — même esprit que
+    `rapport()` : un compte par id de forme, jamais un verdict."""
+    par_forme: dict[str, int] = {}
+    for s in signaux:
+        par_forme[s.forme_id] = par_forme.get(s.forme_id, 0) + 1
+    return {
+        "total": len(signaux),
+        "par_forme": par_forme,
         "signaux": [s.to_dict() for s in signaux],
     }
