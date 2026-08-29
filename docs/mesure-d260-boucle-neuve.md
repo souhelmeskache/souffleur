@@ -262,6 +262,49 @@ intermédiaire). Elle casse aussi le cache ces tours-là puisqu'ajoutée avant
 qu'au point 1 (la sortir du chemin des blocs stables) s'applique ici aussi,
 séparément de toute décision sur son contenu.
 
+## Correctif implémenté (Issue #144, arbitrage (b)) — réordonnancement des couches
+
+Arbitrage Souhel (29/08) sur les deux options du §1 : **(c) les deux,
+indépendamment** — livrer (b) le correctif d'ordre dans cette lane (pur
+correctif, aucun arbitrage de contenu), ouvrir une Issue dédiée pour (a) le
+découpage socle/déclencheur de `rpg-rules.md` (vrai arbitrage de conception,
+hors périmètre d'une seule lane) si (a)+(b) grossissaient trop la PR — c'est
+ce qui a été fait ici, voir Issue #162.
+
+**Changement** : `rpg-rules.md` (si RPG actif) et la directive
+`response_length` — CONSTANTS par story/session, jamais liés à la position ni
+au tour — sont désormais des sections STABLES portées par
+`assembleur_position.build_sections()` (nouveaux paramètres `rpg_rules`/
+`response_length`, section 5 de la docstring de module), plutôt que des
+couches additives injectées APRÈS les sections volatiles par
+`engine.py::_augment_rpg`/`_augment_style`. Zéro changement de contenu — même
+texte, même formulation — uniquement une position différente dans le paquet
+(`coderain/assembleur_position.py`, `coderain/engine.py::_messages`/
+`_augment_style`). Couvert par `tests/test-branchement-position-d260.py`
+(inchangé, toujours vert) + le rejeu ci-dessous.
+
+### Rejeu post-correctif (Issue #144, arbitrage (b))
+
+| Poste | Avant correctif | Après correctif |
+|---|---:|---:|
+| Corpus A — TOTAL paquet Director | 1 029 tok | **1 029 tok** (inchangé, RPG off) |
+| Corpus A — préfixe cachable (2e tour, même position) | 100 % | **100 %** (inchangé) |
+| Corpus B — TOTAL paquet Director | 4 841 tok | **4 840 tok** (inchangé à 1 tok près, arrondi) |
+| Corpus B — préfixe cachable (2e tour, même position) | 51 % | **100 %** |
+
+Le total de tokens ne bouge pas (attendu : correctif d'ordre pur, pas de
+contenu retiré) mais le préfixe cachable du corpus réel passe de 51 % à
+**100 %** — `rpg-rules.md` (1 435 tok) et la directive `response_length`
+n'étant plus après les sections volatiles, ils rejoignent le préfixe stable
+et cessent de casser le cache. Seule l'author's note à fréquence `every N`
+(quand elle sert) resterait susceptible de faire reculer ce chiffre sur un
+tour où `exchange % every == 0` — non exercé par cette mesure (le save réel
+mesuré n'a pas de note d'auteur active sur ce tour). Le total du paquet
+Director (4 840 tok) reste au-dessus de la fourchette cible 1 500-2 500 tok :
+ce correctif améliore la **part cachable**, pas le **total servi** — la
+réduction du total, si souhaitée, reste du ressort de l'option (a) (Issue
+#162), non traitée ici par choix d'arbitrage.
+
 ## Trous mesurés (à consigner, pas à combler — même posture qu'I-158 §6)
 
 - Corpus B mesuré sur UN SEUL tour représentatif (position `#1`, entrée
