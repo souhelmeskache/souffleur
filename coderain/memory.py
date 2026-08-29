@@ -36,6 +36,15 @@ INDEX_FILES = [
 # compete for the lore budget ranked by weight x importance.
 WEIGHTS = {"minor": 0.5, "supplementary": 0.75, "standard": 1.0,
            "important": 1.5, "critical": 2.0}
+# The "Secrets you know" section title assemble() renders below, hoisted to a
+# named constant so trinity.py's Writer-side retrait (Issue #108) matches this
+# text by name instead of a second hand-copied literal. mcp_server.py carries
+# its own independent copy (`_SECRETS_TITLE`) for its own leak guard — this
+# constant is NOT that one and the two are not meant to merge (separate
+# modules, separate contracts).
+SECRETS_SECTION_TITLE = ("Secrets you know (NOT yet revealed to the player — "
+                          "foreshadow, hint, let them discover; never state "
+                          "outright)")
 
 
 def _attr_true(v) -> bool:
@@ -1518,8 +1527,7 @@ class MemoryStore:
             # locating this EXACT rendered text inside the assembled prefix;
             # changing it here would desync that matching (I-376 review).
             sections.append((
-                2, "Secrets you know (NOT yet revealed to the player — "
-                   "foreshadow, hint, let them discover; never state outright)",
+                2, SECRETS_SECTION_TITLE,
                 "\n\n".join(e.render() + _persistent_suffix(e, pstate)
                             for e in hidden_hits)))
 
@@ -1608,6 +1616,32 @@ class MemoryStore:
                              "content": t["text"]})
         messages.append({"role": "user", "content": player_input})
         return messages
+
+    def strip_secrets_section(self, content: str) -> str:
+        """Remove the "Secrets you know" section `assemble()` may have appended
+        above, if present. A no-op when it never activated (no pinned/critical
+        hidden entry fired this turn — the common case, I-159).
+
+        Exists so a caller sharing ONE `assemble()` result between a
+        Director-like reader and a Writer-like reader can hand the Writer its
+        own copy with the Director-only section explicitly retiré, instead of
+        relying on the Writer simply never being handed that copy (director-
+        pipeline's `trinity.py::_writer_messages`, Issue #108) — the same
+        retrait mcp_server.py names `secrets=False` on the director-de-table
+        side (`assemble_context_to_file`), same section, same intent, applied
+        after the fact here because `assemble()` itself has no such toggle."""
+        header = "## " + SECRETS_SECTION_TITLE + "\n"
+        start = content.find(header)
+        if start == -1:
+            return content
+        # Runs to the next top-level heading (assemble()'s own "## " sections,
+        # or a later "# " block an engine-side augment step appended) or EOF.
+        end = content.find("\n\n#", start + len(header))
+        end = end if end != -1 else len(content)
+        prefix = content[:start]
+        if prefix.endswith("\n\n"):
+            prefix = prefix[:-2]
+        return prefix + content[end:]
 
 
 class MemoryIndex:
