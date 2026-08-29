@@ -7,6 +7,15 @@ verbatim; this index only tells the Director what the engine must roll.
 Mapping philosophy (measured decision): the save is CREATED with the six 5e
 abilities AS its stats, so "DC 10 Wisdom saving throw" maps 1:1 onto the
 engine's native d20+stat vs DC — identity conversion again, zero judgement.
+
+D-254 (I-328/Issue-77, mesure pconv1-3): certains modules du corpus phrasent
+le jet dans l'ordre inverse — compétence/caractéristique D'ABORD, DC ensuite
+(« Make a perception check, DC 12 », « roll survival, DC 15 », « wisdom
+save, DC 10 ») — au lieu de « DC 12 wisdom (perception) check ». REVERSE_
+CHECK_RE couvre cette forme générique EN PLUS de CHECK_RE, sans le modifier :
+les deux formes coexistent, aucune des deux ne régresse. Le nom de
+compétence est routé vers sa caractéristique via SKILL_TO_ABILITY_5E (table
+versionnée, complétude SRD) — jamais improvisé.
 """
 from __future__ import annotations
 
@@ -17,10 +26,55 @@ from pathlib import Path
 ABILITIES_5E = ("strength", "dexterity", "constitution",
                 "intelligence", "wisdom", "charisma")
 
+# Table compétence -> caractéristique 5e (SRD, complète — 18 compétences +
+# "thieves' tools" qui n'est pas une compétence SRD mais un outil dont le
+# module source route explicitement le jet, mesuré au même titre : D-254).
+# Versionnée comme le reste de ruletables.py : une correction future est une
+# révision de table, jamais une édition de l'historique.
+SKILL_TO_ABILITY_5E = {
+    "athletics": "strength",
+    "acrobatics": "dexterity",
+    "sleight of hand": "dexterity",
+    "stealth": "dexterity",
+    "thieves' tools": "dexterity",
+    "thieves tools": "dexterity",
+    "arcana": "intelligence",
+    "history": "intelligence",
+    "investigation": "intelligence",
+    "nature": "intelligence",
+    "religion": "intelligence",
+    "animal handling": "wisdom",
+    "insight": "wisdom",
+    "medicine": "wisdom",
+    "perception": "wisdom",
+    "survival": "wisdom",
+    "deception": "charisma",
+    "intimidation": "charisma",
+    "performance": "charisma",
+    "persuasion": "charisma",
+}
+
 CHECK_RE = re.compile(
     r"(?:make|attempt|succeed)[^\n]{0,40}?DC (\d{1,2}) "
     r"(strength|dexterity|constitution|intelligence|wisdom|charisma)"
     r"(?: \((\w+)\))? (saving throw|check)", re.I)
+
+# Ordre inverse (D-254) : compétence-ou-caractéristique [mot-clé] , DC N
+# [mot-clé] — le mot-clé (check/save/saving throw/roll) peut précéder ou
+# suivre le DC selon le phrasé mesuré ; au moins une occurrence est requise
+# pour éviter de capturer un simple DC de statblock sans jet associé.
+_SKILL_OR_ABILITY = "|".join(sorted(
+    list(ABILITIES_5E) + list(SKILL_TO_ABILITY_5E.keys()),
+    key=len, reverse=True))  # plus long d'abord (ex. "sleight of hand" avant rien)
+_KEYWORD = r"check|saving throw|save|roll"
+
+REVERSE_CHECK_RE = re.compile(
+    r"(?:(?P<kind0>make|attempt|roll)\s+(?:an?\s+)?)?"
+    rf"\b(?P<skill>{_SKILL_OR_ABILITY})\b"
+    rf"(?:\s+(?P<kind1>{_KEYWORD}))?"
+    r",?\s*DC\s*(?P<dc>\d{1,2})"
+    rf"(?:\s*(?:[—-]|,)?\s*(?P<kind2>{_KEYWORD}))?",
+    re.I)
 
 # Régimes de jet (MRPG-D-089, actée): SILENCIEUX / OPAQUE / TRANSPARENT.
 # Le choix est SITUATIONNEL (facteurs A-F de D-89) — jamais catégoriel;
@@ -40,21 +94,60 @@ def _regime(kind: str, ability: str, skill: str | None) -> str:
     return "OPAQUE"                  # délibéré mais DC rarement estimable
 
 
+def _kind_from_keyword(word: str | None) -> str:
+    if word and word.lower().replace(" ", "_") in ("save", "saving_throw"):
+        return "saving_throw"
+    return "check"                   # check/roll, ou mot-clé absent (skill)
+
+
 def extract_checks(text: str, units) -> dict[str, list[dict]]:
     """{node_id: [{dc, ability, skill?, kind, regime_propose}]} — facts only."""
     out: dict[str, list[dict]] = {}
     for u in units:
         found = []
+        spans: list[tuple[int, int]] = []
+
         for m in CHECK_RE.finditer(text[u.start:u.end]):
             skill = (m.group(3) or "").lower() or None
+            ability = m.group(2).lower()
             kind = m.group(4).lower().replace(" ", "_")
+            spans.append(m.span())
             found.append({
                 "dc": int(m.group(1)),
-                "ability": m.group(2).lower(),
+                "ability": ability,
                 "skill": skill,
                 "kind": kind,
-                "regime_propose": _regime(kind, m.group(2).lower(), skill),
+                "regime_propose": _regime(kind, ability, skill),
             })
+
+        # Ordre inverse (D-254) : compétence/caractéristique avant le DC.
+        # Au moins un mot-clé (check/save/saving throw/roll) est requis —
+        # sinon "Strength DC 15" d'un statblock serait pris pour un jet.
+        # Les correspondances qui chevauchent une trouvaille CHECK_RE (forme
+        # existante) sont écartées pour ne jamais compter deux fois le même
+        # jet.
+        for m in REVERSE_CHECK_RE.finditer(text[u.start:u.end]):
+            kind0, kind1, kind2 = (m.group("kind0"), m.group("kind1"),
+                                   m.group("kind2"))
+            if not kind0 and not kind1 and not kind2:
+                continue
+            if any(a < m.end() and m.start() < b for a, b in spans):
+                continue
+            raw_skill = m.group("skill").lower()
+            if raw_skill in ABILITIES_5E:
+                ability, skill = raw_skill, None
+            else:
+                ability, skill = SKILL_TO_ABILITY_5E[raw_skill], raw_skill
+            kind = _kind_from_keyword(kind2 or kind1 or kind0)
+            spans.append(m.span())
+            found.append({
+                "dc": int(m.group("dc")),
+                "ability": ability,
+                "skill": skill,
+                "kind": kind,
+                "regime_propose": _regime(kind, ability, skill),
+            })
+
         if found:
             out[u.uid] = found
     return out
