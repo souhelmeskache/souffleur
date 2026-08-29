@@ -16,9 +16,18 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 déclencheur automatique)
   4. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
                 porteur est présent (routage `hidden` conservé, D-019)
-  5. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
+  5. STABLE   — règles RPG (`rpg-rules.md` entier, si actif) + directive
+                `response_length` (D-260 post-mesure, Issue #144, arbitrage
+                (b)) : CONSTANTES par story/session, jamais liées à la
+                position ni au tour — rapprochées ici du préfixe stable
+                plutôt que servies après les sections volatiles ci-dessous
+                (correctif d'ordre pur : `engine.py::_augment_rpg`/
+                `_augment_style` composaient ce contenu APRÈS elles avant ce
+                correctif, cassant le préfixe cachable pour rien —
+                `docs/mesure-d260-boucle-neuve.md`)
+  6. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
                 contre l'état courant) — jamais `event_rules_block()` entier
-  6. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
+  7. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
                 lane c, Issue #131 : `memory/scenario-courant.md` — jamais les
                 scènes brutes d'un scénario fermé, `summarizer.fermer_scenario`
                 le vide à la fermeture)
@@ -26,10 +35,12 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
 Le hors-position ne se charge pas d'avance : le Director le demande via
 `recall_queries` de son enveloppe (soupape déjà existante).
 
-Stabilité de préfixe (exigence cache) : les sections 1-4 sont byte-stables
-entre deux tours SANS transition de node — aucun timestamp, compteur, id de
-requête, tri non déterministe. `stable_prefix()` isole ce sous-ensemble pour
-le test de non-régression du cache.
+Stabilité de préfixe (exigence cache) : les sections 1-5 sont byte-stables
+entre deux tours SANS transition de node ET sans changement de config
+(rpg-rules.md, response_length) — aucun timestamp, compteur, id de requête,
+tri non déterministe. `stable_prefix()` isole ce sous-ensemble (toute section
+marquée "stable", quel que soit son rang) pour le test de non-régression du
+cache.
 """
 from __future__ import annotations
 
@@ -234,7 +245,9 @@ def _world_and_queue_section(store: MemoryStore) -> Section:
 def build_sections(partition_dir: str | Path, store: MemoryStore,
                    location: str, history: list[dict], player_input: str,
                    scenes_tail: int = 4, char_sheet: str = "",
-                   rpg_on: bool = False, secrets: bool = True) -> list[Section]:
+                   rpg_on: bool = False, secrets: bool = True,
+                   rpg_rules: str = "", response_length: str = ""
+                   ) -> list[Section]:
     """Construit le paquet ordonné (voir docstring de module). `char_sheet`
     est fourni par l'appelant (`rpg_mod.context_block`, hors périmètre de ce
     module) — chaîne vide = section omise.
@@ -246,7 +259,13 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
 
     `secrets` (Issue #146) descend jusqu'à `_presence_section` — voir son
     docstring. Défaut True : `engine.py` (Director table) ne le passe jamais,
-    donc son paquet reste octet-identique."""
+    donc son paquet reste octet-identique.
+
+    `rpg_rules`/`response_length` (Issue #144, arbitrage (b)) : fournis par
+    l'appelant (`engine.py`, contenu inchangé — `rpg-rules.md` lu tel quel,
+    directive `response_length` inchangée), servis ici comme sections
+    STABLES (chaîne vide = section omise) plutôt qu'ajoutés après les
+    sections volatiles par `engine.py::_augment_rpg`/`_augment_style`."""
     partition_dir = Path(partition_dir)
     sections = [Section("stable", "Rôle (Director)",
                         DIRECTOR_SYS % (_ENV_RPG if rpg_on else _ENV_WORLD))]
@@ -256,6 +275,12 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
                                 "Brief de direction (directeur.md)", brief))
     sections.append(_current_node_section(partition_dir, store, location))
     sections.append(_presence_section(partition_dir, store, location, secrets))
+    if rpg_rules.strip():
+        sections.append(Section("stable", "RPG MODULE (mechanics ON)",
+                                rpg_rules.strip()))
+    if response_length.strip():
+        sections.append(Section("stable", "STYLE DIRECTIVES",
+                                f"- {response_length.strip()}"))
     sections.append(_rule_verdicts_section(store, history, player_input))
     sections.append(_world_and_queue_section(store))
     if char_sheet.strip():
@@ -265,9 +290,11 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
 
 
 def stable_prefix(sections: list[Section]) -> str:
-    """Le sous-ensemble byte-stable du paquet (sections 1-4) — inchangé
-    entre deux tours tant que la position ne bouge pas. Le test de
-    non-régression du cache compare ce texte, pas le paquet entier."""
+    """Le sous-ensemble byte-stable du paquet (toute section marquée
+    "stable" — sections 1-5, voir docstring de module) — inchangé entre deux
+    tours tant que la position ET la config (rpg-rules, response_length) ne
+    bougent pas. Le test de non-régression du cache compare ce texte, pas le
+    paquet entier."""
     return "\n\n".join(s.render() for s in sections if s.marker == "stable")
 
 
@@ -288,7 +315,8 @@ def to_messages(sections: list[Section], history: list[dict],
 def assemble(partition_dir: str | Path, store: MemoryStore, state: dict,
             history: list[dict], player_input: str,
             scenes_tail: int = 4, char_sheet: str = "",
-            rpg_on: bool = False, secrets: bool = True) -> list[dict]:
+            rpg_on: bool = False, secrets: bool = True,
+            rpg_rules: str = "", response_length: str = "") -> list[dict]:
     """Point d'entrée : assemblage keyé position pour une save AVEC
     partition projetée (voir `eligible()`). Même forme de sortie que
     `MemoryStore.assemble()` — le point d'appel choisit l'un ou l'autre
@@ -296,5 +324,5 @@ def assemble(partition_dir: str | Path, store: MemoryStore, state: dict,
     location = str(state.get("location", ""))
     sections = build_sections(partition_dir, store, location, history,
                               player_input, scenes_tail, char_sheet, rpg_on,
-                              secrets)
+                              secrets, rpg_rules, response_length)
     return to_messages(sections, history, player_input)

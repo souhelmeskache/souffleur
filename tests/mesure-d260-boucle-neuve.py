@@ -6,9 +6,11 @@ optimisation, les écarts se consignent.
 Corpus A — SYNTHÉTIQUE VERSIONNÉ (D-109, zéro matériau réel) : partition
 factice projetée dans une save fraîche, `Engine._messages()` exercé de bout en
 bout (mêmes couches que le jeu réel : `_augment_pack/_augment_style/
-_augment_rpg/_augment_event_rules`, pas seulement `assembleur_position.
-build_sections` isolé). Fait partie de la suite (`run_tests.py`), assertions
-incluses.
+_augment_event_rules` par-dessus les sections STABLES/VOLATILES
+d'`assembleur_position.build_sections` — rpg-rules.md et response_length y
+sont désormais des sections stables, Issue #144, pas des couches `_augment_*`
+additives comme avant ce correctif). Fait partie de la suite (`run_tests.py`),
+assertions incluses.
 
 Corpus B — RÉEL, HORS GIT (D-109/D-178) : si une save projetée existe
 localement (pointeur explicite via `CODERAIN_MESURE_SAVE`, sinon la
@@ -136,10 +138,13 @@ def _new_projected_save(root: Path, partition_dir: Path,
 # ------------------------------------------------------------- la mesure ----
 def _section_breakdown(partition_dir: Path, store: MemoryStore, location: str,
                        history: list[dict], player_input: str,
-                       scenes_tail: int, char_sheet: str, rpg_on: bool
+                       scenes_tail: int, char_sheet: str, rpg_on: bool,
+                       rpg_rules: str = "", response_length: str = ""
                        ) -> list[tuple[str, str, int]]:
     sections = ap.build_sections(partition_dir, store, location, history,
-                                 player_input, scenes_tail, char_sheet, rpg_on)
+                                 player_input, scenes_tail, char_sheet, rpg_on,
+                                 rpg_rules=rpg_rules,
+                                 response_length=response_length)
     return [(s.marker, s.title, len(s.render())) for s in sections]
 
 
@@ -171,36 +176,46 @@ def _measure_save(label: str, partition_dir: Path, lib: Library, slug: str,
     char_sheet = (engine.rpg_mod.context_block(
                      store, prompt_narrate=engine.trinity is None)
                  if rpg_on and engine.rpg_mod is not None else "")
+    # D-260 post-mesure (Issue #144, arbitrage (b)) : rpg-rules.md et la
+    # directive response_length sont désormais des sections STABLES de
+    # `assembleur_position` (pas des couches `_augment_*` additives) — même
+    # contenu que `engine._messages()` calculerait, calculé ici pour que
+    # `rows`/`base_messages` ci-dessous en tiennent compte identiquement.
+    rpg_rules = store.read("rpg-rules.md").strip() if rpg_on else ""
+    response_length = engine._response_length_directive()
 
     # Bloc de sections nu (assembleur position seul) — la ventilation par
     # poste I-158.
     rows = _section_breakdown(partition_dir, store, location, history,
                               player_input, engine.scenes_tail, char_sheet,
-                              rpg_on)
+                              rpg_on, rpg_rules, response_length)
 
     # Paquet réellement servi par la boucle neuve — mêmes couches que
-    # `engine._messages()` (D-260 branchement, #128), MAIS mesurées couche
-    # par couche pour attribuer précisément ce que chaque `_augment_*`
-    # ajoute (le "additif" n'est pas un bloc unique — chaque couche a sa
-    # propre pression, résiduelle ou non).
+    # `engine._messages()` (D-260 branchement #128 ; réordonnées Issue #144)
+    # MAIS mesurées couche par couche pour attribuer précisément ce que
+    # chaque `_augment_*` ajoute (le "additif" n'est pas un bloc unique —
+    # chaque couche a sa propre pression, résiduelle ou non). rpg-rules.md
+    # et response_length ne sont plus des couches additives : elles sont
+    # dans `rows` ci-dessus (sections stables), `_augment_rpg` n'a plus rien
+    # à servir sur ce chemin (`include_sheet=False` déjà, et les règles
+    # sont maintenant portées par `ap.assemble`) donc n'est plus appelé ici.
     partition_dir_p = Path(partition_dir)
     base_messages = ap.assemble(partition_dir_p, store, store.world_state(),
                                 history, player_input,
                                 scenes_tail=engine.scenes_tail,
-                                char_sheet=char_sheet, rpg_on=rpg_on)
+                                char_sheet=char_sheet, rpg_on=rpg_on,
+                                rpg_rules=rpg_rules,
+                                response_length=response_length)
     after_pack = engine._augment_pack(base_messages)
-    after_style = engine._augment_style(after_pack)
-    after_rpg = engine._augment_rpg(after_style, include_sheet=False)
-    after_events = engine._augment_event_rules(after_rpg, history, player_input)
+    after_style = engine._augment_style(after_pack, include_length=False)
+    after_events = engine._augment_event_rules(after_style, history, player_input)
     layers = [
         ("pack (I-373, propositions non routées)",
          len(after_pack[0]["content"]) - len(base_messages[0]["content"])),
-        ("style + author's note (ST-20/21)",
+        ("author's note (ST-21, hors response_length -- désormais stable)",
          len(after_style[0]["content"]) - len(after_pack[0]["content"])),
-        ("règles RPG (rpg-rules.md, si actif)",
-         len(after_rpg[0]["content"]) - len(after_style[0]["content"])),
         ("verdicts de règles d'événement (lane b, #127)",
-         len(after_events[0]["content"]) - len(after_rpg[0]["content"])),
+         len(after_events[0]["content"]) - len(after_style[0]["content"])),
     ]
     messages = after_events
     sys_text = messages[0]["content"]

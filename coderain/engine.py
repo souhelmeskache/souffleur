@@ -198,12 +198,23 @@ class Engine:
             char_sheet = (self.rpg_mod.context_block(
                              self.store, prompt_narrate=self.trinity is None)
                          if rpg_on and self.rpg_mod is not None else "")
+            # D-260 post-mesure (Issue #144, arbitrage (b) : "les deux,
+            # indépendamment") : rpg-rules.md et la directive response_length
+            # sont CONSTANTS par story (jamais liés à la position ni au tour)
+            # — on les fait porter par `assembleur_position` comme sections
+            # STABLES, aux côtés du reste du préfixe cachable, au lieu de les
+            # servir après les sections volatiles comme le faisait
+            # `_augment_rpg`/`_augment_style` sur ce chemin. Pur correctif
+            # d'ordre : même contenu, même formulation, ailleurs dans le
+            # paquet — voir docs/mesure-d260-boucle-neuve.md.
+            rpg_rules = self.store.read("rpg-rules.md").strip() if rpg_on else ""
             messages = assembleur_position.assemble(
                 partition_dir, self.store, state, history, player_input,
                 scenes_tail=self.scenes_tail, char_sheet=char_sheet,
-                rpg_on=rpg_on)
-            messages = self._augment_pack(self._augment_style(
-                self._augment_rpg(messages, include_sheet=False)))
+                rpg_on=rpg_on, rpg_rules=rpg_rules,
+                response_length=self._response_length_directive())
+            messages = self._augment_pack(
+                self._augment_style(messages, include_length=False))
             return self._augment_event_rules(messages, history, player_input)
         messages = self.store.assemble(history, player_input,
                                        scenes_tail=self.scenes_tail,
@@ -275,21 +286,37 @@ class Engine:
             every = 1
         return depth, every
 
-    def _augment_style(self, messages):
+    def _response_length_directive(self) -> str:
+        """The response_length knob's text, extracted so it can be served either
+        inline by `_augment_style` (legacy/non-partition path) or as its own
+        STABLE section by `assembleur_position` (partition path, D-260 post-mesure,
+        Issue #144, arbitrage (b)) — same text, constant per session config,
+        never re-derived from the turn. Empty string for the default 'medium'
+        (no directive needed)."""
+        length = str(self.cfg.generation.get("response_length", "medium")).lower()
+        if length == "short":
+            return "Keep narration TIGHT: 1-2 short paragraphs per turn."
+        if length == "long":
+            return ("Write fuller scenes: 4-6 paragraphs; linger on detail, "
+                    "dialogue, and atmosphere.")
+        return ""
+
+    def _augment_style(self, messages, include_length: bool = True):
         """Wave 4 response controls + ST-21 author's note. The length knob always
         rides the system prompt; the save's custom instructions (the author's note)
         obey their depth + frequency: 'system' appends to the system prompt, 'tail'
         injects just before the player's latest action (binds harder); 'every N'
-        only injects on turns whose number is a multiple of N."""
+        only injects on turns whose number is a multiple of N.
+        `include_length=False` (Issue #144, arbitrage (b)) : the partition path
+        already served the length directive as a STABLE section (`_messages()`),
+        so it must not be repeated here — only the author's note logic runs."""
         if not messages:
             return messages
         parts = []
-        length = str(self.cfg.generation.get("response_length", "medium")).lower()
-        if length == "short":
-            parts.append("Keep narration TIGHT: 1-2 short paragraphs per turn.")
-        elif length == "long":
-            parts.append("Write fuller scenes: 4-6 paragraphs; linger on detail, "
-                         "dialogue, and atmosphere.")
+        if include_length:
+            note = self._response_length_directive()
+            if note:
+                parts.append(note)
         custom = self.store.custom_instructions()
         if custom:
             custom = self._expand_authored(custom)   # ST-20 macros in the note too
