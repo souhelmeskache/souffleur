@@ -91,7 +91,10 @@ def _engine(slug: str) -> Engine:
     _guard_slug(slug)
     if slug not in _engines:
         try:
-            store = lib.saves.store(slug)
+            # First touch of this slug in the process = session open — snapshot
+            # it (I-148/ESC-4); later calls stay on bare store() (see memory.py
+            # SaveLibrary.open).
+            store = lib.saves.open(slug)
         except FileNotFoundError:
             raise HTTPException(404, f"no such save: {slug}")
         _engines[slug] = Engine(_cfg, store)

@@ -867,7 +867,8 @@ class MemoryStore:
         while dest.exists():  # two folds in the same second must not collide
             dest, n = snaps / f"{base}-{n}", n + 1
         dest.mkdir(parents=True)
-        extra = [self.path(".fold_state.json"), self.path("state.json")]
+        extra = [self.path(".fold_state.json"), self.path("state.json"),
+                 self.path("meta.json")]
         for src in list(self.dir.rglob("*.md")) + extra:
             if not src.exists() or ".snapshots" in src.parts:
                 continue
@@ -2026,6 +2027,31 @@ class SaveLibrary:
         _sync_player_stats(store)
         return store
 
+    def open(self, slug: str, keep: int = 5) -> MemoryStore:
+        """`store(slug)` plus a versioning snapshot (I-148/ESC-4, Issue #110): a
+        dated, rotating copy of the save's play state taken at the moment a
+        frontend actually opens it for play — the same `.snapshots/` mechanism
+        already used pre-fold (`MemoryStore.snapshot`), just triggered on open
+        too. Zero save-format change, zero lock: a plain filesystem copy next
+        to the save, never on the read/write path of play itself.
+
+        Every frontend's session-open call site (play.py `_open`, server.py
+        `_engine`, gui.py `_open_story`, mcp_server.py `load_save`) goes
+        through here instead of bare `store()` — `store()` itself stays
+        snapshot-free since it also backs ancillary mid-session lookups (world
+        editing, character application) that are not a fresh "session start"
+        and would otherwise spam `.snapshots/` on every touch.
+
+        A snapshot failure (disk full, permissions, …) must never prevent the
+        game from opening — it's a best-effort filet layered on top of, not a
+        gate in front of, the existing save system."""
+        store = self.store(slug)
+        try:
+            store.snapshot(keep=keep)
+        except Exception:  # noqa: BLE001 — a failed safety net must not block play
+            pass
+        return store
+
     def touch(self, slug: str) -> None:
         """Bump the save's updated timestamp (so recency sort reflects play)."""
         meta = self.meta(slug)
@@ -2072,6 +2098,11 @@ class SaveLibrary:
             for f in snap.rglob("*"):
                 if f.is_file():
                     rel = f.relative_to(snap)
+                    if rel == Path("meta.json"):
+                        # meta.json is now part of the snapshot (I-148/ESC-4)
+                        # but a branch must keep ITS OWN meta (title/created
+                        # already rewritten above) — never the source's.
+                        continue
                     target = dst / rel
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(f, target)
@@ -2398,3 +2429,6 @@ class Library:
 
     def store(self, slug: str) -> MemoryStore:
         return self.saves.store(slug)
+
+    def open(self, slug: str, keep: int = 5) -> MemoryStore:
+        return self.saves.open(slug, keep=keep)

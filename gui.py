@@ -634,7 +634,7 @@ class App(tk.Tk):
 
     def _open_story(self, slug):
         self.slug = slug
-        self.store = self.lib.store(slug)
+        self.store = self.lib.open(slug)  # session-open snapshot (I-148/ESC-4)
         self.engine = Engine(self.cfg, self.store)
         self._set_story_combo(slug)
         self._refresh_rpg_btn()
