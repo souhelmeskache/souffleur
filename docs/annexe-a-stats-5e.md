@@ -201,6 +201,93 @@ peut les laisser vides — vide ⇒ exception signalée à l'ingestion, jamais i
 
 ---
 
+## 3bis. CLASSE `objet` — objets magiques (D-252.2, issue #62)
+
+`corpus_version: "2014"` — ancre racine : **SRD 5.1 › Magic Items**. Extension décidée
+séparément (arbitrage Souhel 29/08/2026) de la classe `objet` §3 ci-dessus : tous les champs
+suivants sont **optionnels**, portés dans le même bloc `stats_5e` — un objet ordinaire reste
+valide sans aucun d'eux (rétrocompatibilité totale, aucune fixture existante cassée).
+
+### Champs optionnels (validés par `Record._objet_magique`, `coderain/converter/schemas.py`)
+
+| # | champ | type | énumération / contrainte |
+|---|---|---|---|
+| m1 | `type_objet` | enum | `arme \| armure \| anneau \| potion \| parchemin \| baguette \| baton \| merveille` |
+| m2 | `rarete` | enum | `commun \| peu_commun \| rare \| tres_rare \| legendaire \| artefact` |
+| m3 | `harmonisation` | bool | — |
+| m4 | `condition_harmonisation` | texte, ex. `"par un clerc"` | exige `harmonisation: true` (sans harmonisation, une condition n'a pas de sens) |
+| m5 | `activation` | enum | `action \| mot_de_commande \| consommable \| passif` |
+| m6 | `charges` | entier ≥ 0 | — |
+| m7 | `recharge` | texte, ex. `"1d6+4 à l'aube"` | exige `charges` (une recharge est toujours relative à un nombre de charges déclaré) |
+| m8 | `effets_md` | markdown ancré | — |
+
+Tous réservés à la classe `objet` — les poser sur `creature`/`pnj`/`lieu`/`faction` est refusé
+(même garde que `ancre_srd` réservé à `creature`, §1).
+
+### Charges qui se dépensent : la mécanique persistante existante, pas un nouveau mécanisme
+
+`charges` est une stat comme une autre : pour qu'elle survive aux frontières de combat, l'objet
+déclare `persistent: ["charges"]` dans `stats_5e` (même mécanisme que pour `pv` d'une créature,
+§1 optionnel r-persistent) — le raccord runtime (`coderain/validator.py` clé `persist`,
+`coderain/memory.py` `persistent_attrs()`) est déjà générique et ne demande aucune extension.
+Cette annexe documente le support de données uniquement ; la dépense de charges en séance (jets,
+décrément) est **hors périmètre de l'issue #62**.
+
+### MALÉDICTION et IDENTIFICATION : câblage sur `Secret`, pas des champs de l'objet
+
+Un objet maudit ou à identifier n'a **pas** de champ dédié `maudit`/`identifie` sur le record.
+La face visible du record dit ce que l'objet *semble être* (ex. "épée +1") ; ce qu'il *est
+réellement* (malédiction, effet caché) vit dans un `Secret` (§ primitives, `schemas.py` classe
+`Secret`) dont le **porteur est l'id de l'objet** et dont la `revelation` porte la condition qui
+la découvre. Le seul lien formel entre les deux est le champ optionnel `secret_lie_id` sur
+l'objet, vérifié par `validate_form.validate_form` : s'il est posé, il doit résoudre vers un
+`Secret` existant (zéro dangling, même famille de garde que `porteurs`/`node_cible` d'un secret).
+`Record._objet_magique` ne vérifie que la **forme** de `secret_lie_id` (slug kebab) ; la
+**résolution** est un contrôle inter-primitives, hors de portée d'un `Record` isolé.
+
+#### Exemple synthétique (valeurs 100 % factices)
+
+```json
+{
+ "id": "epee-exemple",
+ "classe": "objet",
+ "nom": "Épée d'exemple +1",
+ "tags": ["exemple"],
+ "anchors": [[6000, 6100]],
+ "stats_5e": {
+  "description_md": "Épée longue d'exemple, lame ternie par un mal ancien.",
+  "type_objet": "arme",
+  "rarete": "rare",
+  "harmonisation": true,
+  "condition_harmonisation": "par un porteur de mauvaise foi",
+  "activation": "passif",
+  "effets_md": "+1 aux jets d'attaque et de dégâts (face visible).",
+  "secret_lie_id": "secret-epee-exemple"
+ }
+},
+{
+ "id": "secret-epee-exemple",
+ "contenu_md": "L'épée chuchote des ordres au porteur harmonisé ; malédiction, jamais de "
+   "retrait volontaire sans un rite de purification.",
+ "statut": "secret",
+ "porteurs": ["epee-exemple"],
+ "revelation": {"declencheur": "harmonisation réussie 3 fois",
+                "node_cible": "scene-exemple"},
+ "consequence_si_brule": "le porteur perd le contrôle d'une action à chaque combat",
+ "anchors": [[6100, 6200]]
+}
+```
+
+### Cas exotique : objet doué de conscience
+
+Un objet doué de conscience (SRD 5.1 › Magic Items › Sentient Magic Items) n'a **pas** de champs
+dédiés ici. `Record.__init__` ne restreint pas les clés de `stats_5e` à celles listées dans cette
+annexe — hors les 4 clés `_RESERVED` (§1) et les 9 clés m1-m8/`secret_lie_id` ci-dessus, toute
+clé additionnelle passe telle quelle (attributs libres, ex. `alignement`, `communication_md`,
+`but_md`). Cette annexe ne fige que le socle commun aux objets magiques, pas les cas exotiques.
+
+---
+
 ## 4. CLASSE `lieu`
 
 `corpus_version: "2014"` — ⛔ **constat de corpus : le SRD 5.1 ne définit AUCUNE statistique de
@@ -321,7 +408,7 @@ que soit sa valeur.
 |---|---|---|---|
 | creature | 8 | 16 | 0 |
 | pnj | 2 | sous-ensemble §1 | 2 (p1, p2) |
-| objet | 3 | 5 | 1 (b3) |
+| objet | 3 | 5 + 8 (§3bis magiques) | 1 (b3) |
 | lieu | 1 | 2 | 2 (l1, s2) |
 | faction | 1 | 2 | 3 (f1, t1, t2) |
 | **total** | **15** | **25 + héritage §1** | **8** |
@@ -336,9 +423,10 @@ référence est **ce tableau-ci**, définition figée ci-dessus.
 2. **Les ancres citent les titres de sections du SRD 5.1 publié**, vérifiés sur UN miroir markdown
    fidèle (licence CC-BY-4.0 incluse dans le miroir) ; je n'ai pas vérifié la pagination du PDF
    officiel page à page.
-3. **Les objets magiques ne sont pas couverts** (chapitre Magic Items du corpus 2014) : la classe
-   `objet` de cette annexe vise l'objet-décor/destructible ; une extension éventuelle est une
-   décision séparée.
+3. **Les objets magiques sont couverts depuis D-252.2 (issue #62, §3bis)** — l'extension annoncée
+   ci-dessous est faite : 8 champs optionnels + le câblage `secret_lie_id` vers `Secret` pour
+   malédiction/identification. Ce que cette annexe n'établit toujours pas : la mécanique d'usage
+   en séance (dépense de charges en jeu, jets) — hors périmètre, support de données seulement.
 4. **N = 2 records, tous deux `creature`** : le taux ne dit rien de `pnj|objet|lieu|faction` — aucun
    record de ces classes n'existe encore dans le specimen.
 5. **La localisation canonique du specimen** : je mesure la copie du poste (`kit-p4/`) ; si une

@@ -35,6 +35,14 @@ JALON_INTERDITS_FUTUR = ("fera", "ferait", "futur", "quand il", "lorsqu'il",
 NEGATION_TYPE = "non"   # D-187: non(<atome>), une seule profondeur
 DECLENCHEUR_TYPES = ("delai", "etat", "date")                # D-182
 ISSUES_PERTURBATION = ("transplantee", "abandonnee")         # D-120 §5.1
+# D-252.2 (issue #62) — objets magiques : champs OPTIONNELS de stats_5e,
+# réservés à la classe objet (annexe A §3bis). Malédiction/identification ne
+# sont PAS des champs ici : câblage sur Secret via secret_lie_id (résolu par
+# validate_form, hors de portée du Record isolé).
+TYPE_OBJET = ("arme", "armure", "anneau", "potion", "parchemin", "baguette",
+              "baton", "merveille")
+RARETE = ("commun", "peu_commun", "rare", "tres_rare", "legendaire", "artefact")
+ACTIVATION = ("action", "mot_de_commande", "consommable", "passif")
 
 
 def check_prerequis(raw, owner: str, _depth: int = 0) -> dict:
@@ -258,6 +266,7 @@ class Record:
         self.delta_vs_ancre = self._delta(rid, stats_5e)
         self.tokens_initial = self._tokens(rid, stats_5e)
         self.persistent_attrs = self._persistent(rid, stats_5e, stats)
+        self._objet_magique(rid, classe, stats)
         required = annexe_a.required_fields(classe)
         merged = {**stats, "nom": nom}   # nom is first-class, not a stat
         missing = [f for f in required if f not in merged]
@@ -351,6 +360,53 @@ class Record:
                                  "des attributs existants")
             out.append(attr)
         return out
+
+    def _objet_magique(self, rid, classe, stats) -> None:
+        """D-252.2 (issue #62) — champs optionnels objets magiques : reste
+        dans stats_5e (pas de _RESERVED, contrairement à ancre_srd/tokens_
+        initial/persistent — ce sont de vraies stats, pas des métadonnées
+        traversantes) mais chaque valeur postée dedans est vérifiée.
+        secret_lie_id n'est ici vérifié qu'en FORME (slug) : la résolution
+        vers un Secret existant est un contrôle inter-primitives, porté par
+        validate_form (Record n'a pas accès à la partition)."""
+        keys = ("type_objet", "rarete", "harmonisation",
+                "condition_harmonisation", "activation", "charges",
+                "recharge", "effets_md", "secret_lie_id")
+        present = [k for k in keys if k in stats]
+        if not present:
+            return
+        if classe != "objet":
+            raise ValueError(f"record {rid} ({classe}): {present} réservés "
+                             "à la classe objet (D-252.2)")
+        if "type_objet" in stats and stats["type_objet"] not in TYPE_OBJET:
+            raise ValueError(f"record {rid}: type_objet "
+                             f"{stats['type_objet']!r} not in {TYPE_OBJET}")
+        if "rarete" in stats and stats["rarete"] not in RARETE:
+            raise ValueError(f"record {rid}: rarete {stats['rarete']!r} "
+                             f"not in {RARETE}")
+        if "activation" in stats and stats["activation"] not in ACTIVATION:
+            raise ValueError(f"record {rid}: activation "
+                             f"{stats['activation']!r} not in {ACTIVATION}")
+        if "harmonisation" in stats \
+                and not isinstance(stats["harmonisation"], bool):
+            raise ValueError(f"record {rid}: harmonisation doit être un "
+                             f"booléen, got {stats['harmonisation']!r}")
+        if "condition_harmonisation" in stats and not stats.get("harmonisation"):
+            raise ValueError(f"record {rid}: condition_harmonisation sans "
+                             "harmonisation=true — une condition ne porte "
+                             "que sur une harmonisation requise")
+        if "recharge" in stats and "charges" not in stats:
+            raise ValueError(f"record {rid}: recharge sans charges — une "
+                             "recharge est toujours relative à un nombre de "
+                             "charges déclaré")
+        if "charges" in stats:
+            c = stats["charges"]
+            if isinstance(c, bool) or not isinstance(c, int) or c < 0:
+                raise ValueError(f"record {rid}: charges doit être un "
+                                 f"entier >= 0, got {c!r}")
+        if "secret_lie_id" in stats:
+            check_id(str(stats["secret_lie_id"]),
+                     f"record {rid} secret_lie_id")
 
 
 class RollTable:
