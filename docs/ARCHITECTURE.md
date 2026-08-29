@@ -209,3 +209,194 @@ fiction restent deux registres distincts, jamais mélangés dans le même texte.
 | **acte** | 2-3 modules chaînés, `coderain/acte.py` | pas un fichier de campagne (`campagne.py`), pas un "arc" (banni, D-122) |
 | **toile** | les secrets tracés, `coderain/toile.py` | pas la campagne ; jamais pointée PAR la campagne |
 | **campagne** | `campagne.md` (ambition + fils rouges), `coderain/campagne.py` | ne pointe jamais la toile ; jamais chargée en tour |
+
+## 6. Les circuits (Issue #159)
+
+*coderain gère certaines choses par du CODE déterministe, d'autres par un
+appel à un modèle (LLM) — les deux se croisent dans les mêmes circuits, et
+rien ne les distingue à l'œil sur un simple survol du code. Les cinq schémas
+ci-dessous cartographient les grands circuits ; chaque nœud est marqué
+**CODE** (rectangle plein) ou **LLM** (rectangle en pointillés/orange), avec
+son ancre `fichier:fonction` et sa CADENCE (par tour ⊥ par scène ⊥ par
+conversion ⊥ à la création). Méthode : inventaire par grep
+(`emit_json_ex|\.complete\(|\.stream\(|complete_with_tools`), jamais de
+mémoire — la table §6.6 fait foi pour l'exhaustivité.*
+
+```mermaid
+flowchart LR
+    legCode["CODE (déterministe)"]:::code
+    legLlm["LLM (appel modèle)"]:::llm
+    legExt["LLM porté par la session<br/>(hors dépôt : sous-agent / pont MCP)"]:::llmExternal
+    legCode ~~~ legLlm ~~~ legExt
+    classDef code fill:#dde7f5,stroke:#3a5a8c,stroke-width:1px,color:#1a1a1a;
+    classDef llm fill:#fde3cf,stroke:#c8632a,stroke-width:2px,stroke-dasharray:4 2,color:#1a1a1a;
+    classDef llmExternal fill:#fbeee0,stroke:#c8632a,stroke-width:1px,stroke-dasharray:2 2,color:#1a1a1a;
+```
+
+### 6.1 Le tour de jeu (cadence : **par tour**)
+
+Deux corps pour le Director (§1) : le **pipeline** (`trinity.py`, dans ce
+dépôt, code-orchestré) et la **table** (sous-agent hors dépôt, servi par le
+pont MCP — ses appels LLM n'existent pas dans le code de `coderain`, ils
+sont montrés en pointillé clair pour mémoire).
+
+```mermaid
+flowchart TD
+    A[entrée joueur] --> B["input_processor.process<br/>(CODE) input_processor.py:112"]:::code
+    B --> C["assemblage du paquet<br/>(CODE) assembleur_position.assemble /<br/>store.assemble — engine.py:_messages"]:::code
+    C --> D1["Director — pipeline<br/>(LLM) trinity.py:_direct<br/>modules/trinity.py:210"]:::llm
+    C -.session, pont MCP.-> D2["Director — table<br/>sous-agent hors dépôt<br/>(mcp_server.py: get_world_state,<br/>get_event_rules, assemble_context_to_file,<br/>recall_entity/quest, apply_envelope, …)"]:::llmExternal
+    subgraph LK["optionnel, si trinity.lorekeeper.llm_pass"]
+        LKN["Lore-keeper<br/>(LLM) trinity.py:_keep_lore<br/>modules/trinity.py:234 complete_with_tools"]:::llm
+    end
+    D1 -.plan.-> LKN
+    D1 --> E["Validator<br/>(CODE) validator.py:validate"]:::code
+    E -->|deltas rejetés, 1 re-ask max| F["Director _redirect<br/>(LLM) modules/trinity.py:218"]:::llm
+    F --> E
+    E --> G["application enveloppe/moteur de règles<br/>(CODE) engine.py:apply_envelope,<br/>validator.apply_world, rpg.apply"]:::code
+    G --> H["directive/caméra (l'Angle)<br/>(CODE) trinity._writer_directive"]:::code
+    LKN -.faits vérifiés.-> H
+    H --> I["Narrateur<br/>(LLM) trinity.py:325 llm.stream<br/>OU single-brain : engine.py:686/882"]:::llm
+    I --> J["transcript<br/>(CODE) store.append_turn"]:::code
+    classDef code fill:#dde7f5,stroke:#3a5a8c,stroke-width:1px,color:#1a1a1a;
+    classDef llm fill:#fde3cf,stroke:#c8632a,stroke-width:2px,stroke-dasharray:4 2,color:#1a1a1a;
+    classDef llmExternal fill:#fbeee0,stroke:#c8632a,stroke-width:1px,stroke-dasharray:2 2,color:#1a1a1a;
+```
+
+Chemin **single-brain** (pas de `trinity` configuré) : un seul appel — le
+même modèle EST le Director ET le Narrateur, `engine.py:686` (`llm.stream`,
+prose libre) ou `engine.py:882` (`llm.complete_with_tools`, avec les outils
+`lookup_memory`/`recall_turns`/`recall_entity`/`recall_quest`) — pas de
+Validator séparé pour l'enveloppe planifiée puisqu'il n'y a pas de plan
+distinct, mais le sidecar produit passe quand même par le même
+`apply_envelope` (CODE) que le chemin quad.
+
+### 6.2 Le repliement (cadence : **par scène**, plus rarement **par arc**)
+
+```mermaid
+flowchart TD
+    A["déclencheur de fold<br/>(CODE) summarizer.maybe_fold — seuils<br/>medium/long_fold_after"]:::code --> B{"scène ou arc dû ?"}
+    B -->|scène| C["fold de scène<br/>(LLM) summarizer._fold_scene → emit_json<br/>summarizer.py:281 (via _emit_json:146)"]:::llm
+    B -->|arc, cadence plus rare| C2["fold d'arc<br/>(LLM) summarizer._fold_arc → emit_json<br/>summarizer.py:400"]:::llm
+    C -.pont MCP : même prompt/payload,<br/>réponse fournie par la session.-> C3["fold_due / fold_apply<br/>mcp_server.py:969+ (_ShimLLM lève _NeedLLM<br/>au lieu d'appeler le modèle elle-même)"]:::llmExternal
+    C --> D["_apply_promotions<br/>(CODE) summarizer.py:151 — promotions<br/>DÉCIDÉES par le LLM dans obj, APPLIQUÉES ici"]:::code
+    C2 --> D
+    D --> E["étage scénario<br/>(CODE) SCENARIO_STAGE_FILE, une note<br/>par fold de scène (PR #135)"]:::code
+    E --> F["fermer_scenario<br/>(CODE, déterministe) summarizer.py:489<br/>déclenché par la charnière de sortie du module"]:::code
+    classDef code fill:#dde7f5,stroke:#3a5a8c,stroke-width:1px,color:#1a1a1a;
+    classDef llm fill:#fde3cf,stroke:#c8632a,stroke-width:2px,stroke-dasharray:4 2,color:#1a1a1a;
+    classDef llmExternal fill:#fbeee0,stroke:#c8632a,stroke-width:1px,stroke-dasharray:2 2,color:#1a1a1a;
+```
+
+### 6.3 La conversion P4 (cadence : **par conversion**, plusieurs appels par module source)
+
+Répartition posée par le docstring de `converter/convert.py:1-6` :
+déterministe pour extraction/tables de règles/valideurs, LLM pour
+segmentation/bucketing/conversion sémantique.
+
+```mermaid
+flowchart TD
+    A[texte source] --> B["segmentation<br/>(LLM) emit_json_ex<br/>converter/segmentation.py:52"]:::llm
+    B --> C["bucketing<br/>(LLM) emit_json_ex<br/>converter/buckets.py:47"]:::llm
+    C --> D["conversion sémantique<br/>(LLM) emit_json_ex, par unité + par lot<br/>converter/semantic.py:198 et :223"]:::llm
+    D --> E["extraction + tables de règles<br/>(CODE) converter/ruletables.py"]:::code
+    E --> F["valideurs forme + fidélité<br/>(CODE) converter/validate_form.py,<br/>validate_fidelity.py"]:::code
+    F --> G["Partition écrite<br/>(CODE) converter/emit.py:write_partition"]:::code
+    classDef code fill:#dde7f5,stroke:#3a5a8c,stroke-width:1px,color:#1a1a1a;
+    classDef llm fill:#fde3cf,stroke:#c8632a,stroke-width:2px,stroke-dasharray:4 2,color:#1a1a1a;
+```
+
+`TokenMeter.wrap` (`convert.py:24-48`, appelle `llm.complete` à `convert.py:39`)
+n'est pas un site d'appel supplémentaire : c'est un compteur qui enveloppe
+le client passé à chacune des trois étapes LLM ci-dessus pour mesurer les
+chars_in réellement envoyés (I-145) — jamais un quatrième appel.
+
+### 6.4 La chaîne Auteur D-262 (cadence : **par module-épisode écrit**, rare — inflexion/digression)
+
+Même duplicité de corps qu'au §6.1 (D-263) : un orchestrateur **autonome**
+dans ce dépôt (`ecrivain_module.py`, code-orchestré) et un variant
+**pont MCP** où le code ne pose QUE les gardes, le jugement restant porté
+par la session (aucun `emit_json_ex` dans `mcp_server.py`).
+
+```mermaid
+flowchart TD
+    A["bloc_cadre<br/>(CODE) acte.py:bloc_cadre — 3 lectures"]:::code --> B["écriture du module<br/>(LLM) emit_json_ex, ECRITURE_SYS<br/>ecrivain_module.py:267"]:::llm
+    B --> C["gardes formes + retour2 (contrat)<br/>(CODE) formes.valider_declaration,<br/>ecrivain_module._valider_sortie"]:::code
+    C --> D["jugement de conformité<br/>(LLM) emit_json_ex, retour2()<br/>retour2.py:287"]:::llm
+    D --> E{conforme_total ?}
+    E -->|non, 1 re-demande max| F["re-demande corrective<br/>(LLM) même seams B+D, budget 2 tours<br/>ecrivain_module.py:265"]:::llm
+    F --> C
+    E -->|oui| G["RapportEcriture statut=pret<br/>(CODE) — prêt POUR conversion (§6.3)"]:::code
+    classDef code fill:#dde7f5,stroke:#3a5a8c,stroke-width:1px,color:#1a1a1a;
+    classDef llm fill:#fde3cf,stroke:#c8632a,stroke-width:2px,stroke-dasharray:4 2,color:#1a1a1a;
+```
+
+Variant pont MCP (D-263) : `mcp_server.py` `auteur_bloc_cadre` (:2501, garde
+le cadre) → `auteur_valider_ecriture` (:2554, garde formes + prépare le
+payload retour2) → **la session appelante juge la conformité** (le
+`conformite_prompt` renvoyé) → `auteur_verdicts_conformite` (:2617, garde
+les verdicts) — aucun appel modèle dans ce fichier, jugement porté par la
+session (même logique que `D2` au §6.1).
+
+### 6.5 La création (cadence : **à la création** — sélecteur/proposeur une fois par nouvelle partie ; générateur de scénario, plusieurs appels par scénario généré)
+
+```mermaid
+flowchart TD
+    A[envie du joueur + catalogue] --> B["sélecteur<br/>(LLM) emit_json_ex<br/>selecteur.py:194"]:::llm
+    B --> C["garde de forme<br/>(CODE) valider_forme — candidat<br/>ancré au catalogue, sinon refusé"]:::code
+    C --> D["proposeur personnage+contrat<br/>(CODE) garde structurelle, proposeur.py<br/>jugement LLM porté par la session,<br/>même pattern D-263 — pas d'emit_json_ex ici"]:::code
+    D --> E["toile<br/>(CODE) toile.py — secrets tracés,<br/>latent/révélé/caduc, ancrés au module"]:::code
+    classDef code fill:#dde7f5,stroke:#3a5a8c,stroke-width:1px,color:#1a1a1a;
+    classDef llm fill:#fde3cf,stroke:#c8632a,stroke-width:2px,stroke-dasharray:4 2,color:#1a1a1a;
+```
+
+Chemin séparé, hors séquence D-232 : le **générateur de scénario**
+(`generator.py`, Feature 4) — `emit_json_ex` à `generator.py:358` — un appel
+par section en mode `fast`, un appel par entité en mode `rich` (chaque
+personnage/lieu voit les résumés de ce qui a déjà été généré).
+
+### 6.6 Annexe — appels annexes et table d'exhaustivité
+
+Sites marginaux (hors des cinq circuits ci-dessus, jamais dans la boucle de
+jeu principale) :
+
+- **`impersonate`** (`engine.py:505`, `llm.stream`) — suggère le prochain
+  message du joueur à la demande (UI), ne stocke rien.
+- **`companion_chat`** (`engine.py:874`, `llm.stream`) — side-chat hors
+  transcript avec un compagnon, à la demande.
+- **vector recall** (`coderain/modules/vector.py`) — retrieval optionnel
+  (Phase 5, `retrieval.enabled`) : aucun `emit_json_ex`/`.complete`/`.stream`
+  dans ce module — c'est un appel d'embeddings, pas une conversation LLM au
+  sens de cet inventaire.
+
+Table de tous les sites trouvés par le grep de méthode (§6, en-tête) —
+chaque ligne apparaît dans un des schémas 6.1-6.5 ou dans la liste
+ci-dessus :
+
+| Site | Circuit | Cadence |
+|---|---|---|
+| `converter/buckets.py:47` | 6.3 bucketing | par conversion |
+| `converter/convert.py:39` (`TokenMeter._Metered.complete`) | 6.3 (instrumentation, pas un 4e appel) | — |
+| `converter/segmentation.py:52` | 6.3 segmentation | par conversion |
+| `converter/semantic.py:198` | 6.3 conversion sémantique (unité) | par unité |
+| `converter/semantic.py:223` | 6.3 conversion sémantique (lot) | par lot |
+| `ecrivain_module.py:267` | 6.4 écriture du module | par module-épisode (+1 re-demande max) |
+| `engine.py:505` | 6.6 annexe — `impersonate` | à la demande (UI) |
+| `engine.py:686` | 6.1 Narrateur, single-brain | par tour |
+| `engine.py:874` | 6.6 annexe — `companion_chat` | à la demande |
+| `engine.py:882` | 6.1 Narrateur, single-brain + outils | par tour |
+| `generator.py:358` | 6.5 générateur de scénario | par section (fast) / par entité (rich) |
+| `llm.py:176` (`emit_json_ex`) | seam commune à tous les `emit_json_ex`/`emit_json` ci-dessus | — |
+| `modules/trinity.py:210` | 6.1 Director — pipeline | par tour |
+| `modules/trinity.py:218` | 6.1 Director `_redirect` | par tour, si deltas rejetés |
+| `modules/trinity.py:234` | 6.1 Lore-keeper (optionnel) | par tour, si `lorekeeper.llm_pass` |
+| `modules/trinity.py:325` | 6.1 Narrateur — pipeline | par tour |
+| `retour2.py:287` | 6.4 jugement de conformité | par tentative d'écriture (+1 re-demande max) |
+| `selecteur.py:194` | 6.5 sélecteur de matière | à la création |
+
+`summarizer.py` (fold de scène/arc, §6.2) n'apparaît pas dans le grep de
+tête parce qu'il passe par `emit_json` (wrapper d'`emit_json_ex`,
+`llm.py:196-199`) plutôt que directement — même seam, mêmes deux sites
+(`summarizer.py:146` `_emit_json`, appelé par `_fold_scene:281` et
+`_fold_arc:400`). Compté à part ici pour que le grep de tête reste
+reproductible tel quel (pattern donné par l'Issue) sans faux négatif signalé.
