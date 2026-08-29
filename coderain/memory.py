@@ -102,6 +102,14 @@ KIND_FILE = {
     "faction": "factions.md", "item": "items.md",
     "canon-event": "canon-events.md", "thread": "threads.md",
 }
+# D-260 lane (c) — Issue #131 : l'étage scénario de la mémoire du vécu
+# (D-129). Accumule un fold de scène à la fois (`summarizer._fold_scene`),
+# se referme vers ADVENTURE_FILE (`summarizer.fermer_scenario`), et sert de
+# lecteur unique à l'assembleur par position
+# (`assembleur_position._world_and_queue_section`) — les deux modules
+# partagent le nom depuis ici pour ne pas s'importer l'un l'autre.
+SCENARIO_STAGE_FILE = "memory/scenario-courant.md"
+ADVENTURE_FILE = "memory/aventure.md"
 # Files a custom lore type may NEVER shadow: built-in registries, rules, and
 # the non-registry story files (declaring "events" as a lore type would turn
 # unfired event rules into Writer-visible lorebook entries).
@@ -117,6 +125,7 @@ EDITABLE_FILES = [
     "canon-events.md", "threads.md", "events.md", "custom-instructions.md",
     "memory/scenes.md", "memory/arc.md", "memory/timeline.md",
     "memory/facts.md", "memory/companion-chat.md",
+    SCENARIO_STAGE_FILE, ADVENTURE_FILE,
     "transcript.md", "state.json",
 ]
 

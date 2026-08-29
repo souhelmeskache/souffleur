@@ -18,7 +18,10 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 porteur est présent (routage `hidden` conservé, D-019)
   5. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
                 contre l'état courant) — jamais `event_rules_block()` entier
-  6. VOLATILE — fiche perso, état monde compact, file de scène récente
+  6. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
+                lane c, Issue #131 : `memory/scenario-courant.md` — jamais les
+                scènes brutes d'un scénario fermé, `summarizer.fermer_scenario`
+                le vide à la fermeture)
 
 Le hors-position ne se charge pas d'avance : le Director le demande via
 `recall_queries` de son enveloppe (soupape déjà existante).
@@ -34,7 +37,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .memory import Entry, MemoryStore, _context_render, trigger_gate
+from .memory import (Entry, MemoryStore, SCENARIO_STAGE_FILE,
+                     _context_render, trigger_gate)
 from .converter.aval import _split_front
 from .modules.trinity import DIRECTOR_SYS, _ENV_RPG, _ENV_WORLD
 
@@ -198,7 +202,14 @@ def _rule_verdicts_section(store: MemoryStore, history: list[dict],
                    "règles du scénario)", text)
 
 
-def _world_and_queue_section(store: MemoryStore, scenes_tail: int) -> Section:
+def _world_and_queue_section(store: MemoryStore) -> Section:
+    """D-260 lane (c) (Issue #131) : la file de scène brute (`scenes_tail`,
+    lane a) est remplacée par l'étage scénario OUVERT SEUL
+    (`SCENARIO_STAGE_FILE`) — jamais un mélange avec les scènes brutes. Un
+    scénario fermé (`summarizer.fermer_scenario` a vidé l'étage) n'a donc
+    plus AUCUN moyen de refaire surface dans ce paquet, même par repli : la
+    section affiche un texte vide tant que le prochain fold de scène n'a pas
+    encore rouvert l'étage."""
     lines = []
     clock = store.clock_str()
     if clock:
@@ -207,11 +218,11 @@ def _world_and_queue_section(store: MemoryStore, scenes_tail: int) -> Section:
     if flags:
         lines.append("Drapeaux : "
                      + ", ".join(f"{k}={v}" for k, v in flags.items()))
-    scenes = store.entries("memory/scenes.md")
-    if scenes:
-        lines.append("\nDernières scènes :\n" + "\n\n".join(
-            e.render().strip() for e in scenes[-scenes_tail:]))
-    return Section("volatile", "État du monde (compact) + file de scène",
+    stage = store.entries(SCENARIO_STAGE_FILE)
+    lines.append("\nÉtage scénario (en cours) :\n" + (
+        "\n\n".join(e.render().strip() for e in stage) if stage
+        else "(aucune scène close pour l'instant)"))
+    return Section("volatile", "État du monde (compact) + étage scénario",
                    "\n".join(lines))
 
 
@@ -221,7 +232,12 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
                    rpg_on: bool = False) -> list[Section]:
     """Construit le paquet ordonné (voir docstring de module). `char_sheet`
     est fourni par l'appelant (`rpg_mod.context_block`, hors périmètre de ce
-    module) — chaîne vide = section omise."""
+    module) — chaîne vide = section omise.
+
+    `scenes_tail` est gardé dans la signature pour compat d'appel (`engine.py`
+    le passe encore) mais n'est plus consommé depuis D-260 (c), Issue #131 :
+    la file de scène brute qu'il bornait est remplacée par l'étage scénario
+    OUVERT seul (`_world_and_queue_section`)."""
     partition_dir = Path(partition_dir)
     sections = [Section("stable", "Rôle (Director)",
                         DIRECTOR_SYS % (_ENV_RPG if rpg_on else _ENV_WORLD))]
@@ -232,7 +248,7 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     sections.append(_current_node_section(partition_dir, store, location))
     sections.append(_presence_section(partition_dir, store, location))
     sections.append(_rule_verdicts_section(store, history, player_input))
-    sections.append(_world_and_queue_section(store, scenes_tail))
+    sections.append(_world_and_queue_section(store))
     if char_sheet.strip():
         sections.append(Section("volatile", "Fiche de personnage",
                                 char_sheet.strip()))

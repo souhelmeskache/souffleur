@@ -11,13 +11,29 @@ Reliability guards:
 - slug dedupe via upsert (no duplicate entities)
 - graceful degradation: an unparseable fold still advances (keeps a stub summary)
   so the pipeline never loops forever
-"""
+
+D-260 lane (c) (Issue #131) — the SCENARIO stage: on a save WITH a projected
+position/partition (`assembleur_position.eligible`), every scene fold also
+appends one SHORT note to the open scenario stage (`memory/scenario-courant.md`,
+`SCENARIO_STAGE_FILE`) — what that scene CHANGED for the current scenario, plus
+semantic pointers (characters/locations/quests touched, source turns) that
+orient a follow-up recall in the store rather than restating the detail. This is
+never called a "delta" (D-118 reserves that word for the score⊥state gap, a
+derivation never stored). `fermer_scenario()` is the explicit seam that closes
+the stage: it promotes ONE compact entry to a minimal upper receptacle
+(`memory/aventure.md`, `ADVENTURE_FILE` — the full adventure stage is out of
+scope) and empties the stage, so a closed scenario becomes physically inert —
+`assembleur_position` reads the OPEN stage only. Saves WITHOUT a partition never
+touch this stage (same `eligible()` frontier as the lanes before this one) —
+their scene->arc fold is byte-identical to before this lane."""
 from __future__ import annotations
 
 import re
 
+from . import assembleur_position
 from .llm import emit_json
-from .memory import Entry, KIND_FILE, MemoryStore, trigger_hit
+from .memory import (ADVENTURE_FILE, Entry, KIND_FILE, MemoryStore,
+                     SCENARIO_STAGE_FILE, trigger_hit)
 
 SCENE_INSTRUCTION = """\
 You are the story's memory keeper. Fold the TURNS below into ONE concise scene
@@ -313,7 +329,34 @@ class Summarizer:
         self.store.upsert_entry("memory/scenes.md", entry)
         self._append_timeline(start_turn, end_turn, when, shorthand or summary)
         self._log_fold(scene_no, start_turn, end_turn)
+        # D-260 (c) : sur le chemin partition SEUL (même frontière que les lanes
+        # précédentes) — jamais pour une save sans position/partition, dont le
+        # repliement doit rester octet-identique à avant cette lane.
+        if assembleur_position.eligible(self.store, self.store.world_state()):
+            events += self._append_scenario_note(scene_no, attrs, summary)
         return events
+
+    def _append_scenario_note(self, scene_no: int, scene_attrs: dict,
+                              summary: str) -> list[str]:
+        """Ajoute UNE entrée courte à l'étage scénario OUVERT
+        (`SCENARIO_STAGE_FILE`) — la trace de ce que cette scène a CHANGÉ pour
+        le scénario en cours, jamais un doublon de arc.md (D-129). Le corps
+        préfère les `state_changes` (déjà machine-readable, déjà courts) et ne
+        retombe sur un extrait du résumé de scène que s'il n'y en a aucun.
+        Les attrs `characters`/`locations`/`quests`/`turns` sont réutilisés
+        TELS QUELS depuis l'entrée scenes.md déjà construite : ce sont les
+        indices sémantiques qui orientent une recherche complémentaire dans
+        le store (`recall_entity`/`recall_quest`/`recall_turns`) — l'index
+        dit aussi ce qu'il ne dit pas, il ne recopie pas le détail."""
+        note = _collapse(scene_attrs.get("state_changes") or summary, cap=140)
+        attrs = {k: scene_attrs[k] for k in
+                ("turns", "when", "characters", "locations", "quests")
+                if scene_attrs.get(k)}
+        n = len(self.store.entries(SCENARIO_STAGE_FILE)) + 1
+        entry = Entry(title=f"Scène {scene_no}",
+                      slug=f"scenario-note-{n}", attrs=attrs, body=note)
+        self.store.upsert_entry(SCENARIO_STAGE_FILE, entry)
+        return [f"memory: étage scénario +1 (scène {scene_no})"]
 
     def _log_fold(self, scene_no: int, start_turn: int, end_turn: int) -> None:
         """One forensic line per scene fold. `bit` is the whole point: an entry
@@ -427,3 +470,50 @@ def _clamp_int(v, lo: int = 1, hi: int = 5) -> int:
         return max(lo, min(hi, int(v)))
     except (TypeError, ValueError):
         return 3
+
+
+def _collapse(text: str, cap: int) -> str:
+    """Une seule ligne courte — pour une note d'étage scénario, jamais un
+    paragraphe (D-129 : l'étage accumule des traces COURTES)."""
+    line = " ".join(str(text).split())
+    return line if len(line) <= cap else line[:cap - 1].rstrip() + "…"
+
+
+def scenario_stage_chars(store: MemoryStore) -> int:
+    """Chars de l'étage scénario OUVERT — la mesure imprimée par les tests :
+    la borne structurelle (durée du scénario, jamais un retrait) se constate
+    au fil des folds sur cette valeur (D-129, critère d'acceptation #4)."""
+    return sum(len(e.render()) for e in store.entries(SCENARIO_STAGE_FILE))
+
+
+def fermer_scenario(store: MemoryStore, snapshot_keep: int = 5) -> list[str]:
+    """Seam explicite (D-260 lane c, Issue #131) : ferme l'étage scénario
+    OUVERT. Le déclencheur mécanique est fourni par l'APPELANT (côté
+    partition : la charnière de sortie de l'aventure, `aventure.md`) — la
+    détection automatique de fin de scénario est HORS périmètre.
+
+    Promeut UNE entrée compacte vers le réceptacle d'étage supérieur
+    (ADVENTURE_FILE, v0 : simple réceptacle, pas l'étage aventure complet),
+    puis VIDE l'étage : un scénario fermé devient physiquement inerte — plus
+    aucun paquet de `assembleur_position` ne le sert, qui ne lit que l'étage
+    OUVERT (`SCENARIO_STAGE_FILE`).
+
+    Déterministe, sans appel LLM : les notes de l'étage sont déjà des traces
+    courtes posées par chaque fold de scène ; fermer le scénario les
+    concatène, il ne les résume pas — recompresser ici referait `arc.md`
+    (garde D-129, hors périmètre de cette lane)."""
+    notes = store.entries(SCENARIO_STAGE_FILE)
+    if not notes:
+        return []
+    store.snapshot(keep=snapshot_keep)
+    n = len(store.entries(ADVENTURE_FILE)) + 1
+    body = "\n".join(f"- {note.body.strip()}" for note in notes
+                     if note.body.strip())
+    entry = Entry(title=f"Scénario {n}", slug=f"scenario-{n}", body=body)
+    store.upsert_entry(ADVENTURE_FILE, entry)
+    # Étage fermé = physiquement inerte : aucune entrée '## ' à parser, donc
+    # store.entries(SCENARIO_STAGE_FILE) revient vide dès ce point.
+    store.write(SCENARIO_STAGE_FILE,
+               "# Étage scénario (courant)\n\n"
+               "(scénario précédent clos — voir memory/aventure.md)\n")
+    return [f"memory: scénario {n} clos, promu vers {ADVENTURE_FILE}"]
