@@ -34,7 +34,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .memory import Entry, MemoryStore, _context_render, trigger_hit
+from .memory import Entry, MemoryStore, _context_render, trigger_gate
 from .converter.aval import _split_front
 from .modules.trinity import DIRECTOR_SYS, _ENV_RPG, _ENV_WORLD
 
@@ -179,15 +179,17 @@ def _rule_verdicts_section(store: MemoryStore, history: list[dict],
     ce qui n'est pas un des cinq paliers du lorebook vers "standard") sont
     évaluées PAR CODE contre le haystack du tour. Seules les règles dont
     triggers_all matche intégralement passent — jamais `event_rules_block()`
-    entier (D-260 §5)."""
+    entier (D-260 §5). `trigger_gate` (partagé avec l'évaluateur de règles
+    d'événement, lane b, Issue #127) fait le geste ; ici sans déclencheur
+    machine = pas de candidat (`permanent_if_no_triggers=False`, contrairement
+    aux règles d'événement en langage naturel seul)."""
     haystack = (" ".join(t.get("text", "") for t in history)
                + " " + player_input).lower()
     fired = []
     for e in store.entries("locations.md"):
         if e.attrs.get("weight", "").strip().lower() != "heavy":
             continue
-        reqs = e.triggers_all()
-        if reqs and all(trigger_hit(tok, haystack) for tok in reqs):
+        if trigger_gate(e, haystack, permanent_if_no_triggers=False):
             fired.append(e)
     text = ("\n\n".join(_context_render(e) for e in fired) if fired
            else "(aucune règle déclenchée ce tour)")

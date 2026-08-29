@@ -763,6 +763,30 @@ class MemoryStore:
                 "occurs; report fired rules via event_fired)\n\n"
                 + "\n\n".join(e.render().strip() for e in rules))
 
+    def event_rule_verdicts_block(self, history: list[dict],
+                                  player_input: str) -> str:
+        """D-260 lane (b) (Issue #127) : le bloc CANDIDAT du tour — jamais
+        `event_rules_block()` entier (20 060 chars constants mesurés, I-158,
+        `docs/mesure-i158-director-deux-corps.md`). Une règle avec
+        `triggers_all` ne devient candidate que si son déclencheur machine
+        matche le haystack du tour (même assiette que `haystack` ci-dessus
+        dans `assemble()` : historique récent + entrée joueur) ; `triggers_not`
+        l'écarte ; une règle SANS déclencheur machine (titre en langage
+        naturel seul, cas des saves existantes) reste un candidat PERMANENT —
+        la sélection par code n'improvise jamais depuis la prose (D-119), le
+        jugement (une règle candidate n'est pas une règle tirée) reste au
+        Director (D-078/I-111). Même framing Director-only que
+        `event_rules_block()`."""
+        haystack = (" ".join(t.get("text", "") for t in history)
+                   + " " + player_input).lower()
+        rules = [e for e in self.event_rules()
+                if trigger_gate(e, haystack, permanent_if_no_triggers=True)]
+        if not rules:
+            return ""
+        return ("# SCENARIO EVENT RULES (enforce these when their condition "
+                "occurs; report fired rules via event_fired)\n\n"
+                + "\n\n".join(e.render().strip() for e in rules))
+
     def mark_event_consumed(self, slug: str, consumed: bool = True) -> bool:
         """Flip a once-rule's consumed flag (undo flips it back)."""
         for e in self.entries("events.md"):
@@ -1712,6 +1736,24 @@ def trigger_hit(tok: str, haystack: str) -> bool:
         return False
     return re.search(r"(?<!\w)" + re.escape(tok) + r"(?!\w)", haystack) \
         is not None
+
+
+def trigger_gate(e: Entry, haystack: str, *,
+                  permanent_if_no_triggers: bool = False) -> bool:
+    """D-260 : le geste commun de sélection par déclencheur machine — partagé
+    par l'assembleur position (`assembleur_position._rule_verdicts_section`,
+    lane a, Issue #125) et l'évaluateur de règles d'événement (lane b, Issue
+    #127). `triggers_not` écarte toujours l'entrée si présent. Sans
+    `triggers_all`, `permanent_if_no_triggers` tranche : False (lane a) exige
+    un déclencheur explicite ; True (lane b) traite l'absence de déclencheur
+    comme un candidat PERMANENT (titre en langage naturel seul — on ne devine
+    jamais depuis la prose, D-119)."""
+    if any(trigger_hit(tok, haystack) for tok in e.triggers_not()):
+        return False
+    reqs = e.triggers_all()
+    if not reqs:
+        return permanent_if_no_triggers
+    return all(trigger_hit(tok, haystack) for tok in reqs)
 
 
 def _strip_h1(text: str) -> str:

@@ -320,9 +320,9 @@ class Engine:
             self.store.append_turn("narrator", override)
             yield override
             return
-        messages = self._messages(
-            [], "Begin the story. Set the opening scene and place me in it.")
-        yield from self._generate_and_store(messages, on_stage)
+        opening_input = "Begin the story. Set the opening scene and place me in it."
+        messages = self._messages([], opening_input)
+        yield from self._generate_and_store(messages, [], opening_input, on_stage)
 
     def turn(self, player_input: str, on_stage=None) -> Iterator[str]:
         # I-373: route BEFORE anything else lands in the transcript. A meta
@@ -348,7 +348,8 @@ class Engine:
         self.store.append_turn("player", player_input)
         history = self.store.recent_turns(self.short_term)[:-1]
         messages = self._messages(history, player_input)
-        stored = yield from self._generate_and_store(messages, on_stage)
+        stored = yield from self._generate_and_store(
+            messages, history, player_input, on_stage)
         if not stored:
             # Model produced nothing visible (e.g. only <think>). Don't leave an
             # orphan player turn dangling in the transcript.
@@ -365,12 +366,13 @@ class Engine:
         self._pre_turn_canon = []
         self._pre_turn_events = []
         history = self.store.recent_turns(self.short_term)
-        messages = self._messages(
-            history,
+        continue_input = (
             "Continue the narration from exactly where it left off. Do not "
             "repeat what was already written and do not summarize — push the "
             "current scene forward with fresh action or detail.")
-        yield from self._generate_and_store(messages, on_stage)
+        messages = self._messages(history, continue_input)
+        yield from self._generate_and_store(
+            messages, history, continue_input, on_stage)
 
     def _ensure_swipes(self) -> dict | None:
         """Swipe state for the LAST narrator turn (ST-02). Seeds from the current
@@ -524,13 +526,17 @@ class Engine:
         v = self.cfg.generation.get("start_reply_with", "")
         return v if isinstance(v, str) else ""    # ignore a malformed non-string
 
-    def _generate_and_store(self, messages, on_stage=None) -> "Iterator[str]":
+    def _generate_and_store(self, messages, history, player_input,
+                            on_stage=None) -> "Iterator[str]":
         """Stream a narrator turn. The reply prefix (ST-22) is injected lazily — just
         before the first real prose chunk — so it only appears when a turn is actually
         produced. An empty/sidecar-only turn stores nothing AND shows nothing, so the
-        streamed text always equals the stored text. Returns True iff a turn stored."""
+        streamed text always equals the stored text. Returns True iff a turn stored.
+        `history`/`player_input` : même assiette que `_messages()`, servie à
+        l'évaluateur de règles d'événement (D-260 lane b, #127) — jamais
+        `messages` ré-analysé, pour rester indépendant de ses augmentations."""
         prefix = self._reply_prefix()
-        inner = self._produce(messages, prefix, on_stage)
+        inner = self._produce(messages, history, player_input, prefix, on_stage)
         if not prefix:
             return (yield from inner)     # no prefix -> unchanged passthrough
         sent = False
@@ -552,7 +558,8 @@ class Engine:
                 sent = True
             yield piece
 
-    def _produce(self, messages, prefix, on_stage=None) -> "Iterator[str]":
+    def _produce(self, messages, history, player_input, prefix,
+                on_stage=None) -> "Iterator[str]":
         """The generation body (all three paths). Yields raw prose chunks and prepends
         `prefix` to the STORED narration so storage matches what was streamed."""
         rpg_on = self.store.rpg_enabled()
@@ -560,8 +567,11 @@ class Engine:
         trinity_events = None
         if self.trinity is None:
             # Single-brain: the one model IS the logic agent, so it gets the
-            # event rules (in quad mode only the Director sees them).
-            ev_block = self.store.event_rules_block()
+            # event rules (in quad mode only the Director sees them). D-260
+            # lane (b) (#127) : bloc CANDIDAT du tour, jamais l'ensemble
+            # constant (I-158) — event_rules_block() reste disponible ailleurs
+            # (pont MCP get_event_rules, etc.), inchangé.
+            ev_block = self.store.event_rule_verdicts_block(history, player_input)
             if ev_block and messages:
                 messages = [{**messages[0],
                              "content": messages[0]["content"] + "\n\n" + ev_block
@@ -581,7 +591,8 @@ class Engine:
             chunks: list[str] = []
             trinity_events = yield from self.trinity.generate(
                 messages, rpg_on, on_stage, chunks, skip_logic=simple,
-                event_rules=self.store.event_rules_block())
+                event_rules=self.store.event_rule_verdicts_block(
+                    history, player_input))
             narration = "".join(chunks).strip()
         elif self.use_tool:
             raw = self._generate_with_tool(messages)
