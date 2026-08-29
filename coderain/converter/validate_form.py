@@ -136,8 +136,10 @@ def validate_form(partition, partition_dir=None) -> list[str]:
             # (la tension cite la source) — on ne signale que si c'est un secret
             pass
 
-    # 9) D-216 §2 ressource générique — ancrage node_id/page, type carte, ancres
+    # 9) D-216 §2 ressource générique — ancrage node_id/page, type, ancres
     #    Toute ressource cite sa matière ; si node_id présent il existe (zéro dangling).
+    from coderain.converter.schemas import (RESSOURCE_TYPES,
+        RESSOURCE_TYPES_SOUS_TYPE_OBLIGATOIRE, RESSOURCE_ETATS)
     ress_list = (getattr(partition, "ressources", []) or []) + (getattr(partition, "resources", []) or [])
     seen = set()
     uniq_ress = []
@@ -145,14 +147,20 @@ def validate_form(partition, partition_dir=None) -> list[str]:
         if r.id not in seen:
             seen.add(r.id)
             uniq_ress.append(r)
+    secret_ids_ress = {s.id for s in partition.secrets}
+    # D-252.1 : porteur_ou_emplacement est un id de record OU de node —
+    # espace de résolution volontairement plus étroit que `ids` (qui inclut
+    # aussi secrets/tensions/personnages/fenêtres, hors périmètre du contrat)
+    porteur_ids = {n.id for n in partition.nodes} | {r.id for r in partition.records}
     for r in uniq_ress:
         if getattr(r, "node_id", None) and r.node_id not in ids:
             errors.append(f"ressource {r.id}: node_id inconnu {r.node_id} "
                           "(D-216 §2 — ancrage node/page obligatoire)")
         if not getattr(r, "anchors", []):
             errors.append(f"ressource {r.id}: sans ancre source (D-216 §2)")
-        if getattr(r, "type_ressource", "") not in ("carte",):
-            errors.append(f"ressource {r.id}: type {getattr(r, 'type_ressource', '')!r} not in ('carte',)")
+        if getattr(r, "type_ressource", "") not in RESSOURCE_TYPES:
+            errors.append(f"ressource {r.id}: type {getattr(r, 'type_ressource', '')!r} "
+                          f"not in {RESSOURCE_TYPES}")
         if not getattr(r, "node_id", None) and not getattr(r, "page", None):
             errors.append(f"ressource {r.id}: ancrage manquant — node_id ou page requis (fiche P-CONV-3)")
         if getattr(r, "page", None) is not None:
@@ -162,6 +170,25 @@ def validate_form(partition, partition_dir=None) -> list[str]:
                     errors.append(f"ressource {r.id}: page hors bornes {pg}")
             except Exception:
                 errors.append(f"ressource {r.id}: page invalide {r.page!r}")
+        # D-252.1 : document/illustration exigent sous_type
+        if getattr(r, "type_ressource", "") in RESSOURCE_TYPES_SOUS_TYPE_OBLIGATOIRE \
+                and not getattr(r, "sous_type", ""):
+            errors.append(f"ressource {r.id}: sous_type obligatoire pour le "
+                          f"type {r.type_ressource!r} (D-252.1)")
+        # porteur_ou_emplacement : id de record ou node — zéro-dangling
+        porteur = getattr(r, "porteur_ou_emplacement", None)
+        if porteur and porteur not in porteur_ids:
+            errors.append(f"ressource {r.id}: porteur_ou_emplacement inconnu "
+                          f"{porteur} (D-252.1 — zéro dangling)")
+        # condition_remise_secret_id : doit pointer un Secret existant
+        cond = getattr(r, "condition_remise_secret_id", None)
+        if cond and cond not in secret_ids_ress:
+            errors.append(f"ressource {r.id}: condition_remise_secret_id "
+                          f"inconnu {cond} — ne pointe aucun Secret (D-252.1)")
+        # etat de remise : valeur connue
+        etat = getattr(r, "etat", "non_remis")
+        if etat not in RESSOURCE_ETATS:
+            errors.append(f"ressource {r.id}: etat {etat!r} not in {RESSOURCE_ETATS}")
 
     # 10) I-341/D-219 personnage + destinée — jalons flous, rattachement, D-129
     for pers in getattr(partition, "personnages", []) or []:
