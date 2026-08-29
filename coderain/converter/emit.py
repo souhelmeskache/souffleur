@@ -30,6 +30,15 @@ def write_partition(partition, out_dir: Path) -> Path:
                 raise ValueError(
                     f"record {r.id}: tokens_initial pose vers le node "
                     f"inconnu {pose['node_id']} — zéro dangling autorisé")
+    # garde zéro-dangling sorts_connus (D-252.3) : tout sort cité par un
+    # creature/pnj lanceur existe comme record classe `sort` de la partition
+    sort_ids = {r.id for r in partition.records if r.classe == "sort"}
+    for r in partition.records:
+        for sid in getattr(r, "sorts_connus", []) or []:
+            if sid not in sort_ids:
+                raise ValueError(
+                    f"record {r.id}: sorts_connus référence l'id inconnu ou "
+                    f"non-sort {sid} — zéro dangling autorisé (D-252.3)")
     # garde D-218 contrat traversant : toute tension hors codes ⇒ erreur emit
     from coderain.converter.schemas import TENSION_CODES
     for t in getattr(partition, "tensions", []) or []:
@@ -121,7 +130,9 @@ def write_partition(partition, out_dir: Path) -> Path:
                             **({"tokens_initial": r.tokens_initial}
                                if getattr(r, "tokens_initial", None) else {}),
                             **({"persistent_attrs": r.persistent_attrs}
-                               if getattr(r, "persistent_attrs", None) else {})})
+                               if getattr(r, "persistent_attrs", None) else {}),
+                            **({"sorts_connus": r.sorts_connus}
+                               if getattr(r, "sorts_connus", None) else {})})
         body = json.dumps(r.stats_5e, ensure_ascii=False, indent=1)
         (out_dir / "records" / f"{r.id}.md").write_text(fm + body + "\n",
                                                         encoding="utf-8")
@@ -218,7 +229,9 @@ def write_partition(partition, out_dir: Path) -> Path:
                                             r.tokens_initial]}
                         if getattr(r, "tokens_initial", None) else {}),
                      **({"persistent_attrs": r.persistent_attrs}
-                        if getattr(r, "persistent_attrs", None) else {})}
+                        if getattr(r, "persistent_attrs", None) else {}),
+                     **({"sorts_connus": r.sorts_connus}
+                        if getattr(r, "sorts_connus", None) else {})}
                     for r in partition.records],
         "tables": [{"id": t.id, "de": t.de} for t in partition.tables],
         "secrets": [{"id": s.id, "statut": s.statut} for s in partition.secrets],
