@@ -396,7 +396,7 @@ def load_save(slug: str) -> dict:
         return {"error": f"Save not found: {slug}",
                 "available": [s.get("slug") for s in lib.saves.list()]}
 
-    _store = lib.saves.store(slug)
+    _store = lib.saves.open(slug)  # session-open snapshot (I-148/ESC-4)
     _slug = slug
     _load_rpg()          # install ranked skills before anything can roll
 

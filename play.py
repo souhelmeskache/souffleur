@@ -119,7 +119,7 @@ def choose_save(lib: Library, cfg=None) -> str:
 
 
 def _open(lib: Library, cfg, slug: str):
-    store = lib.saves.store(slug)
+    store = lib.saves.open(slug)  # session-open snapshot (I-148/ESC-4)
     engine = Engine(cfg, store)
     print(f"\n>>> {store.title}"
           f"{'  [RPG]' if store.rpg_enabled() else ''}\n")
