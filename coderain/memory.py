@@ -107,7 +107,9 @@ KIND_FILE = {
 # se referme vers ADVENTURE_FILE (`summarizer.fermer_scenario`), et sert de
 # lecteur unique à l'assembleur par position
 # (`assembleur_position._world_and_queue_section`) — les deux modules
-# partagent le nom depuis ici pour ne pas s'importer l'un l'autre.
+# partagent le nom depuis ici : `summarizer` importe `assembleur_position`
+# (pas l'inverse), donc ce module neutre évite de faire dépendre
+# `assembleur_position` de `summarizer` pour ce seul nom de fichier.
 SCENARIO_STAGE_FILE = "memory/scenario-courant.md"
 ADVENTURE_FILE = "memory/aventure.md"
 # Files a custom lore type may NEVER shadow: built-in registries, rules, and
