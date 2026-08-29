@@ -18,19 +18,13 @@ jobs:
           python-version: '3.14'
       - name: Dependances
         run: pip install -r requirements.txt
-      - name: Suites de tests (trinity_test exclu — I-270)
+      - name: Suites de tests
         shell: pwsh
         run: |
           $env:PYTHONUTF8 = '1'
           $env:PYTHONIOENCODING = 'utf-8'
           $failed = @()
-          $skipped = @()
           Get-ChildItem tests -Filter *.py | Sort-Object Name | ForEach-Object {
-            if ($_.Name -eq 'trinity_test.py') {
-              $skipped += $_.Name
-              Write-Host "=== SKIP $($_.Name) — I-270 : profil de connexion absent de config.yaml, echec preexistant au CI (le runner local tourne sans pytest ; chaque suite est un script autonome) ==="
-              return
-            }
             Write-Host "=== $($_.Name) ==="
             $out = & python $_.FullName 2>&1
             $out | ForEach-Object { Write-Host $_ }
@@ -39,7 +33,6 @@ jobs:
               Add-Content -Path ci-log.txt -Value "=== ECHEC $($_.Name) ===$([Environment]::NewLine)$($out -join [Environment]::NewLine)"
             }
           }
-          if ($skipped) { Write-Host "SKIPPED: $($skipped -join ', ')" }
           if ($failed) { Write-Host "FAILED: $($failed -join ', ')"; exit 1 }
           Write-Host "ALL SUITES PASSED"
       - name: Artefact log d'echec
