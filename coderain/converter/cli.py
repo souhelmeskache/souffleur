@@ -89,6 +89,10 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
 
     partition = Partition(manifest)
     gamebook_mesures: dict | None = None
+    # Issue #182 (EXTRACTION) : avertissements de caractérisation rendu_md —
+    # matériau tiers sans lexique de ton reconnu (D-102/I-111) ; remontés
+    # en infos (non bloquant, cf. exceptions.build).
+    rendu_exceptions: list[str] = []
     if scan is not None:
         gamebook_mesures = s1_local.build_gamebook_partition(scan, text,
                                                              partition)
@@ -97,7 +101,10 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
         id_by_num = {int(u.titre[1:]): u.uid for u in units
                      if u.uid.startswith("para-")}
         for u in units:
-            partition.nodes.append(s1_local.node_for_unit(u, text, id_by_num))
+            node, warn = s1_local.node_for_unit(u, text, id_by_num)
+            partition.nodes.append(node)
+            if warn:
+                rendu_exceptions.append(warn)
 
     # authored records: judgment supplied as records-auteur.json in the corpus
     # home (or next to the source); anchors computed here by locating the
@@ -160,6 +167,12 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
     # bloc, à froid, from scenario-auteur.json in the corpus home — CONVERTED
     # from source material, never invented (I-111); validation happens at
     # attachment (schemas) and at report time (validate_form.scenario_report)
+    #
+    # rendu_md (Issue #182, véhicule commun) : même entrée `scenarios[]`,
+    # clé `rendu_md` à côté d'`objectif_md` — CONTRAT DE CHAMP fixe pour
+    # l'issue PRODUCTION Auteur, qui écrira dans cette même clé. Texte au
+    # présent/impératif, une couleur (ton/rythme), jamais une séquence
+    # (garde anti-rail D-065 côté Node, non dupliquée ici).
     for candidate in (CORPUS / "scenario-auteur.json",
                       src.parent / "scenario-auteur.json"):
         if candidate.exists():
@@ -176,7 +189,8 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
                     node.attach_scenario(
                         entry.get("objectif_md", ""),
                         entry.get("debouches") or None,
-                        entry.get("heritage") or None)
+                        entry.get("heritage") or None,
+                        entry.get("rendu_md", ""))
                 except (KeyError, ValueError, TypeError) as e:
                     adventure_rule_exceptions.append(f"scenario {nid}: {e}")
             break
@@ -206,7 +220,7 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
                        units, [], len(text)),
                    validate_fidelity.mass_report(text, units, partition),
                    [], merged_adventure_exceptions, 0,
-                   infos=scen["exceptions"],
+                   infos=scen["exceptions"] + rendu_exceptions,
                    mesures_scenario=scen["mesures"])
     rp = write_report(report, out_dir / "rapport-conversion.json")
     (out_dir / "rapport-conversion.md").write_text(render_md(report),
