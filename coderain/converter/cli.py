@@ -173,6 +173,15 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
     # l'issue PRODUCTION Auteur, qui écrira dans cette même clé. Texte au
     # présent/impératif, une couleur (ton/rythme), jamais une séquence
     # (garde anti-rail D-065 côté Node, non dupliquée ici).
+    #
+    # Écriture côté Auteur (Issue #187, BOUCLAGE) : ce fichier n'est encore
+    # que LU ici — `coderain/converter/rendu_auteur.py::ecrire_rendu_auteur`
+    # est l'appelant hors périmètre de cli.py qui l'écrit, en DEUX
+    # conversions (le node_id n'existe qu'après la première) : convertir une
+    # fois -> `ecrire_rendu_auteur(declaration_rendu, partition, [CORPUS /
+    # "scenario-auteur.json", src.parent / "scenario-auteur.json"])` fusionne
+    # le rendu_md de l'Auteur dans ce fichier -> reconvertir pour que ce
+    # bloc le pose sur les nodes (voir docstring de tête de ce module).
     for candidate in (CORPUS / "scenario-auteur.json",
                       src.parent / "scenario-auteur.json"):
         if candidate.exists():

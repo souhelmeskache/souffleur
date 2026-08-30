@@ -180,7 +180,14 @@ def vers_scenario_auteur(declaration_rendu: tuple[dict, ...],
     l'appelant de la conversion (humain ou lane future) invoque une fois la
     correspondance scène -> node_id établie, jamais une résolution inventée
     ici. Une scène sans correspondance connue dans `node_id_par_scene` est
-    ignorée, jamais forcée sur un node au hasard."""
+    ignorée, jamais forcée sur un node au hasard.
+
+    L'appelant concret (Issue #187, BOUCLAGE) est
+    `coderain.converter.rendu_auteur.ecrire_rendu_auteur` : il construit
+    `node_id_par_scene` depuis une partition CONVERTIE (par `Node.titre`),
+    appelle cette fonction, puis fusionne le résultat dans
+    `scenario-auteur.json` — voir la docstring de tête de ce module-là pour
+    le flux en deux conversions."""
     return [{"node_id": node_id_par_scene[entry["scene"]],
             "rendu_md": entry["rendu_md"]}
            for entry in declaration_rendu
