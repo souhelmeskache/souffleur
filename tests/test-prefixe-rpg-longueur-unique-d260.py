@@ -134,7 +134,10 @@ sys_1, sys_2 = msgs_1[0]["content"], msgs_2[0]["content"]
 
 state = store.world_state()
 loc = state["location"]
-rpg_rules = store.read("rpg-rules.md").strip()
+# D-260 post-mesure (a) (Issue #162) : `rpg_rules` servi par le moteur est
+# désormais le socle (+ section Level-ups sur déclencheur), pas le fichier
+# brut — `_rpg_rules_served()` est la même fonction que `_messages()` appelle.
+rpg_rules = engine._rpg_rules_served()
 prefix_1 = ap.stable_prefix(ap.build_sections(
     partition_dir, store, loc, h1, "Je pousse la porte.", rpg_on=True,
     rpg_rules=rpg_rules, response_length=length_directive))

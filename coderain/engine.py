@@ -17,6 +17,7 @@ from . import assembleur_position
 from . import features
 from . import input_processor
 from . import sidecar as sidecar_mod
+from . import templates
 from . import validator as validator_mod
 from .config import Config, context_budget
 from .input_processor import ProcessedInput
@@ -187,6 +188,30 @@ class Engine:
         partition = data.get("partition")
         return Path(partition) if partition else None
 
+    def _rpg_rules_served(self) -> str:
+        """D-260 post-mesure (a) (Issue #162, suite de l'arbitrage #144) :
+        `rpg-rules.md` se découpe en SOCLE toujours servi + section
+        « Level-ups and grants » servie seulement sur déclencheur d'état
+        vérifiable par le moteur (`rpg.pending_grant > 0` — même info que
+        "LEVEL-UP PENDING" dans `rpg_mod.context_block`, jamais du texte
+        parsé côté modèle). `templates.split_rpg_rules` porte le garde-fou de
+        l'arbitrage : toute section sans déclencheur identifiable reste au
+        socle, et un fichier édité par l'utilisateur sans l'en-tête attendu
+        retombe sur "texte entier au socle" — jamais une règle silencieusement
+        perdue. Les deux appelants (`_messages`/partition et `_augment_rpg`/
+        non-partition) passent par ici pour ne jamais diverger."""
+        text = self.store.read("rpg-rules.md").strip()
+        socle, levelup = templates.split_rpg_rules(text)
+        if not levelup:
+            return socle
+        try:
+            pending = int(self.store.rpg_state().get("pending_grant") or 0)
+        except (TypeError, ValueError):
+            pending = 0
+        if pending > 0:
+            return (socle.rstrip() + "\n\n" + levelup).strip()
+        return socle
+
     def _messages(self, history, player_input):
         state = self.store.world_state()
         partition_dir = (self._partition_dir()
@@ -206,8 +231,11 @@ class Engine:
             # servir après les sections volatiles comme le faisait
             # `_augment_rpg`/`_augment_style` sur ce chemin. Pur correctif
             # d'ordre : même contenu, même formulation, ailleurs dans le
-            # paquet — voir docs/mesure-d260-boucle-neuve.md.
-            rpg_rules = self.store.read("rpg-rules.md").strip() if rpg_on else ""
+            # paquet — voir docs/mesure-d260-boucle-neuve.md. D-260 post-mesure
+            # (a) (Issue #162) : ce contenu est désormais le socle (+ section
+            # Level-ups sur déclencheur, `_rpg_rules_served`) plutôt que le
+            # fichier entier — voir cette méthode.
+            rpg_rules = self._rpg_rules_served() if rpg_on else ""
             messages = assembleur_position.assemble(
                 partition_dir, self.store, state, history, player_input,
                 scenes_tail=self.scenes_tail, char_sheet=char_sheet,
@@ -347,10 +375,13 @@ class Engine:
         character sheet to the system prompt. No-op (and zero overhead) when off.
         `include_sheet=False` (D-260 branchement, Issue #128) : le chemin partition
         a déjà passé `rpg_mod.context_block(...)` à l'assembleur position comme
-        section volatile dédiée — ne jamais servir la fiche perso deux fois."""
+        section volatile dédiée — ne jamais servir la fiche perso deux fois.
+        The rules text itself comes from `_rpg_rules_served()` (D-260 post-mesure
+        (a), Issue #162) : socle + section « Level-ups and grants » only when a
+        grant is pending, not the file wholesale anymore."""
         if not messages or not self.store.rpg_enabled():
             return messages
-        rules = self.store.read("rpg-rules.md").strip()
+        rules = self._rpg_rules_served()
         # Quad mode narrates check outcomes the same turn they resolve, so the
         # "narrate this now" nudge would cause a re-narration next turn.
         sheet = (self.rpg_mod.context_block(

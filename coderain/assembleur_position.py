@@ -16,15 +16,18 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 déclencheur automatique)
   4. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
                 porteur est présent (routage `hidden` conservé, D-019)
-  5. STABLE   — règles RPG (`rpg-rules.md` entier, si actif) + directive
-                `response_length` (D-260 post-mesure, Issue #144, arbitrage
-                (b)) : CONSTANTES par story/session, jamais liées à la
-                position ni au tour — rapprochées ici du préfixe stable
-                plutôt que servies après les sections volatiles ci-dessous
-                (correctif d'ordre pur : `engine.py::_augment_rpg`/
-                `_augment_style` composaient ce contenu APRÈS elles avant ce
-                correctif, cassant le préfixe cachable pour rien —
-                `docs/mesure-d260-boucle-neuve.md`)
+  5. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
+                section « Level-ups and grants » sur déclencheur d'état,
+                `engine.py::_rpg_rules_served`, D-260 post-mesure (a), Issue
+                #162) + directive `response_length` (D-260 post-mesure, Issue
+                #144, arbitrage (b)) : CONSTANTES par story/session (pas liées
+                à la position ni au tour ; la section Level-ups dépend de
+                `rpg.pending_grant`, un état de session, pas du tour) —
+                rapprochées ici du préfixe stable plutôt que servies après les
+                sections volatiles ci-dessous (correctif d'ordre pur :
+                `engine.py::_augment_rpg`/`_augment_style` composaient ce
+                contenu APRÈS elles avant ce correctif, cassant le préfixe
+                cachable pour rien — `docs/mesure-d260-boucle-neuve.md`)
   6. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
                 contre l'état courant) — jamais `event_rules_block()` entier
   7. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
@@ -262,9 +265,10 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     donc son paquet reste octet-identique.
 
     `rpg_rules`/`response_length` (Issue #144, arbitrage (b)) : fournis par
-    l'appelant (`engine.py`, contenu inchangé — `rpg-rules.md` lu tel quel,
-    directive `response_length` inchangée), servis ici comme sections
-    STABLES (chaîne vide = section omise) plutôt qu'ajoutés après les
+    l'appelant (`engine.py::_rpg_rules_served`/`_response_length_directive` —
+    depuis Issue #162, `rpg_rules` est déjà le socle + section Level-ups
+    résolue selon `rpg.pending_grant`, pas le fichier brut), servis ici comme
+    sections STABLES (chaîne vide = section omise) plutôt qu'ajoutés après les
     sections volatiles par `engine.py::_augment_rpg`/`_augment_style`."""
     partition_dir = Path(partition_dir)
     sections = [Section("stable", "Rôle (Director)",
