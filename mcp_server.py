@@ -2408,6 +2408,37 @@ _AUTEUR_VERDICTS_VALIDES = ("conforme", "non-conforme", "absent")
 _AUTEUR_CORRESPONDANCES_VALIDES = ("conforme", "non-conforme")
 
 
+# Copie de ecrivain_module._valider_declaration_rendu (Issue #183,
+# PRODUCTION) : garde de forme sur declaration_rendu — champ OPTIONNEL,
+# liste vide toujours acceptée. La garde anti-rail D-065 elle-même (une
+# couleur, jamais un script) reste au socle (Node._check_rendu_md), pas
+# dupliquée ici, même choix que le converter (#182).
+def _auteur_valider_declaration_rendu(declaration) -> tuple[list[dict], list[dict]]:
+    if not isinstance(declaration, list):
+        return [], [{"champ": "declaration_rendu",
+                     "raison": "declaration_rendu n'est pas une liste"}]
+    validees: list[dict] = []
+    rejets: list[dict] = []
+    for i, entry in enumerate(declaration):
+        if not isinstance(entry, dict):
+            rejets.append({"champ": "declaration_rendu",
+                           "raison": f"entrée {i} n'est pas un objet"})
+            continue
+        scene = str(entry.get("scene", "")).strip()
+        rendu_md = str(entry.get("rendu_md", "")).strip()
+        if not scene:
+            rejets.append({"champ": "declaration_rendu",
+                           "raison": f"entrée {i} : 'scene' absente ou vide"})
+            continue
+        if not rendu_md:
+            rejets.append({"champ": "declaration_rendu",
+                           "raison": f"entrée {i} (scène {scene!r}) : "
+                                    "'rendu_md' absent ou vide"})
+            continue
+        validees.append({"scene": scene, "rendu_md": rendu_md})
+    return validees, rejets
+
+
 def _auteur_normaliser_espaces(s: str) -> str:
     """Copie de retour2._normaliser_espaces : tolérance espaces pour la
     vérification par inclusion de sous-chaîne."""
@@ -2641,7 +2672,8 @@ def auteur_bloc_cadre(acte_id: str, regime: str, actes_path: str = "") -> dict:
 
 @mcp.tool()
 def auteur_valider_ecriture(module_md: str, declaration_formes_json: str,
-                            note_intention_md: str) -> dict:
+                            note_intention_md: str,
+                            declaration_rendu_json: str = "") -> dict:
     """Enchaîne les gardes CODE sur ce que la session vient d'écrire, APRÈS
     un appel `auteur_bloc_cadre` (qui pose les objectifs du régime en
     contexte de session).
@@ -2651,7 +2683,16 @@ def auteur_valider_ecriture(module_md: str, declaration_formes_json: str,
     vocabulaire ou justification vide REFUSÉS). Refus motivés, jamais
     silencieux : {"ok": false, "rejets": [...]}.
 
+    `declaration_rendu_json` (Issue #183, PRODUCTION) : OPTIONNEL — une
+    couleur de rendu par scène (`[{"scene", "rendu_md"}, ...]`), présent/
+    impératif, jamais un enchaînement d'événements. Vide -> `[]`, aucun
+    rejet. Présent -> chaque entrée exige `scene`/`rendu_md` non vides
+    (forme seulement ; la garde anti-rail D-065 elle-même reste au socle,
+    `Node._check_rendu_md`, constatée à la conversion — pas dupliquée ici,
+    même choix que le converter #182).
+
     Sur garde passée : {"ok": true, "formes_validees": [...],
+    "declaration_rendu_validee": [...],
     "conformite_prompt": {"system", "payload", "objectifs"}} — le PROMPT de
     conformité du retour 2 (D-262/D-128), prêt à l'emploi. Le jugement de
     conformité (le texte remplit-il chaque objectif ?) reste un jugement LLM
@@ -2683,10 +2724,21 @@ def auteur_valider_ecriture(module_md: str, declaration_formes_json: str,
     if not isinstance(declaration, list):
         declaration = []
 
+    try:
+        declaration_rendu = (json.loads(declaration_rendu_json)
+                             if declaration_rendu_json else [])
+    except json.JSONDecodeError as e:
+        rejets.append({"champ": "declaration_rendu_json",
+                       "raison": f"JSON invalide : {e}"})
+        return {"ok": False, "rejets": rejets}
+
     vocabulaire = formes_mod.charger_vocabulaire()
     validees, rejets_formes = formes_mod.valider_declaration(declaration, vocabulaire)
     for r in rejets_formes:
         rejets.append({"champ": "declaration_formes", **r})
+
+    rendu_valide, rejets_rendu = _auteur_valider_declaration_rendu(declaration_rendu)
+    rejets.extend(rejets_rendu)
 
     if rejets:
         return {"ok": False, "rejets": rejets}
@@ -2696,8 +2748,10 @@ def auteur_valider_ecriture(module_md: str, declaration_formes_json: str,
 
     _auteur_ctx = {**_auteur_ctx, "module_md": module_md,
                    "declaration_formes": validees,
+                   "declaration_rendu": rendu_valide,
                    "texte_normalise": _auteur_normaliser_espaces(module_md)}
     return {"ok": True, "formes_validees": validees,
+            "declaration_rendu_validee": rendu_valide,
             "conformite_prompt": {"system": _AUTEUR_RETOUR2_SYS,
                                   "payload": payload, "objectifs": objectifs}}
 
