@@ -47,6 +47,16 @@ _RESSOURCE_ETAT_TRANSITIONS = {"non_remis": {"remis"}, "remis": set()}
 # (passé/intention seuls — jamais futur ni événement)
 JALON_INTERDITS_FUTUR = ("fera", "ferait", "futur", "quand il", "lorsqu'il",
                           "il arrivera", "il adviendra", "va", "ira", "deviendra")
+# D-065 (Issue #176) : rendu_md est une COULEUR (ton, rythme, ce qu'il faut
+# faire ressentir), jamais un script — mêmes marqueurs de séquence imposée
+# que ceux bannis des jalons de destinée, complétés par les connecteurs
+# d'enchaînement d'événements typiques d'un script MJ.
+RENDU_MD_INTERDITS_SEQUENCE = ("puis ", "puis,", "puis.", "ensuite",
+                               "après quoi", "apres quoi", "après cela",
+                               "apres cela", "d'abord", "en premier lieu",
+                               "pour finir", "et alors", "le joueur fait")
+_RENDU_MD_ETAPE_RE = re.compile(r"(?:^|\n)\s*(?:\d+[.)]|étape\s*\d|etape\s*\d)",
+                                re.IGNORECASE)
 NEGATION_TYPE = "non"   # D-187: non(<atome>), une seule profondeur
 DECLENCHEUR_TYPES = ("delai", "etat", "date")                # D-182
 ISSUES_PERTURBATION = ("transplantee", "abandonnee")         # D-120 §5.1
@@ -187,14 +197,25 @@ class Node:
     porte objectif_md (`D-065` : trajectoire visée, jamais une séquence),
     debouches (`D-118` amendée : PAR QUOI on peut y aller) et heritage
     (critère `D-183` : gel ⊥ scellement). Matière source absente ⇒ rubrique
-    vide + exception signalée, jamais improvisée (`I-111`)."""
+    vide + exception signalée, jamais improvisée (`I-111`).
+
+    rendu_md (Issue #176, SOCLE — frère de objectif_md) : consigne de MJ sur
+    le TON/rendu de la scène, au présent/impératif (ex : « registre feutré ;
+    joue les silences, ne révèle rien »). Optionnelle, jamais montrée au
+    joueur, disponible à toute altitude (pas réservée à 'scenario'). Garde
+    anti-rail (`D-065`) : une consigne qui pose une séquence d'événements
+    imposée (« le joueur fait X puis Y ») est une couleur travestie en
+    script — refusée à la construction, jamais silencieusement acceptée.
+    Le SERVICE de ce champ au Director/Angle est hors périmètre de ce socle
+    (issue « service au tour » séparée)."""
 
     def __init__(self, nid: str, type_: str, titre: str, corps_md: str,
                  altitude: str, liens: list[dict] | None = None,
                  anchors: list[tuple[int, int]] | None = None,
                  charniere_sortie: dict | None = None,
                  objectif_md: str = "", debouches: list[dict] | None = None,
-                 heritage: list[dict] | None = None):
+                 heritage: list[dict] | None = None,
+                 rendu_md: str = ""):
         check_id(nid, "node")
         if type_ not in NODE_TYPES:
             raise ValueError(f"node {nid}: type {type_!r} not in {NODE_TYPES}")
@@ -222,7 +243,28 @@ class Node:
                     f"node {nid}: rubriques scénario exigent altitude "
                     "'scenario' (fiche SCÉNARIO §1)")
             self._set_scenario(objectif_md, debouches, heritage)
+        self.rendu_md = self._check_rendu_md(rendu_md, nid)
         self.anchors = [(int(a), int(b)) for a, b in anchors]
+
+    @staticmethod
+    def _check_rendu_md(rendu_md: str, nid: str) -> str:
+        """Garde anti-rail (D-065, Issue #176) : rendu_md est une couleur
+        (ton/rythme), jamais un script — un enchaînement d'événements
+        imposé est refusé à la construction, pas signalé après coup."""
+        rendu_md = str(rendu_md or "")
+        bas = rendu_md.lower()
+        for marqueur in RENDU_MD_INTERDITS_SEQUENCE:
+            if marqueur in bas:
+                raise ValueError(
+                    f"node {nid}: rendu_md contient {marqueur!r} — pose une "
+                    "séquence d'événements imposée, jamais une couleur "
+                    "(D-065 : ton/rythme seuls, pas un script)")
+        if _RENDU_MD_ETAPE_RE.search(rendu_md):
+            raise ValueError(
+                f"node {nid}: rendu_md contient une liste d'étapes numérotée "
+                "— pose une séquence d'événements imposée, jamais une "
+                "couleur (D-065)")
+        return rendu_md
 
     def _set_scenario(self, objectif_md, debouches, heritage) -> None:
         seen: set[str] = set()

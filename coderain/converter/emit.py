@@ -132,6 +132,11 @@ def write_partition(partition, out_dir: Path) -> Path:
                                if getattr(n, "debouches", []) else {}),
                             **({"heritage": n.heritage}
                                if getattr(n, "heritage", []) else {}),
+                            # Issue #176 (SOCLE) : consigne de ton/rendu MJ,
+                            # jamais montrée au joueur — survit à l'écriture
+                            # comme les autres rubriques du node.
+                            **({"rendu_md": n.rendu_md}
+                               if getattr(n, "rendu_md", "") else {}),
                             "anchors": n.anchors})
         (out_dir / "nodes" / f"{n.id}.md").write_text(fm + n.corps_md + "\n",
                                                       encoding="utf-8")
