@@ -154,6 +154,33 @@ assert "TEXTE À JUGER" in prompt["payload"] and MODULE_MD in prompt["payload"]
 assert prompt["objectifs"] == mcp_server._auteur_ctx["objectifs"]
 assert mcp_server._auteur_ctx["module_md"] == MODULE_MD
 assert mcp_server._auteur_ctx["declaration_formes"] == out2d["formes_validees"]
+assert out2d["declaration_rendu_validee"] == []
+assert mcp_server._auteur_ctx["declaration_rendu"] == []
+
+section("2e) auteur_valider_ecriture : declaration_rendu_json -- couleur "
+       "par scène, optionnelle (Issue #183)")
+out2e = mcp_server.auteur_valider_ecriture(
+    MODULE_MD,
+    json.dumps([{"id": "propp-01",
+                "justification": "l'éloignement de la garde ouvre la route"}]),
+    "Note d'intention fabriquée.",
+    json.dumps([{"scene": "Scène -- la garde de la passe",
+                "rendu_md": "registre urgent ; presse le rythme"}]))
+assert out2e["ok"] is True
+assert out2e["declaration_rendu_validee"] == [
+    {"scene": "Scène -- la garde de la passe",
+     "rendu_md": "registre urgent ; presse le rythme"}]
+assert mcp_server._auteur_ctx["declaration_rendu"] == out2e["declaration_rendu_validee"]
+
+section("2f) auteur_valider_ecriture : declaration_rendu_json malformée -- "
+       "'scene' vide refusée, jamais silencieuse")
+out2f = mcp_server.auteur_valider_ecriture(
+    MODULE_MD,
+    "[]",
+    "Note d'intention fabriquée.",
+    json.dumps([{"scene": "", "rendu_md": "registre urgent"}]))
+assert out2f["ok"] is False
+assert any("'scene' absente ou vide" in r["raison"] for r in out2f["rejets"]), out2f
 
 # ------------------------------------------------ section 3 (verdicts) ------
 section("3) auteur_verdicts_conformite : sans contexte -> erreur motivée")

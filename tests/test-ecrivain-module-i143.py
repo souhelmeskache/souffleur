@@ -232,5 +232,64 @@ assert not any("engine" in ln for ln in imports), imports
 assert not any("converter" in ln for ln in imports), imports
 print("8) module autonome : aucun import de engine.py ni du convertisseur")
 
+# ============================================================
+# 9) declaration_rendu (Issue #183, PRODUCTION) : une couleur par scène,
+#    optionnelle -- absente -> declaration_rendu vide, aucune régression
+# ============================================================
+rapport = ecrire_module(ACTE, "pont", STORE, StubLLM([
+    ECRITURE_OK,
+    {"verdicts": [_verdict_conforme("raccord", "ta dette n'est pas la tienne")],
+     "verdicts_formes": [_verdict_forme_conforme("propp-08",
+                         "ta dette n'est pas la tienne")]},
+]))
+assert rapport.statut == "pret", rapport.to_dict()
+assert rapport.declaration_rendu == ()
+print("9) declaration_rendu absente -> tuple vide, aucune régression")
+
+# ---- 9b) declaration_rendu fournie -- couleur par scène portée jusqu'au rapport
+ECRITURE_AVEC_RENDU = {
+    **ECRITURE_OK,
+    "declaration_rendu": [{"scene": "Scène -- le campement des cendres",
+                           "rendu_md": "registre feutré ; joue les silences, "
+                                      "ne révèle rien"}],
+}
+rapport = ecrire_module(ACTE, "pont", STORE, StubLLM([
+    ECRITURE_AVEC_RENDU,
+    {"verdicts": [_verdict_conforme("raccord", "ta dette n'est pas la tienne")],
+     "verdicts_formes": [_verdict_forme_conforme("propp-08",
+                         "ta dette n'est pas la tienne")]},
+]))
+assert rapport.statut == "pret", rapport.to_dict()
+assert rapport.declaration_rendu == (
+    {"scene": "Scène -- le campement des cendres",
+     "rendu_md": "registre feutré ; joue les silences, ne révèle rien"},)
+print("9b) declaration_rendu fournie -> couleur par scène portée jusqu'au rapport")
+
+# ---- 9c) entrée declaration_rendu malformée (scène vide) -> échec motivé
+ECRITURE_RENDU_MALFORME = {
+    **ECRITURE_OK,
+    "declaration_rendu": [{"scene": "", "rendu_md": "registre feutré"}],
+}
+llm = StubLLM([ECRITURE_RENDU_MALFORME, ECRITURE_RENDU_MALFORME])
+rapport = ecrire_module(ACTE, "pont", STORE, llm)
+assert rapport.statut == "echec", rapport.to_dict()
+assert any("'scene' absente ou vide" in r.get("raison", "") for r in rapport.rejets), \
+    rapport.rejets
+print("9c) declaration_rendu malformée (scène vide) -> échec motivé, jamais silencieux")
+
+# ---- 9d) vers_scenario_auteur : câble la couleur vers le contrat de champ
+#      commun (`scenario-auteur.json` § scenarios[].rendu_md, Issue #182)
+#      une fois le node_id connu -- jamais de résolution inventée ici
+from coderain.ecrivain_module import vers_scenario_auteur
+entrees = vers_scenario_auteur(
+    ({"scene": "Scène -- le campement des cendres",
+      "rendu_md": "registre feutré ; joue les silences, ne révèle rien"},
+     {"scene": "scène sans correspondance", "rendu_md": "peu importe"}),
+    {"Scène -- le campement des cendres": "para-1"})
+assert entrees == [{"node_id": "para-1",
+                    "rendu_md": "registre feutré ; joue les silences, ne révèle rien"}]
+print("9d) vers_scenario_auteur : câble vers {node_id, rendu_md} -- scène "
+      "sans correspondance ignorée, jamais forcée")
+
 print("\nOK -- ecrivain_module (D-262, issue #143) : chaîne cadre->régime->"
       "formes->écriture->retour 2, une re-demande max, sortie prête pour conversion")

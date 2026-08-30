@@ -20,10 +20,16 @@ LE LLM écrit (même pattern que `selecteur.py`/`modules/trinity.py::_redirect`)
        séquence imposée · texte de module source tel que le convertisseur
        sait l'ingérer).
     3. **La sortie structurée** attendue du LLM :
-       `{module_md, declaration_formes, note_intention_md}` — la note
-       d'intention est écrite au PASSÉ et à l'INTENTION (pourquoi ces
-       choix), jamais au futur événementiel (contrainte de PROMPT ; ce
+       `{module_md, declaration_formes, note_intention_md, declaration_rendu}`
+       — la note d'intention est écrite au PASSÉ et à l'INTENTION (pourquoi
+       ces choix), jamais au futur événementiel (contrainte de PROMPT ; ce
        module ne peut pas vérifier le temps grammatical d'un texte libre).
+       `declaration_rendu` (Issue #183, PRODUCTION) est OPTIONNELLE : une
+       couleur de rendu — ton/rythme, au présent/impératif — PAR SCÈNE du
+       module écrit, jamais un enchaînement d'événements (la garde anti-rail
+       D-065 elle-même vit au socle, `Node._check_rendu_md` — constatée,
+       pas dupliquée ici, même choix que le converter #182). Absence ⇒
+       aucune scène n'en reçoit une, aucune régression.
     4. **Les gardes en cascade (code)** : `formes.valider_declaration` →
        `retour2.retour2` sur les objectifs du régime (formulés en TEXTE par
        CE module depuis l'acte, jamais un champ structuré inventé) → UNE
@@ -90,7 +96,7 @@ transversal writing constraints.
 
 Return ONLY a JSON object with exactly these fields:
 {"module_md": "...", "declaration_formes": [{"id": "...", "justification": "..."}],
- "note_intention_md": "..."}
+ "note_intention_md": "...", "declaration_rendu": [{"scene": "...", "rendu_md": "..."}]}
 
 "module_md" is the module-episode itself: scenes, places, NPCs with \
 objectives and hooks — states and potentials, never a forced sequence.
@@ -103,6 +109,15 @@ drive) — never a form used implicitly.
 INTENTION — why you made these choices, what they serve — NEVER a preview \
 of what will happen in play (it documents a decision already made, not an \
 upcoming event).
+
+"declaration_rendu" is OPTIONAL: a RENDERING COLOR per scene of module_md \
+you wrote — tone/rhythm for the game master, written in the PRESENT or \
+IMPERATIVE tense (e.g. "hushed register; play the silences, reveal \
+nothing"), never a preview of plot. "scene" identifies which scene of \
+module_md the color applies to (quote its heading/title verbatim). \
+"rendu_md" is the color itself — NEVER a sequence of imposed events, NEVER \
+a numbered list of steps: a color, not a script. Leave it out for a scene \
+that has no distinct color to add — this field is never mandatory.
 """
 
 
@@ -110,15 +125,19 @@ upcoming event).
 class ModuleEcrit:
     """La sortie structurée validée d'un tour d'écriture (D-262 §3) — jamais
     accepté sur la seule parole du LLM : `declaration_formes` a déjà passé
-    `formes.valider_declaration` quand cet objet existe."""
+    `formes.valider_declaration` quand cet objet existe. `declaration_rendu`
+    (Issue #183) a déjà passé `_valider_declaration_rendu` — une couleur par
+    scène, jamais vide quand présente, jamais garantie exhaustive (optionnelle)."""
     module_md: str
     declaration_formes: tuple[dict, ...]
     note_intention_md: str
+    declaration_rendu: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return {"module_md": self.module_md,
                 "declaration_formes": list(self.declaration_formes),
-                "note_intention_md": self.note_intention_md}
+                "note_intention_md": self.note_intention_md,
+                "declaration_rendu": list(self.declaration_rendu)}
 
 
 @dataclass(frozen=True)
@@ -126,13 +145,16 @@ class RapportEcriture:
     """Le rapport final (D-262 §5). `statut` "pret" signifie prêt POUR LA
     CONVERSION, pas converti — la conversion reste un appel séparé, hors
     périmètre de cette lane. `rejets` porte les motifs du dernier tour
-    quand `statut == "echec"` — jamais silencieux."""
+    quand `statut == "echec"` — jamais silencieux. `declaration_rendu`
+    (Issue #183) : la couleur de rendu par scène, prête à être câblée vers
+    le fichier source au contrat de champ commun (`vers_scenario_auteur`)."""
     module_md: str
     note_intention_md: str
     formes: tuple[dict, ...]
     rapport_conformite: RapportConformite | None
     statut: str
     rejets: tuple[dict, ...] = ()
+    declaration_rendu: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -143,7 +165,26 @@ class RapportEcriture:
                                    if self.rapport_conformite is not None else None),
             "statut": self.statut,
             "rejets": list(self.rejets),
+            "declaration_rendu": list(self.declaration_rendu),
         }
+
+
+def vers_scenario_auteur(declaration_rendu: tuple[dict, ...],
+                         node_id_par_scene: dict[str, str]) -> list[dict]:
+    """Câble `declaration_rendu` vers le contrat de champ commun (Issue #182,
+    EXTRACTION) : `scenario-auteur.json` § `scenarios[].rendu_md`, lu par
+    `coderain/converter/cli.py` à côté d'`objectif_md` et posé par
+    `Node.attach_scenario`. Le `node_id` de chaque scène n'est connu qu'APRÈS
+    conversion (l'appel de conversion reste hors périmètre de ce module,
+    D-262 §5 — voir docstring de tête) : cette fonction est celle que
+    l'appelant de la conversion (humain ou lane future) invoque une fois la
+    correspondance scène -> node_id établie, jamais une résolution inventée
+    ici. Une scène sans correspondance connue dans `node_id_par_scene` est
+    ignorée, jamais forcée sur un node au hasard."""
+    return [{"node_id": node_id_par_scene[entry["scene"]],
+            "rendu_md": entry["rendu_md"]}
+           for entry in declaration_rendu
+           if entry["scene"] in node_id_par_scene]
 
 
 def _bloc_regime(acte: Acte, regime: str) -> str:
@@ -214,6 +255,38 @@ def _payload_redemande(prompt_original: str, rejets: list[dict]) -> str:
               "declaration_formes, note_intention_md}.")
 
 
+def _valider_declaration_rendu(declaration) -> tuple[list[dict], list[dict]]:
+    """Garde de forme sur `declaration_rendu` (Issue #183) — champ OPTIONNEL :
+    liste vide toujours acceptée. Chaque entrée présente doit porter une
+    scène et une couleur non vides ; la garde anti-rail D-065 elle-même
+    (couleur jamais un script) reste au socle (`Node._check_rendu_md`),
+    constatée à la conversion, pas dupliquée ici (même choix que le
+    converter, #182)."""
+    if not isinstance(declaration, list):
+        return [], [{"champ": "declaration_rendu",
+                     "raison": "declaration_rendu n'est pas une liste"}]
+    validees: list[dict] = []
+    rejets: list[dict] = []
+    for i, entry in enumerate(declaration):
+        if not isinstance(entry, dict):
+            rejets.append({"champ": "declaration_rendu",
+                           "raison": f"entrée {i} n'est pas un objet"})
+            continue
+        scene = str(entry.get("scene", "")).strip()
+        rendu_md = str(entry.get("rendu_md", "")).strip()
+        if not scene:
+            rejets.append({"champ": "declaration_rendu",
+                           "raison": f"entrée {i} : 'scene' absente ou vide"})
+            continue
+        if not rendu_md:
+            rejets.append({"champ": "declaration_rendu",
+                           "raison": f"entrée {i} (scène {scene!r}) : "
+                                    "'rendu_md' absent ou vide"})
+            continue
+        validees.append({"scene": scene, "rendu_md": rendu_md})
+    return validees, rejets
+
+
 def _valider_sortie(obj: dict, vocabulaire: dict[str, Forme]
                     ) -> tuple[ModuleEcrit | None, list[dict]]:
     """Garde de forme sur la sortie brute du LLM (D-262 §4) — jamais
@@ -227,6 +300,9 @@ def _valider_sortie(obj: dict, vocabulaire: dict[str, Forme]
     declaration = obj.get("declaration_formes")
     if not isinstance(declaration, list):
         declaration = []
+    declaration_rendu = obj.get("declaration_rendu")
+    if declaration_rendu is None:
+        declaration_rendu = []
 
     rejets: list[dict] = []
     if not module_md:
@@ -239,9 +315,13 @@ def _valider_sortie(obj: dict, vocabulaire: dict[str, Forme]
     for r in rejets_formes:
         rejets.append({"champ": "declaration_formes", **r})
 
+    rendu_valide, rejets_rendu = _valider_declaration_rendu(declaration_rendu)
+    rejets.extend(rejets_rendu)
+
     if rejets:
         return None, rejets
-    return ModuleEcrit(module_md, tuple(validees), note_intention_md), []
+    return (ModuleEcrit(module_md, tuple(validees), note_intention_md,
+                        tuple(rendu_valide)), [])
 
 
 def ecrire_module(acte: Acte, regime: str, store: MemoryStore | None, llm,
@@ -286,14 +366,14 @@ def ecrire_module(acte: Acte, regime: str, store: MemoryStore | None, llm,
         if rapport_conf.conforme_total:
             return RapportEcriture(module.module_md, module.note_intention_md,
                                    module.declaration_formes, rapport_conf,
-                                   "pret", ())
+                                   "pret", (), module.declaration_rendu)
 
         rejets = list(rapport_conf.ecarts) + [dict(r) for r in rapport_conf.rejets]
         if tour == 0:
             continue
         return RapportEcriture(module.module_md, module.note_intention_md,
                                module.declaration_formes, rapport_conf,
-                               "echec", tuple(rejets))
+                               "echec", tuple(rejets), module.declaration_rendu)
 
     # Théoriquement inatteignable (la boucle retourne toujours dans ses deux
     # tours) — filet de sécurité pour ne jamais laisser passer un None.
