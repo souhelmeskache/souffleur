@@ -260,15 +260,16 @@ class TrinityBrain:
         return [{**messages[0], "content": stripped}, *messages[1:]]
 
     def _writer_messages(self, messages, plan: dict, facts: dict,
-                         outcome: list[str]) -> list[dict]:
-        directive = _writer_directive(plan, facts, outcome)
+                         outcome: list[str], rendu_md: str = "") -> list[dict]:
+        directive = _writer_directive(plan, facts, outcome, rendu_md)
         writer_context = self._writer_context(messages)
         # Post-history instruction: appended AFTER the player's action so it carries
         # the most weight on the model's next tokens (the SillyTavern lesson).
         return [*writer_context, {"role": "system", "content": directive}]
 
     def generate(self, messages, rpg_on: bool, on_stage, out_chunks: list,
-                 skip_logic: bool = False, event_rules: str = ""):
+                 skip_logic: bool = False, event_rules: str = "",
+                 rendu_md: str = ""):
         """Run the Quad passes. Yields the Writer's visible prose (also collected
         into `out_chunks` for storage) and RETURNS the list of applied event
         strings — mechanics are validated and RESOLVED before the Writer runs, so
@@ -331,7 +332,7 @@ class TrinityBrain:
         # Simple mode (skip_logic, no envelope) skips the plan directive but the
         # retrait above still applies: `_writer_context` (Issue #108) either way.
         writer_msgs = self._writer_context(messages) if (skip_logic and not events) \
-            else self._writer_messages(messages, plan, facts, events)
+            else self._writer_messages(messages, plan, facts, events, rendu_md)
         hidden: list[str] = []
         # Reasoning-model headroom (real client only — stubs keep bare stream()):
         # without the floor, server-side thinking can eat the whole budget and
@@ -423,7 +424,8 @@ def _plan_text(plan: dict) -> str:
     return "\n".join(x for x in lines if x.strip())
 
 
-def _writer_directive(plan: dict, facts: dict, outcome: list[str] | None = None) -> str:
+def _writer_directive(plan: dict, facts: dict, outcome: list[str] | None = None,
+                      rendu_md: str = "") -> str:
     beat = str(plan.get("beat_plan", "")).strip() \
         or "(no plan received — improvise a natural continuation of the action)"
     out = ["# DIRECTOR'S PLAN (enact this beat)", beat]
@@ -440,6 +442,15 @@ def _writer_directive(plan: dict, facts: dict, outcome: list[str] | None = None)
         out.append("\n# RESOLVED MECHANICS (already rolled and applied — narrate "
                    "these results as fact; never contradict them)")
         out += [f"- {e}" for e in outcome if not e.startswith("validator:")]
+    rendu_md = str(rendu_md or "").strip()
+    if rendu_md:
+        # Issue #181 : la COULEUR de ton/rythme du node courant (D-065,
+        # socle #176) — narrateur SEUL, jamais servie au Director (voir
+        # `assembleur_position.rendu_md_for`, jamais branché sur
+        # `_current_node_section`). Pas un événement à jouer ni à annoncer.
+        out.append("\n# DIRECTION DE RENDU (note de MJ — ton/rythme voulu, "
+                   "PAS un événement à jouer ni à annoncer au joueur)")
+        out.append(rendu_md)
     out.append("\nWrite the narration prose ONLY. Do not output JSON, mechanics, or a "
                "```rpg block — the engine handles mechanics.")
     return "\n".join(out)

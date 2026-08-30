@@ -143,6 +143,19 @@ def _current_node_section(partition_dir: Path, store: MemoryStore,
                    "\n\n".join(parts))
 
 
+def rendu_md_for(partition_dir: str | Path, location: str) -> str:
+    """Issue #181 (volet SERVICE) : le `rendu_md` du node courant — une
+    COULEUR de ton/rythme (D-065, socle #176), jamais un événement. Lu au
+    même front-matter que `objectif_md` mais tenu HORS de
+    `_current_node_section`/`build_sections` : ce texte ne va JAMAIS au
+    Director (section STABLE partagée) — seul l'appelant (`engine.py`) le
+    fait suivre jusqu'à `modules/trinity.py::_writer_directive`, réservé au
+    narrateur (Writer). Chaîne vide si absent — même contrat que
+    `objectif_md` ci-dessus."""
+    meta = _read_json_front(Path(partition_dir) / "nodes" / f"{location}.md")
+    return str(meta.get("rendu_md", "")).strip()
+
+
 def _anchored_record_ids(partition_dir: Path, location: str) -> list[str]:
     """Ids de records dont une pose `tokens_initial` atterrit sur ce node."""
     out = []

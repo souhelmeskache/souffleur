@@ -146,6 +146,9 @@ class Engine:
         # jamais les réinjecter entre DIRECTOR_SYS et le contexte, ce que fait
         # `trinity._direct`, ni les dupliquer en queue single-brain).
         self._partition_active = False
+        # Issue #181 : rendu_md du node courant, posé par `_messages()`,
+        # consulté par `_produce()` — voir cette méthode.
+        self._current_rendu_md = ""
         # I-373: the last turn's routing result (input_processor.process),
         # consulted by _augment_pack to surface LE PACK's propositions to the
         # Director. None before the first routed turn.
@@ -218,6 +221,14 @@ class Engine:
                          if assembleur_position.eligible(self.store, state)
                          else None)
         self._partition_active = partition_dir is not None
+        # Issue #181 : la COULEUR de rendu du node courant, HORS du paquet
+        # servi au Director (jamais dans `assembleur_position.build_sections`)
+        # — `_produce()` la fait suivre jusqu'au Writer seul via
+        # `trinity.generate(rendu_md=...)`. Chaîne vide hors chemin partition.
+        self._current_rendu_md = (
+            assembleur_position.rendu_md_for(partition_dir,
+                                             str(state.get("location", "")))
+            if partition_dir is not None else "")
         if partition_dir is not None:
             rpg_on = self.store.rpg_enabled()
             char_sheet = (self.rpg_mod.context_block(
@@ -722,7 +733,8 @@ class Engine:
                 messages, rpg_on, on_stage, chunks, skip_logic=simple,
                 event_rules="" if self._partition_active else
                             self.store.event_rule_verdicts_block(
-                                history, player_input))
+                                history, player_input),
+                rendu_md=self._current_rendu_md)
             narration = "".join(chunks).strip()
         elif self.use_tool:
             raw = self._generate_with_tool(messages)
