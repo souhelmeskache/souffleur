@@ -302,14 +302,32 @@ flowchart TD
     D --> E["extraction + tables de règles<br/>(CODE) converter/ruletables.py"]:::code
     E --> F["valideurs forme + fidélité<br/>(CODE) converter/validate_form.py,<br/>validate_fidelity.py"]:::code
     F --> G["Partition écrite<br/>(CODE) converter/emit.py:write_partition"]:::code
+    B -.pont MCP : même prompt/payload,<br/>réponse fournie par la session.-> P["p4_convert_step<br/>mcp_server.py (_ShimLLM lève _NeedLLM,<br/>rejoue depuis le début à chaque appel)"]:::llmExternal
+    C -.pont MCP.-> P
+    D -.pont MCP.-> P
     classDef code fill:#dde7f5,stroke:#3a5a8c,stroke-width:1px,color:#1a1a1a;
     classDef llm fill:#fde3cf,stroke:#c8632a,stroke-width:2px,stroke-dasharray:4 2,color:#1a1a1a;
+    classDef llmExternal fill:#fbeee0,stroke:#c8632a,stroke-width:1px,stroke-dasharray:2 2,color:#1a1a1a;
 ```
 
 `TokenMeter.wrap` (`convert.py:24-48`, appelle `llm.complete` à `convert.py:39`)
 n'est pas un site d'appel supplémentaire : c'est un compteur qui enveloppe
 le client passé à chacune des trois étapes LLM ci-dessus pour mesurer les
 chars_in réellement envoyés (I-145) — jamais un quatrième appel.
+
+Variant pont MCP (Issue #173) : `convert_module` prend déjà `llm_main` en
+injection (comme `sm.llm` pour le fold, §6.2) — `_ShimLLM`/`_NeedLLM`
+(`mcp_server.py:914-935`, réutilisés sans modification) s'y branchent
+directement, aucune des trois étapes LLM n'est réécrite. `p4_convert_step`
+(`mcp_server.py`, juste après `fold_apply`) REJOUE `convert_module` depuis le
+début à chaque appel avec la liste d'`answers` accumulée par la session :
+l'ordre d'appel de `convert_module` est déterministe pour un `source_text`
+fixé, donc les réponses déjà connues rejouent silencieusement et seul le
+prochain appel manquant lève `_NeedLLM` — le patron `fold_due`/`fold_apply`
+généralisé à une séquence multi-appels au lieu d'un seul. Rien n'est écrit
+dans `out_dir` tant que la séquence n'est pas allée jusqu'au bout sans lever
+(pas de Partition partielle sur disque). Zéro `emit_json_ex` exécuté contre
+l'API dans ce chemin : le shim n'a jamais de client réel.
 
 ### 6.4 La chaîne Auteur D-262 (cadence : **par module-épisode écrit**, rare — inflexion/digression)
 
