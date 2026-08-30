@@ -23,6 +23,50 @@ from .schemas import Node, RollTable, Unit
 MARKER = re.compile(r"^#(\d{1,3})[ \t]*$", re.M)
 RENVIS = re.compile(r"^\s*(.*?)[ \t]*,?[Gg]o to (\d{1,3})\.[ \t]*$", re.M)
 
+# D-102/I-111 (Issue #182, EXTRACTION) : caractérisation du ton pour le
+# matériau tiers sans directive `rendu_md` explicite (véhicule commun,
+# voir cli.py § scenario-auteur.json + Node.attach_scenario). Chaque
+# registre est repéré par un lexique FERMÉ, insensible à la casse ; on
+# CARACTÉRISE ce qui est là, on n'invente jamais un ton absent — aucun
+# lexique repéré ⇒ rendu_md vide + avertissement signalé (même contrat que
+# objectif_md absent, cf. tests/converter_test.py:317). Les consignes
+# associées évitent volontairement tout marqueur de
+# RENDU_MD_INTERDITS_SEQUENCE (garde anti-rail D-065, schemas.py).
+REGISTRES_RENDU = (
+    ("tension", ("combat", "attaque", "arme", "sang", "menace", "danger",
+                 "grogne", "hurle", "griffe", "crie"),
+     "registre tendu ; fais peser la menace, laisse deviner le danger"),
+    ("mystere", ("mystérieux", "mysterieux", "étrange", "etrange", "ombre",
+                 "silence", "murmure", "secret", "inconnu", "sombre"),
+     "registre mystérieux ; entretiens le doute, ne révèle rien de trop"),
+    ("chaleureux", ("accueil", "chaleureux", "sourire", "rire", "paisible",
+                    "calme", "repos", "confortable"),
+     "registre chaleureux ; installe le confort avant de le troubler"),
+    ("urgence", ("urgent", "vite", "précipite", "precipite", "panique",
+                 "fuit", "pressé", "presse", "alarme"),
+     "registre urgent ; presse le rythme, laisse peu de répit"),
+)
+
+
+def characterise_rendu(corps_md: str, owner: str) -> tuple[str, str | None]:
+    """Caractérise le ton/rythme depuis la prose source (D-102/I-111,
+    Issue #182) — jamais un ton improvisé. Compte les occurrences de chaque
+    lexique de REGISTRES_RENDU (insensible à la casse) ; le registre au
+    compte le plus haut (> 0) l'emporte, ex-aequo tranché par l'ordre de la
+    table. Aucun lexique repéré ⇒ ("", avertissement) : rubrique vide,
+    signalée, jamais un ton improvisé."""
+    bas = (corps_md or "").lower()
+    best_nom, best_count, best_consigne = None, 0, ""
+    for nom, mots, consigne in REGISTRES_RENDU:
+        count = sum(bas.count(m) for m in mots)
+        if count > best_count:
+            best_nom, best_count, best_consigne = nom, count, consigne
+    if best_nom is None:
+        return "", (f"{owner}: rendu_md — ton non identifiable, aucun "
+                    "lexique reconnu dans la source (vide + exception, "
+                    "D-102/I-111)")
+    return best_consigne, None
+
 
 def segment_s1(text: str) -> list[Unit]:
     """Tile [0, len(text)) exactly once with units cut at #N markers.
@@ -49,9 +93,17 @@ def segment_s1(text: str) -> list[Unit]:
     return units
 
 
-def node_for_unit(unit: Unit, text: str, id_by_num: dict[int, str]) -> Node:
+def node_for_unit(unit: Unit, text: str, id_by_num: dict[int, str],
+                  rendu_md: str | None = None) -> tuple[Node, str | None]:
     """Verbatim-copy node: corps_md IS the source span (minus edge blanks);
-    renvois become typed links when their target paragraph exists."""
+    renvois become typed links when their target paragraph exists.
+
+    rendu_md (Issue #182) : directive explicite fournie par l'appelant (le
+    véhicule commun — voir cli.py § scenario-auteur.json) ; absente
+    (`None`, matériau tiers sans directive) ⇒ caractérisée depuis corps_md
+    (`characterise_rendu`). Retourne (Node, avertissement | None) — le
+    second élément non-None seulement quand le ton n'a pas pu être
+    caractérisé (D-102/I-111)."""
     corps = text[unit.start:unit.end].strip("\n")
     liens = []
     for r in unit.renvois:
@@ -59,8 +111,13 @@ def node_for_unit(unit: Unit, text: str, id_by_num: dict[int, str]) -> Node:
         if target:
             liens.append({"cible_id": target,
                           "condition_textuelle": r["condition"] or "(inconditionnel)"})
-    return Node(unit.uid, "section", f"{unit.titre}", corps, "scene",
-                liens=liens, anchors=[(unit.start, unit.end)])
+    warning = None
+    if rendu_md is None:
+        rendu_md, warning = characterise_rendu(corps, f"node {unit.uid}")
+    node = Node(unit.uid, "section", f"{unit.titre}", corps, "scene",
+                liens=liens, anchors=[(unit.start, unit.end)],
+                rendu_md=rendu_md)
+    return node, warning
 
 
 # ---------------------------------------------------------------------------

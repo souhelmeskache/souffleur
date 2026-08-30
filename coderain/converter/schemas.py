@@ -280,12 +280,23 @@ class Node:
 
     def attach_scenario(self, objectif_md: str = "",
                         debouches: list[dict] | None = None,
-                        heritage: list[dict] | None = None) -> None:
+                        heritage: list[dict] | None = None,
+                        rendu_md: str = "") -> None:
         """Application à froid par l'adaptateur depuis le fichier auteur
         (contrat aval de la fiche SCÉNARIO §4) : monte l'altitude et pose
-        les trois rubriques — la validation reste à la construction."""
+        les trois rubriques — la validation reste à la construction.
+
+        rendu_md (Issue #182, véhicule commun) : même clé, même entrée que
+        objectif_md dans le fichier auteur (`scenario-auteur.json` §
+        `scenarios[].rendu_md`) — c'est le point de contact que l'issue
+        PRODUCTION Auteur écrira aussi. Absent (chaîne vide) ⇒ le rendu_md
+        déjà posé à la construction du node (le cas échéant) n'est pas
+        écrasé ; fourni ⇒ passe par la même garde anti-rail que le
+        constructeur (D-065)."""
         self.altitude = "scenario"
         self._set_scenario(objectif_md, debouches, heritage)
+        if rendu_md:
+            self.rendu_md = self._check_rendu_md(rendu_md, self.id)
 
 
 class Record:
