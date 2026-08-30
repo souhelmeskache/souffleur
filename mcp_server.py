@@ -37,6 +37,14 @@ from coderain.config import load_config, saves_dir
 # « organes Auteur » plus bas, jamais un import de ces deux modules.
 from coderain import acte as acte_mod
 from coderain import formes as formes_mod
+# `coderain.converter.convert` is a DIFFERENT case from retour2/ecrivain_module
+# above: it does not duplicate llm.py's logic, it takes an injected llm_main/
+# llm_recheck exactly like the fold's `sm.llm` — the same _ShimLLM/_NeedLLM
+# already plug into it (see "P4 conversion bridge" below). Importing it here
+# adds no new dependency: `coderain.rules_engine` above already pulls in
+# coderain.llm transitively (engine.py -> llm.py), same as the fold's path
+# through Engine.summarizer.
+from coderain.converter.convert import convert_module
 
 mcp = FastMCP("coderain-engine")
 
@@ -1004,6 +1012,58 @@ def fold_apply(summary_json: str) -> dict:
         "next": ({"instruction": out["instruction"], "payload": out["payload"]}
                  if out.get("due") else None),
     }
+
+
+# ── P4 conversion bridge — pont-MCP variant (Issue #173) ──────────
+# convert_module (converter/convert.py) already takes llm_main/llm_recheck as
+# injection — segmentation.segment (segmentation.py:52), buckets.classify
+# (buckets.py:47) and semantic.convert_unit/convert_batch (semantic.py:198,
+# :223) all reach the model through emit_json_ex(llm, ...). _ShimLLM/_NeedLLM
+# (defined above for the fold) plug in unmodified: no new shim, no rewritten
+# stage logic.
+#
+# Unlike the fold (at most one call per fold_apply), a conversion is several
+# calls deep — one per segmentation chunk, one for bucketing, one per semantic
+# batch/unit. Rather than track a cursor across calls, p4_convert_step REPLAYS
+# convert_module from the top on every call, with the session's growing
+# answers list: convert_module's call order is deterministic for a fixed
+# source_text, so every earlier stage is served its already-known answer from
+# the list and only the first missing call raises _NeedLLM. Nothing is
+# written to out_dir until the run reaches the end without raising — a
+# half-answered conversion never leaves a partial partition on disk.
+
+@mcp.tool()
+def p4_convert_step(source_text: str, titre: str, structures: list[str],
+                    corpus_source: str, target_version: str, out_dir: str,
+                    answers: list[str] | None = None) -> dict:
+    """Drive a P4 free-prose conversion (SPEC-P4 §3, `converter/convert.py`)
+    step by step through the session instead of the API — the pont-MCP
+    variant of `cmd_convert`'s LLM route, same patron as fold_due/fold_apply
+    but for a multi-call sequence.
+
+    Call with answers=[] first. A {"due": true, "instruction": ...,
+    "payload": ...} result is coderain's own prompt/payload for the next
+    stage (segmentation, bucketing, or one semantic batch/unit), verbatim —
+    hand both to a cheap subagent, take the JSON text it returns, append it
+    to `answers` (do not edit it) and call again. Every earlier answer
+    replays; only the next missing stage is asked. Keep looping until "due"
+    is false: that result carries the written partition's report (same shape
+    as `convert_module`'s, plus counts).
+
+    Zero network call anywhere in this path: convert_module never sees a
+    real LLM client, only this shim."""
+    answers = list(answers or [])
+    shim = _ShimLLM(answers)
+    try:
+        partition, report = convert_module(
+            source_text, titre, list(structures), corpus_source,
+            target_version, shim, Path(out_dir), llm_recheck=None)
+    except _NeedLLM as need:
+        return {"due": True, "step": len(answers),
+                "instruction": need.system, "payload": need.payload}
+    return {"due": False, "report": report,
+            "nodes": len(partition.nodes), "records": len(partition.records),
+            "tables": len(partition.tables), "secrets": len(partition.secrets)}
 
 
 # ── proactive context assembly ───────────────────────────────────
