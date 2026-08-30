@@ -9,10 +9,11 @@ material):
   1) each of the four paths through the ONE official write point, state
      re-read after the fact and checked exact;
   2) the D-141 single-writer check: an out-of-band write to state.json that
-     skips `apply_envelope` entirely -- does it get refused/detected, or does
-     it land in silence? This is a constat, not a fix: if it lands, the test
-     documents the verdict with a file:line anchor rather than patching the
-     gate on the fly.
+     skips `apply_envelope` entirely -- does it get refused, or does it land
+     in silence? Originally a constat only (it landed); I-94 closed the gap
+     by routing `set_world_state` through `validator.guard_world_state`, so
+     this now asserts the refusal holds (element coverage in
+     tests/single-writer-guichet-i94_test.py).
   3) per-path latency of one typical-turn envelope, printed as the closing
      comment's measured numbers (I-190 -- never measured before this test).
 """
@@ -101,34 +102,33 @@ assert rpg["player"]["level"] == lvl0        # 30 < 100 (xp_per_level default): 
 print("1d) xp: gain through apply_envelope, state re-read exact")
 
 # ---- 2) D-141 single-writer check: an out-of-band write to state.json ----
-# `MemoryStore.write` (coderain/memory.py:563) is a generic file writer with
-# no notion of "state.json is special"; `set_world_state`/`set_rpg_state`
-# (coderain/memory.py:1044, 1114) call it directly, with no gate mirroring
-# validator.validate's legality checks (e.g. the "not enough gold" refusal at
-# coderain/validator.py:194-197). Reaching state.json THROUGH THOSE SETTERS,
-# bypassing Engine.apply_envelope entirely, is exactly what a hand-authored
-# tool or a future code path could do without ever going through the
-# validator.
+# I-94 closed the gap this used to document: `MemoryStore.set_world_state`
+# (coderain/memory.py) now routes every write through
+# `validator.guard_world_state`, so a direct write bypassing
+# Engine.apply_envelope entirely -- exactly what a hand-authored tool or a
+# future code path could do -- can no longer land a value validate()'s own
+# legality check would have refused (e.g. the "not enough gold" refusal at
+# coderain/validator.py). Full element coverage of the gate lives in
+# tests/single-writer-guichet-i94_test.py; this keeps the historical probe
+# green rather than dropping it.
 before = store.world_state()["player"]["gold"]
 illegal_state = store.world_state()
 illegal_state["player"]["gold"] = -999          # validator.validate would refuse this
 store.set_world_state(illegal_state)             # bypasses apply_envelope entirely
 after = store.world_state()["player"]["gold"]
-single_writer_ok = (after == before)              # True only if the bypass was refused
+single_writer_ok = (after != -999)                # True once the bypass no longer lands as-is
 if single_writer_ok:
     print("2) single writer: OUI -- out-of-band write to state.json was "
-          "refused/had no effect")
+          f"refused (gold clamped to {after}, not the illegal -999) -- I-94")
 else:
     print("2) single writer: NON -- out-of-band write via "
-          "MemoryStore.set_world_state (coderain/memory.py:1044) landed "
-          "silently (gold now "
-          f"{after}, would have been refused by validator.py:194-197 had it "
-          "gone through Engine.apply_envelope). Constat only -- not patched "
-          "by this test; the gate lives at the Engine.apply_envelope seam, "
-          "not at the storage layer.")
-    # restore a legal value so the rest of the suite isn't left mid-constat
-    illegal_state["player"]["gold"] = before
-    store.set_world_state(illegal_state)
+          "MemoryStore.set_world_state landed silently "
+          f"(gold now {after}) -- regression on I-94's guard")
+# restore the pre-probe value either way so the rest of the suite isn't left
+# mid-constat
+illegal_state["player"]["gold"] = before
+store.set_world_state(illegal_state)
+assert single_writer_ok
 assert store.world_state()["player"]["gold"] == before
 
 # ---- 3) latency, one number per path (I-190) ----
