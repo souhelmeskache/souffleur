@@ -267,6 +267,36 @@ is pending — never hand them out otherwise.
   them and clamps them. Describe fiction, not arithmetic.
 """
 
+def split_rpg_rules(text: str) -> tuple[str, str]:
+    """D-260 post-mesure (a) (Issue #162, suite de l'arbitrage #144) : découpe
+    le texte RUNTIME de `rpg-rules.md` (celui lu depuis le disque — l'utilisateur
+    peut l'avoir édité, jamais ce module `RPG_RULES` directement) en :
+
+    - le SOCLE, toujours servi : schéma d'enveloppe, deltas, attributs, barème
+      DC — la grammaire dont n'importe quel tour peut avoir besoin ;
+    - la section « Level-ups and grants », servie seulement sur déclencheur
+      d'état vérifiable par le moteur (`rpg.pending_grant > 0` — la même info
+      que "LEVEL-UP PENDING" dans `modules/rpg.py::context_block`).
+
+    Garde-fou explicite de l'arbitrage (#144/#162) : aucune AUTRE section n'a
+    de déclencheur identifiable, donc aucune autre section n'est retirée — au
+    doute, elle reste au socle. Si le fichier édité par l'utilisateur ne porte
+    plus l'en-tête `## Level-ups and grants`, la fonction retombe sur "texte
+    entier au socle" (comportement d'avant ce découpage) plutôt que de
+    perdre silencieusement la règle : retourne `(text, "")`.
+    """
+    marker = "## Level-ups and grants"
+    i = text.find(marker)
+    if i < 0:
+        return text, ""
+    j = text.find("\n## ", i + len(marker))
+    end = j + 1 if j >= 0 else len(text)
+    section = text[i:end].rstrip("\n")
+    socle = text[:i] + text[end:]
+    socle = re.sub(r"\n{3,}", "\n\n", socle).rstrip("\n") + "\n"
+    return socle, section
+
+
 PREMISE_HEADER = "# Premise\n\n"
 
 FILE_SKELETONS = {
