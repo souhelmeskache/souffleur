@@ -22,6 +22,7 @@ from fastmcp import FastMCP
 
 from coderain.memory import Library, MemoryStore
 from coderain import assembleur_position
+from coderain import save_lock
 from coderain import validator as validator_mod
 from coderain.rules_engine import get_bridge
 from coderain.sidecar import DEFAULT_CFG as _DEFAULT_RPG
@@ -387,7 +388,16 @@ def load_save(slug: str) -> dict:
     any other tool that reads game state.
 
     Also builds the full engine, which is what makes reveals and quest
-    outcomes reach canon-events.md and what makes undo_last possible."""
+    outcomes reach canon-events.md and what makes undo_last possible.
+
+    Refuses a save another live session already holds (I-188, Issue #115):
+    an open session is a live engine that can write to its save at any
+    moment, so a second session loading the same save would silently
+    overwrite the first and keep writing from an already-stale state. A
+    lock file at `<save>/.lock.json` (see coderain.save_lock) makes that
+    collision fail loudly instead. An orphan lock — its process killed
+    without a clean shutdown — is reclaimed automatically rather than
+    blocking the save forever."""
     global _store, _engine, _cfg, _rpg_cfg, _slug, _completed_turn
     global _pending_log_mark
     _pending_log_mark = None     # a mark from another save is meaningless here
@@ -396,8 +406,27 @@ def load_save(slug: str) -> dict:
         return {"error": f"Save not found: {slug}",
                 "available": [s.get("slug") for s in lib.saves.list()]}
 
+    save_dir = _saves_root / slug
+    held = save_lock.held_by_other_live_process(save_dir)
+    if held is not None:
+        opened = held.get("opened")
+        age = f"{(time.time() - opened) / 60:.0f} min" if opened else "?"
+        return {"error": f"Save '{slug}' verrouillé — déjà chargé par une "
+                          f"autre session ouverte (pid {held.get('pid')} sur "
+                          f"{held.get('host')}, depuis {age}). Ferme cette "
+                          "session avant de recharger ce save, ou choisis-en "
+                          "un autre — deux moteurs vivants sur le même save "
+                          "divergent en silence (I-188).",
+                "locked_by": held}
+
+    if _slug and _slug != slug:
+        # Switching save within the same session: this process's own lock
+        # on the previous save is now stale, release it before moving on.
+        save_lock.release(_saves_root / _slug, _slug)
+
     _store = lib.saves.open(slug)  # session-open snapshot (I-148/ESC-4)
     _slug = slug
+    save_lock.acquire(save_dir, slug)
     _load_rpg()          # install ranked skills before anything can roll
 
     # D&D-style saves carry their own stat names; the validator rejects a check
@@ -2686,11 +2715,36 @@ def auteur_verdicts_conformite(verdicts_json: str) -> dict:
             "ecarts": ecarts}
 
 
+def _release_save_lock() -> None:
+    """Clean-shutdown side of I-188 (Issue #115): drop this process's own
+    save lock so the slug is free again for the next session. Registered
+    against atexit and the terminating signals below — best-effort, since a
+    shutdown path must never itself fail to shut down. A hard kill (SIGKILL,
+    or TerminateProcess on Windows) skips all of this; that's exactly the
+    orphan case `save_lock.held_by_other_live_process` reclaims on next
+    load."""
+    if _slug:
+        try:
+            save_lock.release(_saves_root / _slug, _slug)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 if __name__ == "__main__":
     # Opt-in: set CODERAIN_UI_AUTOSTART to a port in the project's .mcp.json env
     # block and the screen is up before Claude Code says a word — so a launcher
     # can open the browser and the engine at the same time without a race.
+    import atexit
     import os
+    import signal
+
+    atexit.register(_release_save_lock)
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_sig, lambda signum, frame: sys.exit(0))
+        except (ValueError, OSError, AttributeError):
+            pass  # not every signal is settable on every platform
+
     _auto = os.environ.get("CODERAIN_UI_AUTOSTART")
     if _auto:
         try:
