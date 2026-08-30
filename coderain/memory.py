@@ -1087,7 +1087,13 @@ class MemoryStore:
         return _world_defaults(data)
 
     def set_world_state(self, state: dict) -> None:
-        self.write("state.json", json.dumps(state, indent=2))
+        """The ONE write point for state.json (D-141). Routes every write —
+        including ones that never went through Engine.apply_envelope — through
+        validator.guard_world_state so an out-of-band mutation can't leave an
+        invariant it would have refused (see I-94)."""
+        from .validator import guard_world_state   # local: validator doesn't
+        # import memory, but keep the coupling out of the module's import time
+        self.write("state.json", json.dumps(guard_world_state(state), indent=2))
 
     def clock_str(self) -> str:
         t = self.world_state().get("time", {})

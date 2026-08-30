@@ -600,6 +600,23 @@ def _flag_kind(v) -> str:
     return "text"
 
 
+def guard_world_state(state: dict) -> dict:
+    """D-141 single-writer hardening (I-94): the last-line invariant check every
+    write to state.json goes through, called from MemoryStore.set_world_state
+    itself — not just from the validated apply_envelope path. A direct write
+    that reaches state.json without ever calling validate()/apply_world (a
+    hand-authored tool, a future code path) could otherwise land an illegal
+    value validate()'s own legality check would have refused, e.g. the
+    "not enough gold" guard on gold_delta above. Mutates and returns `state`
+    in place so callers can chain it inline."""
+    player = state.get("player")
+    if isinstance(player, dict):
+        gold = _as_int(player.get("gold"))
+        if gold is not None and gold < 0:
+            player["gold"] = 0
+    return state
+
+
 def apply_world(store, env: dict) -> list[str]:
     """Apply the validated world-level deltas (clock / flags / player location).
     Runs regardless of the RPG toggle — the world exists in every mode. Returns
