@@ -281,6 +281,25 @@ def _stage_rollback() -> None:
 _pending_log_mark: int | None = None
 
 
+# ── R1 signal for `paquet_narrateur` (Issue #192, D-269) ──────────
+# "mécanique avant prose" needs a machine-checkable fact, not a Director's
+# say-so: whether an envelope actually landed THIS turn. apply_envelope is the
+# one mutation path (see its own docstring), so its own return value — the
+# human-readable event strings, already the engine's journal of what was
+# rolled and applied — IS that fact. Kept here rather than re-derived from the
+# event log on disk because the log stores raw envelopes, not the readable
+# strings `paquet_narrateur` serves under "MÉCANIQUES RÉSOLUES CE TOUR"
+# (spec §"Ce que l'outil compose", point 3) — reusing this avoids a second,
+# divergent rendering of the same application.
+#
+# None = "no envelope applied since the last turn boundary" — the R1 refusal
+# fires on exactly that, unless `sans_mecanique` declares it on purpose.
+# Reset at every turn boundary (record_turn) and by the three gestures that
+# invalidate "this turn" outright (load_save, undo_last, retry_turn) — the
+# same boundaries _pending_log_mark already respects, for the same reason.
+_last_applied_events: list[str] | None = None
+
+
 def _event_log_len(store) -> int:
     from coderain.memory import _read_event_log
     return len(_read_event_log(store))
@@ -407,8 +426,9 @@ def load_save(slug: str) -> dict:
     without a clean shutdown — is reclaimed automatically rather than
     blocking the save forever."""
     global _store, _engine, _cfg, _rpg_cfg, _slug, _completed_turn
-    global _pending_log_mark
+    global _pending_log_mark, _last_applied_events
     _pending_log_mark = None     # a mark from another save is meaningless here
+    _last_applied_events = None  # idem — R1 signal from another save
     lib = _library()
     if not (_saves_root / slug).exists():
         return {"error": f"Save not found: {slug}",
@@ -519,15 +539,17 @@ def undo_last() -> dict:
     back that turn's mechanics, re-hides what it revealed, un-consumes the event
     rules it fired. Use it when a turn came out wrong — re-narrating over a bad
     turn leaves the bad one in the transcript and in the engine's memory."""
-    global _completed_turn, _pending_log_mark
+    global _completed_turn, _pending_log_mark, _last_applied_events
     eng = _require_engine()
     before = len(_require_store().turns())
     _stage_rollback()
     result = eng.undo_last()
     # The snapshot is consumed by the restore; the next turn needs a fresh one.
-    # The ledger mark goes too: the engine truncated the log under it.
+    # The ledger mark goes too: the engine truncated the log under it. Same for
+    # the R1 signal — the undone turn's envelope no longer applies to anything.
     _completed_turn = None
     _pending_log_mark = None
+    _last_applied_events = None
     _arm_turn()
     return {"undone": result["undone"],
             "mechanics_restored": result["mechanics_restored"],
@@ -667,7 +689,7 @@ def apply_envelope(envelope: str, rpg_on: bool = True) -> list[str]:
     quest completes or fails, records what the turn revealed and fired so
     undo_last can put it back, and stamps the events log with the turn index
     branch replay needs."""
-    global _pending_log_mark
+    global _pending_log_mark, _last_applied_events
     store = _require_store()
     env = json.loads(envelope) if isinstance(envelope, str) else envelope
     rpg_mod = _load_rpg()
@@ -698,9 +720,11 @@ def apply_envelope(envelope: str, rpg_on: bool = True) -> list[str]:
         # stamped the player turn: branching on that index handed the fork the
         # outcome of an action its transcript never narrated. record_turn
         # corrects the stamp once the real count is known.
-        return _echo_checks(_engine.apply_envelope(
+        events = _echo_checks(_engine.apply_envelope(
             env, rpg_on and store.rpg_enabled(),
             log_turn=len(store.turns()) + 2))
+        _last_applied_events = events    # R1 signal for paquet_narrateur
+        return events
 
     # Degraded path — engine unavailable. Plays, but writes no canon events.
     stats = list(rpg_mod.cfg_get(_rpg_cfg, "stats"))
@@ -728,7 +752,9 @@ def apply_envelope(envelope: str, rpg_on: bool = True) -> list[str]:
     if clean.get("check") or clean.get("deltas"):
         store.append_event_log({"turn": len(store.turns()) + 1, "env": clean})
     events.append("note: moteur degrade — aucun canon-event ecrit")
-    return _echo_checks(events)
+    events = _echo_checks(events)
+    _last_applied_events = events        # R1 signal for paquet_narrateur
+    return events
 
 
 # ── dice ─────────────────────────────────────────────────────────
@@ -807,6 +833,7 @@ def record_turn(player_action: str, narration: str) -> dict:
 
     Order matters — the player's action is recorded first, then the narration.
     Returns the resulting turn count."""
+    global _last_applied_events
     store = _require_store()
     pending_from = len(store.turns())
     if player_action and player_action.strip():
@@ -823,8 +850,10 @@ def record_turn(player_action: str, narration: str) -> dict:
     out = {"turns": n, "fold_due": _fold_probe(n)}
     # The turn is closed: retire its rollback material and arm the next one.
     # This is what makes the arming automatic — it rides the one gesture the
-    # loop is already forbidden to skip.
+    # loop is already forbidden to skip. The R1 signal closes with it — a new
+    # turn starts with no envelope applied yet, exactly like a fresh session.
     _arm_turn(retire=True)
+    _last_applied_events = None
     return out
 
 
@@ -841,7 +870,7 @@ def retry_turn() -> dict:
     Returns {"action": ...} — narrate that action again, then record_turn as usual.
     Use undo_last instead when the player should act differently rather than the
     same beat being retold."""
-    global _completed_turn, _pending_log_mark
+    global _completed_turn, _pending_log_mark, _last_applied_events
     eng = _require_engine()
     store = _require_store()
     turns = store.turns()
@@ -863,6 +892,7 @@ def retry_turn() -> dict:
     eng.restore_pre_turn_rpg()
     _completed_turn = None
     _pending_log_mark = None     # the engine truncated the log under the mark
+    _last_applied_events = None  # the retried envelope no longer applies
     _arm_turn()          # the replayed turn needs its own snapshot
     n = len(store.turns())
     # The native loop re-probes the fold after a retry (play.py:363-365); the
@@ -1287,6 +1317,58 @@ def _splice_secrets(text: str, old_hits: list, new_hits: list):
     if text.count("\n\n" + old) == 1:
         return text.replace("\n\n" + old, "", 1), True
     return text.replace(old, "", 1), True
+
+
+# ── R2, `paquet_narrateur`'s literal leak guard (Issue #192, D-269) ──
+# The Director's OWN text (`directive_director`) is the one thing this tool
+# does not compose itself — it is typed by an agent that has already read the
+# hidden entries and the event rules to decide the beat. R2 is the filet that
+# catches what that agent should not have TYPED into a channel the narrator
+# reads: a slug it named, or a fragment of the withheld body/rule text
+# itself. Paraphrase (the Director describing the SAME twist in its own
+# words) is explicitly out of scope (spec: "hors périmètre du filet — gabarit
+# et fumée") — this is a literal-string net, not a meaning classifier.
+def _slug_named(slug: str, flat_lower: str) -> bool:
+    """A bare slug token in the text — word-boundary, not a substring hit
+    (a slug like `porte` must not fire on `porteur`)."""
+    return bool(re.search(r"(?<![\w-])" + re.escape(slug.lower()) + r"(?![\w-])",
+                          flat_lower))
+
+
+def _content_leak(entry, flat: str) -> bool:
+    """Same two tests as `_hidden_exposure`'s per-entry check (block render,
+    or probe coverage past `_LEAK_COVERAGE`), reused standalone: R2 scans one
+    short text (the directive) against one entry at a time, not a whole
+    assembled context against an authorised set."""
+    if " ".join(entry.render().split()) in flat:
+        return True
+    probes = _body_probes(entry)
+    if not probes:
+        return False
+    cov = sum(1 for w in probes if w in flat) / float(len(probes))
+    return cov >= _LEAK_COVERAGE
+
+
+def _r2_scan(store, directive: str) -> str:
+    """Returns the name of the guard that fired (safe to put in a refusal —
+    the Director already knows the coulisses, R2's own contract), or "" when
+    the directive is clean. Three refusals, one scan: an unrevealed hidden
+    entry (slug or body fragment), an event rule (fired or not — its slug or
+    text is director-only material regardless), or a hidden entry's content
+    reached through the same body-fragment test (the "secret non déclenché"
+    case, D-019: a secret is a hidden character/faction entry, no separate
+    registry to scan)."""
+    flat = " ".join(str(directive or "").split())
+    if not flat:
+        return ""
+    low = flat.lower()
+    for e in _hidden_entries(store):
+        if _slug_named(e.slug, low) or _content_leak(e, flat):
+            return f"entrée cachée non révélée ({e.slug})"
+    for rule in store.event_rules(include_consumed=True):
+        if _slug_named(rule.slug, low) or _content_leak(rule, flat):
+            return f"règle d'événement ({rule.slug})"
+    return ""
 
 
 def _wide_history(store) -> list[dict]:
@@ -1832,6 +1914,123 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
     out = out_dir / "context.md"
     out.write_text(text, encoding="utf-8")
     return {"path": str(out), "chars": len(text), **info}
+
+
+@mcp.tool()
+def paquet_narrateur(directive_director: str, action_joueur: str,
+                     sans_mecanique: bool = False) -> dict:
+    """Issue #192 (D-269) — LE péage du tour : l'unique canal vers le
+    narrateur. Le Director l'appelle après résolution mécanique du tour ;
+    l'outil compose le paquet, l'écrit dans un FICHIER, et ne retourne au
+    Director que le chemin + des métadonnées — le contenu n'entre jamais
+    dans SA fenêtre (même patron qu'`assemble_context_to_file`).
+
+    ── D-110 (caméra) : filtre MOTEUR + visée DIRECTOR ──
+    `directive_director` porte la VISÉE SEULE — plan du beat, angle/cadrage,
+    croyance divergente, inflexion de ton du TOUR. Tout le reste, l'outil le
+    COMPOSE lui-même depuis le moteur (jamais recopié par le Director) :
+
+      1. Contexte perçu du narrateur — même sélection par position que
+         `assemble_context_to_file` (`assembleur_position.build_sections`,
+         secrets/event_rules toujours OFF ici : un narrateur reçoit la
+         perception du personnage, jamais les twists non tirés ni le bloc
+         de règles entier), ou son repli mots-clés+budget sur une save sans
+         partition — même frontière de cohabitation (`eligible()`).
+      2. Derniers tours verbatim — inclus dans ce même texte (la scène où
+         l'on reprend).
+      3. Mécaniques résolues CE TOUR — les événements réellement APPLIQUÉS
+         (jets, patchs, `event_fired`), lus au JOURNAL de l'outil
+         (`apply_envelope`, la seule voie de mutation), jamais retapés par
+         le Director.
+      4. `rendu_md` du node courant (résout D-269) — section « DIRECTION DE
+         RENDU », symétrique de `modules/trinity.py::_writer_directive` mais
+         désormais servie sur le chemin PRODUIT. Absente si le node n'en
+         porte pas.
+      5. La directive du Director, verbatim, après le filet R2.
+
+    ── Les trois refus ──
+    R1 — mécanique avant prose : refuse si aucune enveloppe n'a été
+    appliquée depuis le dernier tour (voir `apply_envelope`) et que
+    `sans_mecanique` n'est pas déclaré à `True` — une déclaration explicite
+    qu'aucune résolution n'a eu lieu ce tour (ex. un tour de pure parole).
+
+    R2 — filet anti-fuite littéral : refuse si `directive_director` contient
+    un slug ou un fragment de texte d'une entrée cachée non révélée, ou le
+    slug/texte d'une règle d'événement (fired ou non). Nomme la garde
+    déclenchée — le Director connaît déjà les coulisses, ce n'est jamais ce
+    texte qui atteint le narrateur. La paraphrase est HORS périmètre (filet
+    littéral, pas un classifieur de sens).
+
+    R3 — pas de contenu en retour : le retour ne porte jamais le texte du
+    paquet, ni `rendu_md` même en booléen de contenu — seulement le chemin,
+    la taille, et les NOMS des sections écrites.
+
+    Le fichier est écrasé à chaque tour et vit hors de tout dossier de save
+    (même sentinel que `assemble_context_to_file` : `.turn/`)."""
+    store = _require_store()
+    if _last_applied_events is None and not sans_mecanique:
+        raise ValueError(
+            "R1 (mécanique avant prose) : aucune enveloppe appliquée depuis "
+            "le dernier tour — appelle apply_envelope d'abord, ou déclare "
+            "sans_mecanique=True si ce tour ne résout explicitement aucune "
+            "mécanique.")
+    directive = str(directive_director or "")
+    guard = _r2_scan(store, directive)
+    if guard:
+        raise ValueError(
+            f"R2 (filet anti-fuite) : directive_director contient la garde "
+            f"« {guard} » — reformule sans slug ni fragment littéral de "
+            "matériau caché ou de règle d'événement (la paraphrase reste "
+            "permise, ce filet est littéral).")
+
+    state = store.world_state()
+    pdir = _partition_dir(store)
+    history = store.turns()
+    recent_turns = _engine.short_term if _engine is not None else 12
+    rendu_md = ""
+    if pdir is not None and assembleur_position.eligible(store, state):
+        text, info = _position_context_text(
+            store, pdir, state, history, action_joueur, recent_turns,
+            event_rules=False, secrets=False)
+        rendu_md = assembleur_position.rendu_md_for(
+            pdir, str(state.get("location", "")))
+    else:
+        text, info = _assemble_text(action_joueur, 120000, recent_turns,
+                                    0, True, False, SECRETS_WINDOW_TURNS,
+                                    False)
+
+    sections = ["Contexte perçu (scène + derniers tours)"]
+    parts = [text]
+
+    outcome = [e for e in (_last_applied_events or [])
+              if not str(e).startswith("validator:")]
+    if outcome:
+        parts.append(
+            "# MÉCANIQUES RÉSOLUES CE TOUR (déjà tirées et appliquées — "
+            "narre ces résultats comme des faits, ne les contredis jamais)\n"
+            + "\n".join(f"- {e}" for e in outcome))
+        sections.append("Mécaniques résolues")
+
+    rendu_md = rendu_md.strip()
+    if rendu_md:
+        # Issue #181 (SERVICE) puis #192 (D-269, chemin PRODUIT) : la COULEUR
+        # de ton/rythme du node — narrateur SEUL, jamais citée au joueur, et
+        # jamais dans le retour de cet outil (R3).
+        parts.append(
+            "# DIRECTION DE RENDU — jamais citée au joueur\n" + rendu_md)
+        sections.append("Direction de rendu")
+
+    if directive.strip():
+        parts.append("# DIRECTIVE DU DIRECTOR\n" + directive.strip())
+        sections.append("Directive du Director")
+
+    full = "\n\n".join(parts)
+    out_dir = ROOT / ".turn"
+    out_dir.mkdir(exist_ok=True)
+    out = out_dir / "paquet-narrateur.md"
+    out.write_text(full, encoding="utf-8")
+    return {"path": str(out), "chars": len(full), "sections": sections,
+           **info}
 
 
 @mcp.tool()
