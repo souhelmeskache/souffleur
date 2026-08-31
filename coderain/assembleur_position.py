@@ -262,7 +262,8 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
                    location: str, history: list[dict], player_input: str,
                    scenes_tail: int = 4, char_sheet: str = "",
                    rpg_on: bool = False, secrets: bool = True,
-                   rpg_rules: str = "", response_length: str = ""
+                   rpg_rules: str = "", response_length: str = "",
+                   role_section: bool = True
                    ) -> list[Section]:
     """Construit le paquet ordonné (voir docstring de module). `char_sheet`
     est fourni par l'appelant (`rpg_mod.context_block`, hors périmètre de ce
@@ -282,10 +283,21 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     depuis Issue #162, `rpg_rules` est déjà le socle + section Level-ups
     résolue selon `rpg.pending_grant`, pas le fichier brut), servis ici comme
     sections STABLES (chaîne vide = section omise) plutôt qu'ajoutés après les
-    sections volatiles par `engine.py::_augment_rpg`/`_augment_style`."""
+    sections volatiles par `engine.py::_augment_rpg`/`_augment_style`.
+
+    `role_section` (Issue #198, point 3) : omet la section « Rôle (Director) »
+    (`DIRECTOR_SYS`) quand `False`. Défaut `True` — inchangé pour tous les
+    appelants existants (`engine.py`, `assemble_context_to_file`), qui
+    briefent effectivement le Director. `mcp_server.py::paquet_narrateur`
+    réutilise ce même chemin pour composer le paquet du NARRATEUR, pas du
+    Director, et passe `False` : servir `DIRECTOR_SYS` au narrateur lui
+    donnerait un prompt de rôle qui ne le décrit pas (retour de banc réel,
+    run 20260831-202617)."""
     partition_dir = Path(partition_dir)
-    sections = [Section("stable", "Rôle (Director)",
-                        DIRECTOR_SYS % (_ENV_RPG if rpg_on else _ENV_WORLD))]
+    sections = []
+    if role_section:
+        sections.append(Section("stable", "Rôle (Director)",
+                                DIRECTOR_SYS % (_ENV_RPG if rpg_on else _ENV_WORLD)))
     brief = _brief(store)
     if brief:
         sections.append(Section("stable",

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 
 # Open-core split (2026-07-05): the sidecar channel + state-block defaults are
 # CORE (coderain.sidecar) — the free engine filters ```rpg leaks and keeps
@@ -75,6 +76,40 @@ def roll_check(mod: int, dc: int, seed: int, nonce: int) -> dict:
         "dc": int(dc), "mod": int(mod), "roll": roll, "total": total,
         "success": total >= dc, "win_chance": win_chance(mod, dc),
     }
+
+
+# I-206: a stat block's `degats` field is a free 5e-flavored string, e.g.
+# "9 (1d8+3) slashing" (see coderain/converter/annexe_a.py REQUIRED_STATS,
+# docs/annexe-a-stats-5e.md c7) — the dice notation is the parenthesized part.
+# Matching anywhere in the input (not anchored) lets a caller pass either the
+# bare formula ("1d8+3") or the whole fiche field without pre-extracting it.
+_DICE_RE = re.compile(r"(\d+)\s*d\s*(\d+)\s*([+-]\s*\d+)?", re.IGNORECASE)
+_DICE_COUNT_CAP = 100     # generous for any 5e formula; bounds a hostile input
+_DICE_FACES_CAP = 1000
+
+
+def roll_damage(formula: str, seed: int, nonce: int) -> dict:
+    """Roll a damage formula ('1d8+3', or a fiche's full 'degats' field like
+    '9 (1d8+3) slashing') using the same reproducible per-roll seed as
+    roll_check. The LLM never rolls damage either — it proposes the formula
+    from a stat block, this rolls it.
+
+    Returns {formula, dice: [faces...], modifier, total} (total floored at 0 —
+    damage never goes negative). Raises ValueError on a formula with no
+    recognizable 'NdM[+-]K' dice notation, or one outside sane bounds — the
+    caller should surface that, not guess a number."""
+    m = _DICE_RE.search(str(formula or ""))
+    if m is None:
+        raise ValueError(f"malformed damage formula: {formula!r} (expected 'NdM[+-]K')")
+    count, faces = int(m.group(1)), int(m.group(2))
+    modifier = int(m.group(3).replace(" ", "")) if m.group(3) else 0
+    if not (1 <= count <= _DICE_COUNT_CAP) or not (1 <= faces <= _DICE_FACES_CAP):
+        raise ValueError(f"damage formula out of range: {formula!r}")
+    rng = random.Random(f"{seed}-{nonce}-damage")
+    dice = [rng.randint(1, faces) for _ in range(count)]
+    total = max(0, sum(dice) + modifier)
+    return {"formula": str(formula).strip(), "dice": dice, "modifier": modifier,
+            "total": total}
 
 
 # --- sidecar extraction ---
