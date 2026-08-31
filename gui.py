@@ -1,5 +1,8 @@
 """Coderain — Windows 2000-style Tkinter GUI (Markdown-backed memory).
 
+Régime SECONDAIRE (D-267) — flexibilité locale/API ; le produit joué passe
+par le chemin MCP/forfait, pas par ici.
+
 Tabs:
   Chat      play the story; generation runs on a worker thread (UI stays live)
   Settings  active profile, model, API key, generation + memory params

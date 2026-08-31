@@ -1,5 +1,8 @@
 """Coderain CLI.
 
+Régime SECONDAIRE (D-267) — flexibilité locale/API ; le produit joué passe
+par le chemin MCP/forfait, pas par ici.
+
 Usage:
     py play.py
 
