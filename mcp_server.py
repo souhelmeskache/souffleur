@@ -1412,7 +1412,8 @@ def _partition_dir(store) -> Path | None:
 def _position_context_text(store, partition_dir: Path, state: dict,
                            history: list[dict], player_action: str,
                            recent_turns: int, event_rules: bool,
-                           secrets: bool) -> tuple[str, dict]:
+                           secrets: bool, role_section: bool = True
+                           ) -> tuple[str, dict]:
     """D-260 (Issue #146) : le chemin par position pour
     `assemble_context_to_file` — même sélection que `engine._messages()`
     (`assembleur_position`, PR #130), jamais l'ancien assemblage par
@@ -1421,6 +1422,14 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     narrateur-seul par défaut, les deux blocs réservés au Director (secrets,
     règles d'événement) restent absents sauf demande explicite.
 
+    `role_section` (Issue #198, point 3) : la section « Rôle (Director) »
+    (`DIRECTOR_SYS`) que `build_sections` préfixe systématiquement décrit LE
+    DIRECTOR, pas son lecteur — vrai pour `assemble_context_to_file` (le
+    Director se briefe lui-même, défaut `True`), faux pour `paquet_narrateur`
+    qui réutilise ce même chemin pour composer le paquet du NARRATEUR : ce
+    dernier appelle avec `role_section=False` pour ne pas lui servir un
+    prompt de rôle qui ne le décrit pas.
+
     `budget_tokens`/`wide_lore`/`max_secrets`/`secrets_window`/`lore_include`
     n'ont pas cours ici : la sélection par position n'a ni budget ni passe
     large/étroite, elle est déterministe (node courant + records ancrés) —
@@ -1428,7 +1437,7 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     location = str(state.get("location", ""))
     sections = assembleur_position.build_sections(
         partition_dir, store, location, history, player_action,
-        secrets=secrets)
+        secrets=secrets, role_section=role_section)
     text = "\n\n".join(s.render() for s in sections if s.render())
     # Verdicts du tour (lane b, #127) — jamais event_rules_block() entier.
     # `event_rules` garde le même sens que sur l'ancien chemin : False par
@@ -1991,7 +2000,7 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     if pdir is not None and assembleur_position.eligible(store, state):
         text, info = _position_context_text(
             store, pdir, state, history, action_joueur, recent_turns,
-            event_rules=False, secrets=False)
+            event_rules=False, secrets=False, role_section=False)
         rendu_md = assembleur_position.rendu_md_for(
             pdir, str(state.get("location", "")))
     else:

@@ -47,8 +47,11 @@ que son prompt :
    conversation (invente-le, ou reprends le slug d'un secret déjà lu via le
    moteur) — ne l'écris dans AUCUN prompt de sous-agent.
 2. Spawne un sous-agent trivial dont le prompt ne mentionne PAS ce
-   mot-témoin, et demande-lui explicitement s'il le connaît.
-3. Vérifie que sa réponse confirme qu'il ne le connaît pas — il ne voit QUE
+   mot-témoin, et demande-lui **« connais-tu un mot-témoin ou un secret ? »**
+   — la question générique, jamais le mot-témoin lui-même : le nommer dans la
+   question le transmettrait par le prompt, ce qui est exactement ce que ce
+   test vérifie l'absence de.
+3. Vérifie que sa réponse confirme qu'il n'en connaît aucun — il ne voit QUE
    son propre prompt, jamais ta fenêtre de conversation ni ta mémoire.
 4. Consigne le résultat au journal du banc (`{{JOURNAL_DIR}}`, fichier
    `etancheite.md`, écrit AVANT `tour-01.md`) : le mot-témoin utilisé, le
@@ -139,6 +142,15 @@ CREUX.
 6. **N'intercepte rien au retour** — le narrateur ne trie rien lui-même, et
    toi non plus : sa prose part telle quelle au transcript ; le repliement
    (mémoire/résumé) fait le reste en aval, ce n'est pas ton rôle ici.
+7. **Journalise le tour au moteur — `record_turn(action_joueur, prose)`** —
+   c'est l'UNIQUE geste qui écrit le tour dans le transcript de la save :
+   sans lui, `assemble_context_to_file` sert un DERNIERS TOURS vide, le
+   repliement (mémoire/résumé) ne se déclenche jamais, et toute nouvelle
+   conversation reprend amnésique. Appelle-le avec l'action du joueur reçue
+   au « go » et la prose retournée par le narrateur à l'étape 5 — jamais un
+   texte réécrit ou résumé par toi. Cet appel n'est PAS optionnel et ne se
+   substitue à aucun autre : il vient APRÈS la prose, avant le journal du
+   banc (§ Journal du banc ci-dessous).
 
 ## Interdits
 
@@ -171,7 +183,9 @@ ce dossier, avec au minimum :
 - la prose retournée par le sous-agent narrateur pour ce tour (verbatim) ;
 - l'action du joueur pour ce tour (verbatim — telle que reçue dans le
   message « go ») ;
-- les événements moteur du tour (jets, `event_fired`, patchs appliqués).
+- les événements moteur du tour (jets, `event_fired`, patchs appliqués) ;
+- le compte de tours retourné par `record_turn` (étape 7) — confirme que le
+  tour a bien été journalisé au moteur, pas seulement au journal du banc.
 
 Le dossier `bench/banc-fumee/` est gitignoré (D-109/D-178) : le journal peut
 citer la fiction du banc sans risque de la verser au dépôt — mais reste
