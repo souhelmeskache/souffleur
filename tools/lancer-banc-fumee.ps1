@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Lanceur du banc de fumée (D-264) : deux panes herdr, une session-MJ et un
     joueur-banc, tenus au tempo d'une session de tour externe.
