@@ -281,22 +281,33 @@ def _stage_rollback() -> None:
 _pending_log_mark: int | None = None
 
 
-# ── R1 signal for `paquet_narrateur` (Issue #192, D-269) ──────────
+# ── R1 signal for `paquet_narrateur` (Issue #192, D-269 ; Issue #200) ──
 # "mécanique avant prose" needs a machine-checkable fact, not a Director's
-# say-so: whether an envelope actually landed THIS turn. apply_envelope is the
-# one mutation path (see its own docstring), so its own return value — the
-# human-readable event strings, already the engine's journal of what was
-# rolled and applied — IS that fact. Kept here rather than re-derived from the
-# event log on disk because the log stores raw envelopes, not the readable
-# strings `paquet_narrateur` serves under "MÉCANIQUES RÉSOLUES CE TOUR"
-# (spec §"Ce que l'outil compose", point 3) — reusing this avoids a second,
-# divergent rendering of the same application.
+# say-so: whether a mechanic actually landed THIS turn. apply_envelope was the
+# one mutation path for the coderain-native envelope pipeline (see its own
+# docstring), so its own return value — the human-readable event strings,
+# already the engine's journal of what was rolled and applied — IS that fact.
+# Kept here rather than re-derived from the event log on disk because the log
+# stores raw envelopes, not the readable strings `paquet_narrateur` serves
+# under "MÉCANIQUES RÉSOLUES CE TOUR" (spec §"Ce que l'outil compose", point
+# 3) — reusing this avoids a second, divergent rendering of the same
+# application.
 #
-# None = "no envelope applied since the last turn boundary" — the R1 refusal
-# fires on exactly that, unless `sans_mecanique` declares it on purpose.
-# Reset at every turn boundary (record_turn) and by the three gestures that
-# invalidate "this turn" outright (load_save, undo_last, retry_turn) — the
-# same boundaries _pending_log_mark already respects, for the same reason.
+# Issue #200: apply_envelope is NOT the only mutation path — the combat
+# sub-system (start_combat/submit_intent/monster_turn, dnd5e-engine via
+# CombatBridge) mutates entirely outside it. Those three tools post to this
+# same signal (see `_record_combat_events` near the combat tools below),
+# converting the engine's own events (intents, damage, rounds) into the same
+# readable-string register. Unlike apply_envelope (one envelope per turn, so
+# an assignment), combat turns chain several calls before paquet_narrateur —
+# the events ACCUMULATE there rather than overwrite.
+#
+# None = "no mechanic resolved since the last turn boundary" — the R1
+# refusal fires on exactly that, unless `sans_mecanique` declares it on
+# purpose. Reset at every turn boundary (record_turn) and by the three
+# gestures that invalidate "this turn" outright (load_save, undo_last,
+# retry_turn) — the same boundaries _pending_log_mark already respects, for
+# the same reason.
 _last_applied_events: list[str] | None = None
 
 
@@ -1939,9 +1950,11 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
       2. Derniers tours verbatim — inclus dans ce même texte (la scène où
          l'on reprend).
       3. Mécaniques résolues CE TOUR — les événements réellement APPLIQUÉS
-         (jets, patchs, `event_fired`), lus au JOURNAL de l'outil
-         (`apply_envelope`, la seule voie de mutation), jamais retapés par
-         le Director.
+         (jets, patchs, `event_fired`, ou — Issue #200 — intents/dégâts/
+         rounds de combat), lus au JOURNAL de l'outil (`apply_envelope`
+         pour la mécanique coderain classique, `start_combat`/
+         `submit_intent`/`monster_turn` pour le sous-système combat —
+         voir `_record_combat_events`), jamais retapés par le Director.
       4. `rendu_md` du node courant (résout D-269) — section « DIRECTION DE
          RENDU », symétrique de `modules/trinity.py::_writer_directive` mais
          désormais servie sur le chemin PRODUIT. Absente si le node n'en
@@ -1949,10 +1962,12 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
       5. La directive du Director, verbatim, après le filet R2.
 
     ── Les trois refus ──
-    R1 — mécanique avant prose : refuse si aucune enveloppe n'a été
-    appliquée depuis le dernier tour (voir `apply_envelope`) et que
-    `sans_mecanique` n'est pas déclaré à `True` — une déclaration explicite
-    qu'aucune résolution n'a eu lieu ce tour (ex. un tour de pure parole).
+    R1 — mécanique avant prose : refuse si aucune mécanique n'a été résolue
+    depuis le dernier tour (aucune enveloppe via `apply_envelope`, ni aucun
+    combat via `start_combat`/`submit_intent`/`monster_turn` — Issue #200)
+    et que `sans_mecanique` n'est pas déclaré à `True` — une déclaration
+    explicite qu'aucune résolution n'a eu lieu ce tour (ex. un tour de pure
+    parole).
 
     R2 — filet anti-fuite littéral : refuse si `directive_director` contient
     un slug ou un fragment de texte d'une entrée cachée non révélée, ou le
@@ -1970,8 +1985,9 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     store = _require_store()
     if _last_applied_events is None and not sans_mecanique:
         raise ValueError(
-            "R1 (mécanique avant prose) : aucune enveloppe appliquée depuis "
-            "le dernier tour — appelle apply_envelope d'abord, ou déclare "
+            "R1 (mécanique avant prose) : aucune mécanique résolue depuis "
+            "le dernier tour — appelle apply_envelope (ou start_combat/"
+            "submit_intent/monster_turn en combat) d'abord, ou déclare "
             "sans_mecanique=True si ce tour ne résout explicitement aucune "
             "mécanique.")
     directive = str(directive_director or "")
@@ -2275,6 +2291,89 @@ def module_get_aventure() -> dict:
 # moteur qui refuse, le pont ne traduit pas. modules/rpg.py garde les
 # jets simples hors combat (coexistence v0).
 
+# ── R1 signal, sous-système combat (Issue #200) ────────────────────
+# `_last_applied_events` (voir sa définition plus haut) n'était posé que par
+# `apply_envelope` — le SEUL chemin de mutation quand la mécanique passe par
+# la couche coderain classique. Le combat mute ailleurs (dnd5e-engine, via
+# CombatBridge) : start_combat/submit_intent/monster_turn ne passaient donc
+# jamais par apply_envelope, R1 restait aveugle à un tour entièrement résolu
+# en combat, et le Director devait déclarer sans_mecanique=True — exact au
+# sens strict, faux au sens large : la section « Mécaniques résolues »
+# disparaissait en plein combat (run 20260831-202617, tours 07-08).
+#
+# Fix : ces trois outils post-traitent aussi le même signal, avec les
+# événements du moteur (intents, dégâts, rounds) convertis en lignes lisibles
+# — même convention que les strings d'apply_envelope. Contrairement à
+# apply_envelope (une seule enveloppe par tour, donc une AFFECTATION), un
+# tour de combat enchaîne plusieurs appels avant paquet_narrateur
+# (start_combat, plusieurs submit_intent, monster_turn) : les événements
+# s'ACCUMULENT ici plutôt que de s'écraser, pour que la section porte tout
+# le round et pas seulement le dernier appel.
+
+
+def _combat_event_str(e: dict) -> str:
+    """Un événement de combat (dict, model_dump du moteur) -> ligne lisible.
+
+    Même registre que les strings d'apply_envelope ('check: ... -> succès',
+    'gold: +50 -> 150') : un fait déjà tiré et appliqué, à narrer tel quel."""
+    t = e.get("type", "?")
+    if t == "round_started":
+        return f"combat: round {e.get('round_number')} commence"
+    if t == "round_ended":
+        return f"combat: round {e.get('round_number')} termine"
+    if t == "turn_started":
+        return f"combat: tour de {e.get('actor_id')}"
+    if t == "attack_rolled":
+        crit = " (critique)" if e.get("is_crit") else ""
+        outcome = "touche" if e.get("is_hit") else "manque"
+        return (f"combat: {e.get('attacker_id')} attaque {e.get('target_id')} "
+                f"-> {e.get('roll_total')} {outcome}{crit}")
+    if t == "save_rolled":
+        outcome = "réussi" if e.get("succeeded") else "échoué"
+        return (f"combat: jet de sauvegarde {e.get('ability')} de "
+                f"{e.get('target_id')} vs DD{e.get('dc')} -> "
+                f"{e.get('roll_total')} {outcome}")
+    if t == "check_rolled":
+        succeeded = e.get("succeeded")
+        outcome = "réussi" if succeeded else "échoué" if succeeded is not None else "?"
+        return (f"combat: jet de {e.get('skill') or e.get('ability')} de "
+                f"{e.get('actor_id')} -> {e.get('roll_total')} {outcome}")
+    if t == "damage_applied":
+        over = " (overkill)" if e.get("is_overkill") else ""
+        return (f"combat: {e.get('target_id')} subit {e.get('amount')} dégâts "
+                f"{e.get('damage_type')}{over}")
+    if t == "healing_applied":
+        return f"combat: {e.get('target_id')} soigné de {e.get('amount')}"
+    if t == "temphp_applied":
+        return f"combat: {e.get('target_id')} gagne {e.get('amount')} PV temporaires"
+    if t == "condition_applied":
+        return f"combat: {e.get('target_id')} subit la condition {e.get('condition')}"
+    if t == "condition_removed":
+        return f"combat: {e.get('target_id')} perd la condition {e.get('condition')}"
+    if t == "death":
+        return f"combat: {e.get('target_id')} meurt ({e.get('reason')})"
+    if t == "unconscious":
+        return f"combat: {e.get('target_id')} tombe inconscient"
+    if t == "actor_moved":
+        return (f"combat: {e.get('actor_id')} se déplace de {e.get('from_zone')} "
+                f"vers {e.get('to_zone')} ({e.get('distance_ft')}ft)")
+    if t == "combat_ended":
+        return f"combat: terminé ({e.get('reason')})"
+    # Repli générique — un type non mappé reste visible plutôt que perdu
+    # silencieusement (le registre d'événements ci-dessus n'a pas vocation à
+    # suivre chaque extension du moteur événement par événement).
+    details = ", ".join(f"{k}={v}" for k, v in e.items() if k != "type")
+    return f"combat: {t} ({details})" if details else f"combat: {t}"
+
+
+def _record_combat_events(events: list[dict]) -> None:
+    """Empile les événements de combat sur le signal R1 de paquet_narrateur."""
+    global _last_applied_events
+    if not events:
+        return
+    _last_applied_events = (_last_applied_events or []) + [
+        _combat_event_str(e) for e in events]
+
 @mcp.tool()
 async def resolve_check(spec: dict, seed: int | None = None) -> dict:
     """Résout un jet 5e isolé (skill/ability/saving_throw) par dnd5e-engine.
@@ -2300,9 +2399,11 @@ async def start_combat(session_id: str, party: list[dict],
     jouable porte monster_template_slug ex. "goblin-warrior"). rng_seed rend le
     combat déterministe : mêmes graines ⇒ mêmes dés.
     """
-    return await get_bridge().start_combat(
+    result = await get_bridge().start_combat(
         session_id=session_id, party=party, encounter=encounter,
         rng_seed=rng_seed, zones=zones)
+    _record_combat_events(result.get("events", []))
+    return result
 
 
 @mcp.tool()
@@ -2313,13 +2414,17 @@ async def submit_intent(handle_id: str, actor_id: str, intent: dict) -> dict:
     weapon_id?, target_zone_id?, ...}. Une attaque exige weapon_id résolvable
     du corpus. Refus du moteur (mauvais tour...) => IntentRejectedError brute.
     """
-    return await get_bridge().submit_intent(handle_id, actor_id, intent)
+    result = await get_bridge().submit_intent(handle_id, actor_id, intent)
+    _record_combat_events(result.get("events", []))
+    return result
 
 
 @mcp.tool()
 async def monster_turn(handle_id: str) -> dict:
     """Fait jouer par l'IA du moteur le tour du monstre courant."""
-    return await get_bridge().monster_turn(handle_id)
+    result = await get_bridge().monster_turn(handle_id)
+    _record_combat_events(result.get("events", []))
+    return result
 
 
 @mcp.tool()
