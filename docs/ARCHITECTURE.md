@@ -80,6 +80,26 @@ portée Python** non déclaré (`event_rules_block` reste local à `_direct`),
 pas par une politique équivalente (`docs/mesure-i158-director-deux-corps.md`
 §2/conclusion 2).
 
+## 1bis. Deux régimes d'exécution (D-267)
+
+À ne pas confondre avec la distinction director-de-table / director-pipeline
+ci-dessus (deux CORPS du même rôle) : voici la distinction entre deux
+RÉGIMES d'exécution du moteur, l'un produit, l'autre pas.
+
+- **FORFAIT/MCP — le produit joué (D-263)** : le chemin décrit au §1
+  ci-dessus, `director-de-table` servi par le pont MCP (`mcp_server.py`).
+  C'est le seul chemin sur lequel une partie réelle tourne aujourd'hui.
+- **CLI/web — régime SECONDAIRE assumé (D-267)** : `play.py` (CLI), `gui.py`
+  (Tk) et `server.py` (FastAPI/SPA) appellent tous `engine.turn()` puis
+  `engine.llm` (`coderain/llm.py`, client OpenAI-compatible générique —
+  Ollama local ou API hébergée selon le profil actif). Ce régime est
+  **conservé comme flexibilité** (modèle local ⊥ API hébergée, pas de
+  dépendance à une session MCP pour développer/démontrer/tester) mais
+  **jamais repris pour le produit** — statut analogue à `trinity_brain`
+  (§1 ci-dessus) : un banc/fallback qu'aucun fil futur ne doit réactiver par
+  erreur comme chemin joué. Utile pour le développement, la démonstration et
+  le test hors-ligne d'une session MCP.
+
 ## 2. Les chiffres de la mesure (D-260, `docs/mesure-d260-boucle-neuve.md`)
 
 Ces chiffres portent sur le paquet reçu par le Director côté **pipeline**

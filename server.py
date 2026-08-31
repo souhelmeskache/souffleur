@@ -1,5 +1,8 @@
 """Coderain web server (Phase 6) — the MAIN app UI.
 
+Régime SECONDAIRE (D-267) — flexibilité locale/API ; le produit joué passe
+par le chemin MCP/forfait, pas par ici.
+
 FastAPI + a static SPA (webapp/). One process, local-first:
 
     .venv\\Scripts\\python.exe server.py          # http://127.0.0.1:8377

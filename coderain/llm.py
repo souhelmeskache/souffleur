@@ -1,5 +1,8 @@
 """Provider-agnostic LLM client.
 
+Régime SECONDAIRE (D-267) — flexibilité locale/API ; le produit joué passe
+par le chemin MCP/forfait, pas par ici.
+
 Everything (local Ollama, OpenRouter, Together, ...) speaks the OpenAI-compatible
 chat API, so this one client covers all of them. Only base_url / model / api_key
 differ, and those come from the active profile in config.yaml.
