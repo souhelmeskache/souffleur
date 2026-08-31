@@ -216,4 +216,13 @@ assert "DIRECTION DE RENDU" not in texte4
 assert "Direction de rendu" not in result4["sections"]
 print("  OK : pas de rendu_md sur ce node => aucune section, aucun bruit")
 
+section("9) le paquet narrateur ne porte jamais la section Rôle (Director) "
+        "(Issue #198, point 3 : DIRECTOR_SYS décrit le Director, pas le "
+        "narrateur qui lit ce fichier)")
+assert "Rôle (Director)" not in result4["sections"]
+assert "Rôle (Director)" not in texte4
+from coderain.modules.trinity import DIRECTOR_SYS
+assert DIRECTOR_SYS.split("%s")[0].strip()[:40] not in texte4
+print("  OK : DIRECTOR_SYS absent du paquet narrateur")
+
 print(f"\nOK test-paquet-narrateur-i192 — {len(FAIT)} sections vertes")
