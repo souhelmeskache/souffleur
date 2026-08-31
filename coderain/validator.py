@@ -660,6 +660,12 @@ def apply_world(store, env: dict) -> list[str]:
             player = state["player"] = {}
         if player.get("location") != loc:
             player["location"] = loc
+            # Issue #197 : la position a DEUX lecteurs historiques —
+            # `player.location` (mémoire/feuille RPG) et `state.location`
+            # racine (assembleur par position, seedé par la projection,
+            # projection.py §6). Le guichet écrit les DEUX pour que ni l'un
+            # ni l'autre ne se fige : compat minimale, aucun lecteur touché.
+            state["location"] = loc
             events.append(f"location → {loc}")
 
     gold = d.get("gold_delta")

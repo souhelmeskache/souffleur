@@ -188,6 +188,13 @@ def derive(partition_dir: Path, root_dir: Path, save_slug: str,
         state = json.loads(state_p.read_text(encoding="utf-8"))
         if not state.get("location"):
             state["location"] = playable["id"]
+            # Issue #197 : seed les DEUX champs — `player.location` (lu par
+            # la feuille/mémoire) doit s'accorder avec `state.location`
+            # racine (lu par l'assembleur par position) dès la création,
+            # même logique que le guichet `validator.apply_world`.
+            player = state.setdefault("player", {})
+            if isinstance(player, dict) and not player.get("location"):
+                player["location"] = playable["id"]
             state_p.write_text(json.dumps(state, ensure_ascii=False, indent=1),
                                encoding="utf-8")
 
