@@ -788,6 +788,30 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     return result
 
 
+@mcp.tool()
+def roll_damage(formula: str) -> dict:
+    """Roll a damage formula ('1d8+3', or a stat block's full 'degats' field
+    like '9 (1d8+3) slashing') — engine-rolled, deterministic (seed + nonce),
+    same RNG discipline as roll_check.
+
+    The LLM never rolls damage either: a scripted attack (e.g. a monster
+    fiche's `degats`) proposes the formula, this tool resolves it. Feed the
+    result's `total` into apply_envelope as a negative `hp_delta` (player) or
+    `deltas.enemies.<slug>.hp_delta` (monster) — the guichet (D-141) already
+    validates and clamps that delta; this tool only produces the number.
+    Returns {formula, dice, modifier, total}. Raises on a formula with no
+    recognizable dice notation."""
+    store = _require_store()
+    rpg_mod = _load_rpg()
+    rpg = store.rpg_state()
+    seed = rpg.get("seed", 0)
+    nonce = rpg.get("rolls", 0) + 1
+    result = rpg_mod.roll_damage(formula, seed, nonce)
+    rpg["rolls"] = nonce
+    store.set_rpg_state(rpg)
+    return result
+
+
 # ── memory & recall ──────────────────────────────────────────────
 
 @mcp.tool()
