@@ -40,6 +40,39 @@ def _dump(events: Any) -> list[dict]:
     return [e.model_dump() for e in events]
 
 
+def _unresolved_template_warnings(encounter: list[dict]) -> list[dict]:
+    """Membres d'encounter dont ``monster_template_slug`` ne joue rien (I-205).
+
+    Deux cas couverts, tous deux réduits par le moteur à un ``pass``
+    silencieux (voir docstring de ``advance_monster_turn`` côté moteur) :
+    aucun slug fourni du tout, ou un slug fourni mais absent de
+    ``dnd5e-srd-data`` (corpus SRD). Un membre ``entity_type == "Character"``
+    (un PJ) n'a jamais de comportement d'IA à résoudre — hors périmètre.
+    Zéro règle réimplémentée ici (D-078) : on ne fait que consulter le même
+    loader que le moteur interroge lui-même, jamais recalculer une action.
+    """
+    loader = _engine_fn().lib_loader.get_lib_loader()
+    warnings = []
+    for member in encounter:
+        if member.get("entity_type") == "Character":
+            continue
+        entity_id = member.get("entity_id")
+        slug = member.get("monster_template_slug")
+        if slug is None:
+            warnings.append({
+                "entity_id": entity_id,
+                "monster_template_slug": None,
+                "reason": "aucun comportement de combat : template non résolu",
+            })
+        elif loader.get_monster(slug) is None:
+            warnings.append({
+                "entity_id": entity_id,
+                "monster_template_slug": slug,
+                "reason": "aucun comportement de combat : template non résolu",
+            })
+    return warnings
+
+
 class CombatBridge:
     """Un combat actif par ``handle_id`` ; la vérité reste chez le moteur.
 
@@ -49,6 +82,12 @@ class CombatBridge:
 
     def __init__(self) -> None:
         self._combats: dict[str, Any] = {}
+        # entity_id -> avertissement, pour les membres d'encounter dont le
+        # monster_template_slug ne résout à rien dans dnd5e-srd-data (I-205
+        # volet 1) : rempli à start_combat, consulté par monster_turn pour
+        # que CHAQUE tour d'un monstre non résolu porte l'avertissement,
+        # jamais seulement l'ouverture du combat.
+        self._unresolved: dict[str, dict[str, dict]] = {}
 
     # -- cycle de vie ------------------------------------------------------
 
@@ -68,7 +107,11 @@ class CombatBridge:
         attaque jouable exige ``weapon_id`` résolvable dans le corpus (l'attaque
         sans arme est acceptée mais n'arme aucun jet) ; un monstre jouable
         exige ``monster_template_slug`` présent dans `dnd5e-srd-data`
-        (ex. ``goblin-warrior``), sinon son tour se résout en passe.
+        (ex. ``goblin-warrior``), sinon son tour se résout en passe — **mais
+        jamais silencieusement** : ``warnings`` (ici et sur chaque
+        ``monster_turn`` suivant tant que le combat dure) porte un
+        avertissement explicite par membre d'encounter dont le template n'a
+        pas résolu (I-205).
         """
         eng = _engine_fn()
         result = await _orch().start_combat(
@@ -80,6 +123,8 @@ class CombatBridge:
         )
         handle = result.handle
         self._combats[handle.handle_id] = handle
+        warnings = _unresolved_template_warnings(encounter)
+        self._unresolved[handle.handle_id] = {w["entity_id"]: w for w in warnings}
         # Le moteur rend les événements d'ouverture ET les met en file
         # (mêmes objets) : on sert la FILE comme unique source de livraison
         # pour garantir le exact-once avec drain_events/narration_events.
@@ -88,6 +133,7 @@ class CombatBridge:
             "handle_id": handle.handle_id,
             "events": queued or _dump(result.events),
             "live": self.live(handle.handle_id),
+            "warnings": warnings,
         }
 
     async def submit_intent(self, handle_id: str, actor_id: str,
@@ -107,16 +153,28 @@ class CombatBridge:
                 "live": self.live(handle_id)}
 
     async def monster_turn(self, handle_id: str) -> dict:
-        """Fait jouer le tour du monstre courant par l'IA du moteur."""
+        """Fait jouer le tour du monstre courant par l'IA du moteur.
+
+        Si l'acteur dont c'est le tour n'a jamais eu de
+        ``monster_template_slug`` résolu (I-205 volet 1), ``warnings`` porte
+        l'avertissement AVANT de jouer le tour : le moteur va quand même
+        résoudre un ``pass`` (comportement décrit dans
+        ``advance_monster_turn``), mais l'appelant reçoit un signal explicite
+        — jamais un pass indiscernable d'une passivité voulue.
+        """
+        warning = self._unresolved.get(handle_id, {}).get(
+            self.live(handle_id)["active_actor_id"])
         await _orch().advance_monster_turn(self._handle(handle_id))
         return {"events": self.drain_events(handle_id),
-                "live": self.live(handle_id)}
+                "live": self.live(handle_id),
+                "warnings": [warning] if warning else []}
 
     async def end_combat(self, handle_id: str) -> dict:
         """Clôt le combat ; l'issue (``ended_reason``, morts, XP) vient du
         moteur. Le handle est ensuite oublié par le pont."""
         result = await _orch().end_combat(self._handle(handle_id))
         self._combats.pop(handle_id, None)
+        self._unresolved.pop(handle_id, None)
         return {
             "outcome": result.outcome.model_dump(),
             "events": _dump(result.events),

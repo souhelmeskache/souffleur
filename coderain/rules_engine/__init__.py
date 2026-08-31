@@ -8,6 +8,11 @@ n'implémente aucune règle : il charge la bibliothèque paresseusement
 
 Coexistence v0 : les jets simples hors combat restent dans
 `coderain.modules.rpg` (roll_check MCP), NON touché.
+
+Un membre d'encounter sans `monster_template_slug` résolu (créature de
+module, pas du SRD) n'a AUCUN comportement de combat par défaut — voir
+`engine_bridge` (`warnings` explicites, jamais un pass silencieux, I-205) et
+`monster_bridge` (pont minimal record de module -> template 'brute').
 """
 from __future__ import annotations
 

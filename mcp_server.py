@@ -2431,6 +2431,14 @@ async def start_combat(session_id: str, party: list[dict],
     entity_id, name, initiative, hp_current, hp_max, ac, zone_id... ; un monstre
     jouable porte monster_template_slug ex. "goblin-warrior"). rng_seed rend le
     combat déterministe : mêmes graines ⇒ mêmes dés.
+
+    Retour: ... "warnings": [{entity_id, monster_template_slug, reason}, ...]
+    — un membre d'encounter dont le monster_template_slug ne résout à rien
+    (absent ou pas dans dnd5e-srd-data) n'a aucun comportement de combat ; le
+    moteur le résout en pass mais CET avertissement le signale explicitement
+    (I-205), il revient aussi sur chaque monster_turn tant que le combat
+    dure. Pont minimal pour mapper un record de module vers un comportement
+    jouable : coderain.rules_engine.monster_bridge.
     """
     result = await get_bridge().start_combat(
         session_id=session_id, party=party, encounter=encounter,
@@ -2454,7 +2462,12 @@ async def submit_intent(handle_id: str, actor_id: str, intent: dict) -> dict:
 
 @mcp.tool()
 async def monster_turn(handle_id: str) -> dict:
-    """Fait jouer par l'IA du moteur le tour du monstre courant."""
+    """Fait jouer par l'IA du moteur le tour du monstre courant.
+
+    "warnings" porte un avertissement explicite si l'acteur dont c'est le
+    tour n'a jamais eu de monster_template_slug résolu (I-205) : le tour se
+    joue quand même (pass), mais jamais silencieusement.
+    """
     result = await get_bridge().monster_turn(handle_id)
     _record_combat_events(result.get("events", []))
     return result
