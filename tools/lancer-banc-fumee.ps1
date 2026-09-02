@@ -41,6 +41,21 @@
     démarrer (code de sortie non nul) si le dossier du run nommé n'existe
     pas — y compris en `-DryRun`.
 
+.PARAMETER ModeleMj
+    Modèle de l'agent MJ ($AgentMj). Défaut : sonnet (comportement historique
+    inchangé). Ajouté pour le banc de nuit (#260, A/B Director haiku/sonnet).
+
+.PARAMETER ModeleJoueur
+    Modèle de l'agent joueur-banc. Défaut : sonnet (comportement historique
+    inchangé).
+
+.PARAMETER SavesDirOverride
+    Dossier à imposer comme SAVES_DIR aux DEUX panes (`herdr pane split
+    --env`), pour qu'une save copiée hors de saves/ (#260, banc de nuit —
+    isolation par partie) soit résolue par `-Save <slug>` comme si elle y
+    était. Vide par défaut : aucun `--env` posé, comportement historique
+    inchangé (résolution SAVES_DIR normale de coderain/config.py).
+
 .PARAMETER DryRun
     Affiche le montage complet (panes, gabarits remplis, chemin du journal)
     sans rien créer ni lancer.
@@ -63,6 +78,27 @@ param(
     [int]$Tours = 12,
 
     [string]$Reprise = '',
+
+    # Modèle des deux agents (Issue #260, banc de nuit — A/B Director) :
+    # défauts inchangés (sonnet/sonnet) pour ne rien changer au banc de
+    # fumée historique quand ces paramètres ne sont pas fournis.
+    [string]$ModeleMj = 'sonnet',
+    [string]$ModeleJoueur = 'sonnet',
+
+    # Dossier SAVES_DIR à imposer aux DEUX panes (Issue #260) : une copie de
+    # save isolée par partie de banc de nuit vit hors de saves/ (D-109/D-178,
+    # jamais de matériau réel gitté) — ce paramètre pointe les deux agents
+    # dessus via `herdr pane split --env`, sans toucher au moteur ni à
+    # config.py (résolution SAVES_DIR déjà dynamique, cf. coderain/config.py).
+    [string]$SavesDirOverride = '',
+
+    # Dossier de journal imposé (Issue #260, banc de nuit) : au lieu du
+    # bench\banc-fumee\<horodate> auto-daté, écrit tour-NN/prose-NN/
+    # action-NN directement dans ce dossier — nuit.sh y pointe une partie
+    # (bench/nuit-AAAAMMJJ/partie-NN/), pour que le journal ET la save
+    # isolée (-SavesDirOverride) vivent sous le même dossier de partie.
+    # Exclusif avec -Reprise (les deux pilotent $JournalDir autrement).
+    [string]$JournalDirOverride = '',
 
     [switch]$DryRun
 )
@@ -109,7 +145,17 @@ $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 
 $FichiersExistantsProchainTour = @()
 
-if ($Reprise) {
+if ($Reprise -and $JournalDirOverride) {
+    Write-Error "-Reprise et -JournalDirOverride sont exclusifs."
+    exit 1
+}
+
+if ($JournalDirOverride) {
+    $Horodate = ''
+    $JournalDir = $JournalDirOverride
+    $ProchainTour = 1
+    $ProchainTourStr = '01'
+} elseif ($Reprise) {
     $Horodate = $Reprise
     $JournalDir = Join-Path $RepoRoot "bench\banc-fumee\$Horodate"
     if (-not (Test-Path $JournalDir)) {
@@ -232,8 +278,11 @@ if ($DryRun) {
         Write-Output "Prochain tour  : $ProchainTourStr"
     }
     Write-Output "Journal        : $JournalDir"
-    Write-Output "Pane MJ        : agent $AgentMj (claude, sonnet, effort medium)"
-    Write-Output "Pane joueur    : agent $AgentJoueur (claude, sonnet, effort low)"
+    Write-Output "Pane MJ        : agent $AgentMj (claude, $ModeleMj, effort medium)"
+    Write-Output "Pane joueur    : agent $AgentJoueur (claude, $ModeleJoueur, effort low)"
+    if ($SavesDirOverride) {
+        Write-Output "SAVES_DIR      : $SavesDirOverride (imposé aux deux panes)"
+    }
     Write-Output ""
     Write-Output "Commandes qui seraient exécutées :"
     Write-Output "  (herdr résolu : $HerdrExe)"
@@ -243,11 +292,12 @@ if ($DryRun) {
         Write-Output "  New-Item -ItemType Directory -Force -Path `"$JournalDir`""
     }
     Write-Output "  `$paneCur = $HerdrExe pane current"
-    Write-Output "  `$paneMj = $HerdrExe pane split <paneCur> --direction right --cwd `"$RepoRoot`""
-    Write-Output "  `$paneJoueur = $HerdrExe pane split <paneMj> --direction down --cwd `"$RepoRoot`""
+    $envArgAffiche = if ($SavesDirOverride) { " --env `"SAVES_DIR=$SavesDirOverride`"" } else { "" }
+    Write-Output "  `$paneMj = $HerdrExe pane split <paneCur> --direction right --cwd `"$RepoRoot`"$envArgAffiche"
+    Write-Output "  `$paneJoueur = $HerdrExe pane split <paneMj> --direction down --cwd `"$RepoRoot`"$envArgAffiche"
     Write-Output "  (automode : pose .claude\settings.local.json dans $RepoRoot, sans écraser s'il existe déjà — Issue #210)"
-    Write-Output "  $HerdrExe agent start $AgentMj --kind claude --pane <paneMj> -- --model sonnet --effort medium --permission-mode acceptEdits"
-    Write-Output "  $HerdrExe agent start $AgentJoueur --kind claude --pane <paneJoueur> -- --model sonnet --effort low --permission-mode acceptEdits"
+    Write-Output "  $HerdrExe agent start $AgentMj --kind claude --pane <paneMj> -- --model $ModeleMj --effort medium --permission-mode acceptEdits"
+    Write-Output "  $HerdrExe agent start $AgentJoueur --kind claude --pane <paneJoueur> -- --model $ModeleJoueur --effort low --permission-mode acceptEdits"
     Write-Output "  $HerdrExe agent prompt $AgentMj <prompt-gabarit MJ ci-dessous> --wait --until working --timeout 15000"
     Write-Output "  $HerdrExe agent prompt $AgentJoueur <prompt-gabarit joueur ci-dessous> --wait --until working --timeout 15000"
     Write-Output ""
@@ -281,7 +331,15 @@ if (-not $paneCurId) { Write-Error "pane courant illisible"; exit 1 }
 
 # Correctif scratchpad (issue #196) : le MJ prend un pane NEUF (split), jamais
 # le pane courant — et le chemin JSON est result.pane.pane_id.
-$paneMjJson = & $HerdrExe pane split $paneCurId --direction right --cwd $RepoRoot
+#
+# $SavesDirOverride (#260) : --env SAVES_DIR=... posé sur les DEUX panes, pas
+# seulement au niveau du process courant — la résolution SAVES_DIR
+# (coderain/config.py::_resolve_dir) est dynamique par process, chaque agent
+# lit son propre environnement de pane.
+$envSplitArgs = @()
+if ($SavesDirOverride) { $envSplitArgs = @('--env', "SAVES_DIR=$SavesDirOverride") }
+
+$paneMjJson = & $HerdrExe pane split $paneCurId --direction right --cwd $RepoRoot @envSplitArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr pane split' pour ouvrir le pane MJ."
     exit 1
@@ -291,7 +349,7 @@ $paneMjId = $paneMjData.result.pane.pane_id
 if (-not $paneMjId) { $paneMjId = $paneMjData.result.pane_id }
 if (-not $paneMjId) { Write-Error "pane MJ illisible"; exit 1 }
 
-$paneJoueurJson = & $HerdrExe pane split $paneMjId --direction down --cwd $RepoRoot
+$paneJoueurJson = & $HerdrExe pane split $paneMjId --direction down --cwd $RepoRoot @envSplitArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr pane split' pour ouvrir le pane joueur-banc."
     exit 1
@@ -338,15 +396,15 @@ if (-not (Test-Path $settingsLocalPath)) {
     Write-Output "Automode déjà présent, non modifié : $settingsLocalPath"
 }
 
-Write-Output "Démarrage de l'agent MJ ($AgentMj, sonnet, effort medium)..."
-& $HerdrExe agent start $AgentMj --kind claude --pane $paneMjId -- --model sonnet --effort medium --permission-mode acceptEdits
+Write-Output "Démarrage de l'agent MJ ($AgentMj, $ModeleMj, effort medium)..."
+& $HerdrExe agent start $AgentMj --kind claude --pane $paneMjId -- --model $ModeleMj --effort medium --permission-mode acceptEdits
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr agent start' pour $AgentMj sur le pane $paneMjId."
     exit 1
 }
 
-Write-Output "Démarrage de l'agent joueur-banc ($AgentJoueur, sonnet, effort low)..."
-& $HerdrExe agent start $AgentJoueur --kind claude --pane $paneJoueurId -- --model sonnet --effort low --permission-mode acceptEdits
+Write-Output "Démarrage de l'agent joueur-banc ($AgentJoueur, $ModeleJoueur, effort low)..."
+& $HerdrExe agent start $AgentJoueur --kind claude --pane $paneJoueurId -- --model $ModeleJoueur --effort low --permission-mode acceptEdits
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr agent start' pour $AgentJoueur sur le pane $paneJoueurId."
     exit 1
