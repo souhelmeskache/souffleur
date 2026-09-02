@@ -5,21 +5,52 @@
   fichier PAUSE.
 - `veiller.sh` : veille sur l'apparition d'un fichier du journal, sans
   envoyer de go ; mêmes conditions de sortie que ci-dessus.
-- `circuit.sh` : teardown du circuit de lane (I-243, « ce qui crée détruit »).
-  `nettoyer <lane-NNN|revue-NNN>` ferme le workspace herdr, retire le
-  worktree Git et la branche ; `nettoyer --orphelins` purge les dossiers de
-  `.herdr/worktrees/souffleur/` qu'aucun worktree Git ni workspace herdr ne
-  tient plus ; `etat` liste en une commande lanes en vol, PR ouvertes,
-  workspaces, worktrees et orphelins. Les deux verbes de `nettoyer` sont
-  idempotents (sortie 0 si déjà propre). Appelé par `solder3.sh` après merge.
-- `solder3.sh` : solde d'une PR — attente CI verte, puis revue fraîche,
-  verdict, merge, puis `circuit.sh nettoyer` de la lane et de sa revue.
-- `solder-issue.sh <ISSUE>` : attend la PR de `lane-<ISSUE>` (par branche,
-  `closingIssuesReferences`, ou commentaire `TERMINÉ` de l'issue), sort si
-  l'agent est bloqué (2 relevés) ou après 90 min, puis enchaîne `solder3.sh`.
-- `attendre-termine.sh <ISSUE> <PR>` : attend un commentaire `TERMINÉ` posté
-  sur l'issue après le lancement (cas d'un correctif poussé suite à REFUS),
-  puis `solder3.sh <PR>`.
+- `circuit.sh` : teardown du circuit de lane (I-243, « ce qui crée détruit »)
+  et veille de circuit (I-250, « la veille est dans l'outil, pas dans un
+  scratchpad »).
+  - `nettoyer <lane-NNN|revue-NNN>` ferme le workspace herdr, retire le
+    worktree Git et la branche ; `nettoyer --orphelins` purge les dossiers de
+    `.herdr/worktrees/souffleur/` qu'aucun worktree Git ni workspace herdr ne
+    tient plus ; `etat` liste en une commande lanes en vol, PR ouvertes,
+    workspaces, worktrees et orphelins. Les deux verbes de `nettoyer` sont
+    idempotents (sortie 0 si déjà propre). Appelé par `veiller` après merge
+    et après chaque REFUS (teardown du worktree de revue).
+  - `veiller <ISSUE>` : UN watcher par circuit, qui couvre toutes les phases
+    d'une lane jusqu'à son merge.
+
+    **Phases** (dans l'ordre, celle atteinte au moment d'une sortie non
+    nulle est journalée sur l'Issue) :
+    1. `attente_pr` — attend la PR de `lane-<ISSUE>` : par branche, puis
+       `closingIssuesReferences`, puis commentaire `TERMINÉ` de l'issue.
+    2. `ci` — attend la CI verte de la PR.
+    3. `revue` — relance une revue fraîche (`lancer-lane.ps1 -Revue <PR>`)
+       et attend son verdict (`REVUE : APPROUVE` / `REVUE : REFUS`).
+    4. `merge` — sur `APPROUVE` : merge squash, `circuit.sh nettoyer` de la
+       lane et de la revue, `pull --ff-only`, sortie 0.
+    5. `attente_termine` — sur `REFUS` : renvoie automatiquement le verdict
+       à la lane (`herdr agent prompt lane-<ISSUE> "<verdict>… pousse puis
+       poste un nouveau TERMINÉ"`), nettoie le worktree de revue, puis
+       attend un `TERMINÉ` postérieur au verdict et reboucle en phase `ci`.
+       **Au plus 2 cycles de refus** — le 3ᵉ `REFUS` sort en code 4 (REFUS
+       persistant) plutôt que de rerenvoyer indéfiniment.
+
+    **Codes de sortie** :
+    - `0` — succès : merge fait, ou Issue déjà soldée détectée au lancement
+      (rejeu idempotent — Issue fermée ou PR déjà mergée pour elle).
+    - `1` — CI rouge, verdict de revue absent/en timeout, ou échec du merge.
+    - `2` — agent `lane-<ISSUE>` relevé `blocked` deux fois de suite : lit
+      les 20 dernières lignes du pane (`herdr agent read`), les poste en
+      commentaire `BLOQUÉ (watcher) : …` sur l'Issue.
+    - `3` — 90 min sans changement de phase.
+    - `4` — REFUS persistant (3ᵉ cycle).
+
+    Chaque sortie non nulle poste en commentaire de l'Issue une ligne
+    `VEILLE <ISSUE> : <code> <raison> <phase>` — le journal du circuit vit
+    sur l'Issue, jamais dans un scratchpad.
+  - `solder-issue.sh <ISSUE>`, `attendre-termine.sh <ISSUE> <PR>` et
+    `solder3.sh <PR>` sont des alias de compatibilité qui délèguent tous à
+    `circuit.sh veiller <ISSUE>` (habitude d'appel du poste META) ; la
+    logique elle-même vit uniquement dans `circuit.sh`.
 
 Origine : banc de nuit du 31/08 → 01/09/2026 (fiche #201). Versionnés en
 l'état, pas encore intégrés au lanceur (#210).
