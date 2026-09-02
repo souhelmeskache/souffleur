@@ -500,6 +500,8 @@ $Body
 ## Règles fixes de toute lane de ce dispatch
 
 - Travaille exclusivement dans ce worktree.
+- Tu travailles et tu pousses sur la branche ``lane-$IssueNumber`` créée pour
+  toi ; ne crée ni ne renomme aucune branche.
 - Petite PR ciblée vers ``main`` (verrouillée côté serveur : PR + CI obligatoires) — pas de commit direct sur ``main``.
 - CI verte attendue avant de considérer la lane terminée.
 - **Jamais ``--no-verify``** sur aucune commande git, en aucune circonstance.
