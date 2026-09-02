@@ -35,6 +35,7 @@ from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record
 from coderain.engine import Engine
 from coderain.memory import Library
+from coderain import validator as validator_mod
 
 FAIT = []
 
@@ -133,7 +134,7 @@ msgs_2 = engine._messages(h2, "Je fouille la pièce.")
 sys_1, sys_2 = msgs_1[0]["content"], msgs_2[0]["content"]
 
 state = store.world_state()
-loc = state["location"]
+loc = validator_mod.current_location(state)
 # D-260 post-mesure (a) (Issue #162) : `rpg_rules` servi par le moteur est
 # désormais le socle (+ section Level-ups sur déclencheur), pas le fichier
 # brut — `_rpg_rules_served()` est la même fonction que `_messages()` appelle.

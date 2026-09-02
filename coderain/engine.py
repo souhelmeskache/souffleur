@@ -226,8 +226,8 @@ class Engine:
         # — `_produce()` la fait suivre jusqu'au Writer seul via
         # `trinity.generate(rendu_md=...)`. Chaîne vide hors chemin partition.
         self._current_rendu_md = (
-            assembleur_position.rendu_md_for(partition_dir,
-                                             str(state.get("location", "")))
+            assembleur_position.rendu_md_for(
+                partition_dir, validator_mod.current_location(state))
             if partition_dir is not None else "")
         if partition_dir is not None:
             rpg_on = self.store.rpg_enabled()
