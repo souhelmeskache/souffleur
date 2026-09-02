@@ -28,6 +28,17 @@ from ..sidecar import (DEFAULT_CFG, SIDECAR_MARKER,          # noqa: F401
                       _FENCE_RE, _JSON_RE, _first_json_object,
                       _partial_tail, cfg_get, default_block,
                       filter_sidecar, parse_sidecar, strip_sidecar)
+# fold_skill/skill_trained are CORE (validator.py never imports this optional
+# module back — one-directional, no cycle): I-213 needs the SAME
+# accent/case-fold and the same "on the actor's own sheet" definition of
+# 'trained' on both sides of the guichet (validate() legality check here,
+# apply() bonus + `trained` readout).
+from ..validator import fold_skill, known_skills, skill_trained  # noqa: F401
+
+# Death-save rule (D-271 §1, straight 5e): d20, no modifier, success >= DC;
+# 3 successes -> stabilized, 3 failures -> dead.
+DEATH_SAVE_DC = 10
+DEATH_SAVE_TARGET = 3
 
 
 # --- dice (deterministic) ---
@@ -44,7 +55,7 @@ def skill_mod(store, actor_slug: str, skill_name: str,
     when a check names one they become this mechanical modifier. Reads the actor's
     entry from Markdown (source of truth): the player from `player.md`, an NPC by
     slug from `characters.md`. Returns 0 when the skill/actor is absent."""
-    name = (skill_name or "").strip().lower()
+    name = fold_skill(skill_name)
     if not name:
         return 0
     is_player = actor_slug in ("player", "you", "")
@@ -62,7 +73,7 @@ def skill_mod(store, actor_slug: str, skill_name: str,
         return 0
     # Wave 3: granted abilities count as trained skills for the bonus.
     for sname, _stat in target.skills() + target.abilities():
-        if sname.strip().lower() == name:
+        if fold_skill(sname) == name:
             return _as_int(cfg_get(cfg, "skill_bonus"), 2)
     return 0
 
@@ -110,6 +121,106 @@ def roll_damage(formula: str, seed: int, nonce: int) -> dict:
     total = max(0, sum(dice) + modifier)
     return {"formula": str(formula).strip(), "dice": dice, "modifier": modifier,
             "total": total}
+
+
+# --- downed / death saves (I-213, D-271 §1) ---
+def _hp_zero_damage_failure(player: dict, events: list[str], crit: bool) -> None:
+    """5e: damage taken while already downed at 0 HP is an automatic
+    death-save failure — two on a critical hit. Breaks `stabilized` back into
+    active risk first (RAW: a stable creature that takes damage stops being
+    stable and resumes rolling); a no-op once `dead` (defensive — the guichet
+    already refuses any hp_delta on a dead player, see validator.py's
+    `_PLAYER_MUTATING_DELTAS` lock, before this is ever reached)."""
+    conditions = player.setdefault("conditions", [])
+    if "dead" in conditions:
+        return
+    if "stabilized" in conditions:
+        conditions.remove("stabilized")
+        events.append("condition: -stabilized (damage while at 0 HP)")
+    ds = player.setdefault("death_saves", {"successes": 0, "failures": 0})
+    n = 2 if crit else 1
+    ds["failures"] = min(DEATH_SAVE_TARGET, ds["failures"] + n)
+    events.append(f"death save: automatic failure ×{n} (damage at 0 HP) "
+                  f"→ {ds['failures']}/{DEATH_SAVE_TARGET}")
+    if ds["failures"] >= DEATH_SAVE_TARGET:
+        if "downed" in conditions:
+            conditions.remove("downed")
+        if "dead" not in conditions:
+            conditions.append("dead")
+        events.append("condition: +dead")
+
+
+def death_save(store, cfg: dict | None = None) -> dict:
+    """Resolve ONE death saving throw for the player (D-271 §1, straight 5e):
+    d20, no modifier, success >= DEATH_SAVE_DC (10). 3 successes -> stabilized
+    (stays at 0 HP, unconscious, no further rolls); 3 failures -> dead. A
+    natural 20 restores 1 HP and clears `downed`/`stabilized`, resetting the
+    counters; a natural 1 counts as TWO failures.
+
+    Engine-rolled, deterministic — same seed+nonce discipline as roll_check;
+    the LLM never rolls this either. Refuses (returns {"error": ...}) when
+    RPG is off, or the player isn't `downed`, is already `stabilized` (no
+    more rolls once stable), or already `dead`.
+
+    Writes state.json directly via store.set_rpg_state — D-141's one write
+    point (guard_world_state still runs on every write). Like roll_check's
+    nonce bookkeeping, this does NOT append to events.jsonl: a raw death save
+    isn't itself an undo/branch-replayed envelope (same precedent, same
+    limit) — the pre-turn snapshot (validator.snapshot_state) still covers it
+    for undo_last, since it deep-copies the whole world_state including rpg.
+    """
+    rpg = store.rpg_state()
+    if not rpg.get("enabled"):
+        return {"error": "rpg is not enabled for this story"}
+    player = rpg.setdefault("player", {})
+    conditions = player.setdefault("conditions", [])
+    if "dead" in conditions:
+        return {"error": "player is dead"}
+    if "downed" not in conditions:
+        return {"error": "player is not downed — no death save to make"}
+    if "stabilized" in conditions:
+        return {"error": "player is stabilized — no further death saves"}
+
+    ds = player.setdefault("death_saves", {"successes": 0, "failures": 0})
+    nonce = _as_int(rpg.get("rolls", 0))
+    rpg["rolls"] = nonce + 1
+    rng = random.Random(f"{_as_int(rpg.get('seed', 0))}-{nonce}-death")
+    roll = rng.randint(1, 20)
+    transition = None
+
+    if roll == 20:
+        cap = max(1, _as_int(player.get("hp_max", 1)))
+        player["hp"] = min(1, cap)
+        conditions[:] = [c for c in conditions if c not in ("downed", "stabilized")]
+        ds["successes"], ds["failures"] = 0, 0
+        outcome, transition = "natural 20 — revived at 1 HP, downed cleared", "revived"
+    else:
+        if roll == 1:
+            ds["failures"] = min(DEATH_SAVE_TARGET, ds["failures"] + 2)
+            outcome = "natural 1 — two failures"
+        elif roll >= DEATH_SAVE_DC:
+            ds["successes"] = min(DEATH_SAVE_TARGET, ds["successes"] + 1)
+            outcome = "success"
+        else:
+            ds["failures"] = min(DEATH_SAVE_TARGET, ds["failures"] + 1)
+            outcome = "failure"
+        if ds["failures"] >= DEATH_SAVE_TARGET:
+            conditions[:] = [c for c in conditions if c not in ("downed", "stabilized")]
+            if "dead" not in conditions:
+                conditions.append("dead")
+            transition = "dead"
+        elif ds["successes"] >= DEATH_SAVE_TARGET:
+            if "stabilized" not in conditions:
+                conditions.append("stabilized")
+            transition = "stabilized"
+
+    player["death_saves"] = ds
+    store.set_rpg_state(rpg)
+    return {
+        "roll": roll, "dc": DEATH_SAVE_DC, "outcome": outcome,
+        "death_saves": dict(ds), "transition": transition,
+        "hp": player.get("hp"), "conditions": list(conditions),
+    }
 
 
 # --- sidecar extraction ---
@@ -218,6 +329,7 @@ def apply(store, sidecar: dict, cfg: dict | None = None) -> list[str]:
         res["stat"] = stat
         if skill:
             res["skill"] = skill
+            res["trained"] = skill_trained(store, actor, skill)
         if actor != "player":
             res["actor"] = actor
         rpg["last_check"] = res
@@ -237,16 +349,31 @@ def apply(store, sidecar: dict, cfg: dict | None = None) -> list[str]:
             delta = _as_int(d.get(f"{pool}_delta"))
             if delta:
                 cap = _as_int(player.get(mx, player.get(pool, 0)))
+                # D-271 §1: damage received while already downed at 0 HP is an
+                # automatic death-save failure (two on a crit), not a second
+                # trip below 0 — read BEFORE the clamp below overwrites hp.
+                damage_at_zero = (
+                    pool == "hp" and delta < 0
+                    and _as_int(player.get("hp", 0)) <= 0
+                    and "downed" in player["conditions"]
+                    and "dead" not in player["conditions"]
+                )
                 cur = _clamp(_as_int(player.get(pool, 0)) + delta, 0, cap)
                 player[pool] = cur
                 events.append(f"{pool}: {'+' if delta >= 0 else ''}{delta} → {cur}/{cap}")
                 if pool == "hp":
+                    if damage_at_zero:
+                        _hp_zero_damage_failure(player, events,
+                                                crit=bool(d.get("hp_delta_crit")))
                     # "downed" is auto-managed symmetrically: set at 0, cleared on heal.
-                    if cur == 0 and "downed" not in player["conditions"]:
+                    elif cur == 0 and "downed" not in player["conditions"]:
                         player["conditions"].append("downed")
                         events.append("condition: +downed")
                     elif cur > 0 and "downed" in player["conditions"]:
                         player["conditions"].remove("downed")
+                        if "stabilized" in player["conditions"]:
+                            player["conditions"].remove("stabilized")
+                        player["death_saves"] = {"successes": 0, "failures": 0}
                         events.append("condition: -downed")
 
         # XP + level-up. `per` is clamped >=1 so a bad config (0/negative/blank ->

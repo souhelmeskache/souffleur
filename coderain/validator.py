@@ -17,6 +17,7 @@ RPG is off, exactly as before).
 from __future__ import annotations
 
 import copy
+import unicodedata
 
 ENVELOPE_VERSION = 1
 
@@ -40,11 +41,21 @@ PERSIST_HISTORY_CAP = 20
 _TOP_KEYS = {"v", "scene_break", "check", "deltas"}
 
 # Deltas that exist today (mechanics from Phase 4 + the Wave 1 world deltas).
-_MECHANICS = {"hp_delta", "mana_delta", "xp_delta",
+_MECHANICS = {"hp_delta", "hp_delta_crit", "mana_delta", "xp_delta",
               "inventory_add", "inventory_remove",
               "inventory_equip", "inventory_unequip",
               "status_add", "status_remove", "trust", "npc_state", "enemies",
               "ability_add", "title_add"}
+# Player-mutating subset of _MECHANICS (everything except "enemies", which
+# touches combat NPCs, not the player) — the vocabulary `dead` locks (I-213
+# D-271 §2): once the player carries the `dead` condition, none of these may
+# land through the guichet again. `hp_delta_crit` never appears alone (see
+# below), listing it here is harmless belt-and-braces.
+_PLAYER_MUTATING_DELTAS = {"hp_delta", "hp_delta_crit", "mana_delta", "xp_delta",
+                          "inventory_add", "inventory_remove",
+                          "inventory_equip", "inventory_unequip",
+                          "status_add", "status_remove", "trust", "npc_state",
+                          "ability_add", "title_add"}
 _WORLD = {"time_advance", "flag_set", "location", "gold_delta",
           "quest_update", "beat_advance", "persist"}
 # Wave 2/4: sanctioned Markdown mutations, applied by the engine so they can be
@@ -72,6 +83,52 @@ def _as_int(v):
         return int(v)
     except (ValueError, OverflowError):
         return None
+
+
+def fold_skill(name: str) -> str:
+    """Accent/case-insensitive fold for skill-name comparison (I-213 corollary
+    3): 'Discrétion' and 'discretion' must compare equal. NFKD strips
+    diacritics to their combining marks, which are then dropped."""
+    s = unicodedata.normalize("NFKD", str(name or ""))
+    return "".join(c for c in s if not unicodedata.combining(c)).strip().lower()
+
+
+def _sheet_skills(store, actor: str) -> set[str]:
+    """Folded skill/ability names on `actor`'s OWN sheet — player.md for the
+    player, characters.md by slug for an NPC. Never raises: a missing/broken
+    sheet just means no actor-specific skills (same tolerance as skill_mod)."""
+    is_player = actor in ("player", "you", "")
+    rel = "player.md" if is_player else "characters.md"
+    try:
+        entries = store.entries(rel)
+    except Exception:  # noqa: BLE001 — a bad sheet must not break validation
+        entries = []
+    target = None
+    for e in entries:
+        if is_player or e.slug == actor:
+            target = e
+            break
+    if target is None:
+        return set()
+    return {fold_skill(sname) for sname, _stat in target.skills() + target.abilities()}
+
+
+def known_skills(store, actor: str = "player") -> set[str]:
+    """The skill vocabulary a `check.skill` may name for `actor` (I-213
+    corollary 3): `actor`'s own sheet UNION the canonical rules table —
+    `coderain.converter.aval.SKILL_TO_ABILITY_5E`, the SRD skill list already
+    used (D-254) to route prose checks to their governing ability. A skill
+    the rules recognize is legal even for an actor who never trained in it;
+    `skill_trained` below is what tells the two apart."""
+    from .converter.aval import SKILL_TO_ABILITY_5E
+    return {fold_skill(k) for k in SKILL_TO_ABILITY_5E} | _sheet_skills(store, actor)
+
+
+def skill_trained(store, actor: str, skill: str) -> bool:
+    """True when `skill` is on `actor`'s own sheet — the 'trained' half of
+    I-213 corollary 3 (known-but-untrained still resolves, just with
+    `trained: false` and no proficiency bonus)."""
+    return fold_skill(skill) in _sheet_skills(store, actor)
 
 
 def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dict]]:
@@ -106,9 +163,12 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
     # --- check (the engine still rolls; we only sanity-check the proposal) ---
     chk = env.get("check")
     if chk is not None:
-        stat = str(chk.get("stat", "")).strip().lower() \
-            if isinstance(chk, dict) else ""
-        if not isinstance(chk, dict):
+        is_dict = isinstance(chk, dict)
+        stat = str(chk.get("stat", "")).strip().lower() if is_dict else ""
+        skill = str(chk.get("skill", "")).strip() if is_dict else ""
+        actor_raw = str(chk.get("actor", "")).strip() if is_dict else ""
+        actor = "player" if actor_raw in ("", "player", "you") else _slug(actor_raw)
+        if not is_dict:
             _reject(rejected, "check", chk, "check must be an object")
         elif not stat:
             _reject(rejected, "check", chk, "check needs a 'stat'")
@@ -117,6 +177,10 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
                     f"unknown stat '{stat}' (use one of: {', '.join(stats)})")
         elif chk.get("dc") is not None and _as_int(chk.get("dc")) is None:
             _reject(rejected, "check", chk, "check 'dc' must be a number")
+        elif skill and fold_skill(skill) not in known_skills(store, actor):
+            _reject(rejected, "check", chk,
+                    f"unknown skill '{skill}' (use one of: "
+                    f"{', '.join(sorted(known_skills(store, actor)))})")
         else:
             clean["check"] = chk
 
@@ -129,9 +193,24 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
         return clean, rejected
 
     state = store.world_state()
+    player_conditions = ((state.get("rpg") or {}).get("player") or {}).get(
+        "conditions") or []
+    is_dead = "dead" in player_conditions
     out: dict = {}
     for key, value in d.items():
-        if key in _INT_DELTAS:
+        # D-271 §2: dead closes the game engine-side — no envelope may mutate
+        # the player past that point (world/combat deltas untouched: `dead`
+        # is a fact about the player, not the scene).
+        if is_dead and key in _PLAYER_MUTATING_DELTAS:
+            _reject(rejected, key, value,
+                    "player is dead — no further mutation of the player is allowed")
+            continue
+        if key == "hp_delta_crit":
+            if isinstance(value, bool):
+                out[key] = value
+            else:
+                _reject(rejected, key, value, "must be a boolean")
+        elif key in _INT_DELTAS:
             iv = _as_int(value)
             if iv is None:
                 _reject(rejected, key, value, "must be an integer")

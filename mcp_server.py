@@ -367,7 +367,8 @@ _SKILL_VALUE_RE = re.compile(r"([+-]?\d+)")
 
 
 def _skill_mod_ranked(store, actor_slug, skill_name, cfg=None) -> int:
-    name = (skill_name or "").strip().lower()
+    from coderain.validator import fold_skill
+    name = fold_skill(skill_name)
     if not name:
         return 0
     is_player = actor_slug in ("player", "you", "")
@@ -394,7 +395,7 @@ def _skill_mod_ranked(store, actor_slug, skill_name, cfg=None) -> int:
                 continue
             m = re.match(r"^(.*?)\s*\(([^)]*)\)\s*$", part)
             sname, inner = (m.group(1), m.group(2)) if m else (part, "")
-            if sname.strip().lower() != name:
+            if fold_skill(sname) != name:
                 continue
             num = _SKILL_VALUE_RE.search(inner)
             return int(num.group(1)) if num else flat
@@ -776,27 +777,62 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     """Roll a d20 + stat modifier vs DC. Engine-rolled, deterministic (seed + nonce).
 
     The LLM NEVER rolls dice — it proposes a check, this tool resolves it.
-    Returns {dc, mod, roll, total, success, win_chance}."""
+    A `skill` outside the actor's sheet + the canonical rules list (I-213
+    corollary 3) is refused: {"error": "unknown skill ..."}. A known skill
+    resolves either way, with `trained` saying whether the actor is proficient.
+    Returns {dc, mod, roll, total, success, win_chance, skill?, trained?}."""
     store = _require_store()
     rpg_mod = _load_rpg()
     from coderain.templates import slugify
+    from coderain.validator import fold_skill, known_skills
     rpg = store.rpg_state()
     actor_slug = slugify(actor) if actor and actor not in ("player", "you") else "player"
+    sk_mod = 0
+    if skill:
+        valid = known_skills(store, actor_slug)
+        if fold_skill(skill) not in valid:
+            return {"error": f"unknown skill '{skill}' "
+                              f"(use one of: {', '.join(sorted(valid))})"}
+        sk_mod = rpg_mod.skill_mod(store, actor_slug, skill, _rpg_cfg)
     if actor_slug == "player":
         actor_stats = rpg.get("player", {}).get("stats", {})
     else:
         npc = next((e for e in store.entries("characters.md")
                     if e.slug == actor_slug), None)
         actor_stats = npc.stats() if npc else {}
-    mod = int(actor_stats.get(stat.strip().lower(), 0))
-    if skill:
-        mod += rpg_mod.skill_mod(store, actor_slug, skill, _rpg_cfg)
+    mod = int(actor_stats.get(stat.strip().lower(), 0)) + sk_mod
     seed = rpg.get("seed", 0)
     nonce = rpg.get("rolls", 0) + 1
     result = rpg_mod.roll_check(mod, dc, seed, nonce)
     rpg["rolls"] = nonce
     store.set_rpg_state(rpg)
+    if skill:
+        result["skill"] = skill
+        result["trained"] = sk_mod > 0
     return result
+
+
+@mcp.tool()
+def death_save() -> dict:
+    """Resolve ONE death saving throw for the player at 0 HP (I-213, D-271 §1
+    — straight 5e: d20, no modifier, success >= 10; 3 successes -> stabilized,
+    3 failures -> dead; natural 20 revives at 1 HP; natural 1 counts as two
+    failures). Engine-rolled, deterministic. Refuses (returns {"error": ...})
+    when the player isn't `downed`, is already `stabilized`, or already
+    `dead` — check the sheet (ui_sheet / get_world_state) first.
+
+    Damage taken while already downed at 0 HP counts as an automatic failure
+    on its own (apply_envelope's hp_delta path) — this tool is only for the
+    deliberate once-a-turn save, not for damage resolution.
+
+    Writes state.json directly (rpg.death_save -> store.set_rpg_state); unlike
+    apply_envelope this does not append to events.jsonl — same precedent as
+    roll_check/roll_damage's nonce bookkeeping (see rpg.death_save docstring).
+    Returns {roll, dc, outcome, death_saves: {successes, failures},
+    transition: "stabilized"|"dead"|"revived"|None, hp, conditions}."""
+    store = _require_store()
+    rpg_mod = _load_rpg()
+    return rpg_mod.death_save(store, _rpg_cfg)
 
 
 @mcp.tool()
