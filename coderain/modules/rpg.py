@@ -271,7 +271,13 @@ def derived_combat(player: dict, inventory: dict | None = None,
 def player_combat(store, cfg: dict | None = None) -> dict:
     """`derived_combat` lu sur un save : stats/niveau du bloc `rpg`, objets
     équipés du miroir `inventory`, définitions d'objets sur items.md. Rien
-    n'est écrit — la dérivation se refait à chaque appel."""
+    n'est écrit — la dérivation se refait à chaque appel.
+
+    D-275 : un modificateur absent de la fiche est cherché dans
+    `rpg.provisoire` APRÈS la fiche et AVANT le refus. La valeur provisoire
+    n'entre jamais dans `rpg.player.stats` (copie de lecture seule) et le
+    retour le dit : `provisoire: true` + `provisoire_ids`."""
+    from .. import bouchage
     rpg = store.rpg_state()
     items: dict[str, dict] = {}
     try:
@@ -279,8 +285,15 @@ def player_combat(store, cfg: dict | None = None) -> dict:
             items[e.slug] = dict(e.attrs)
     except Exception:  # noqa: BLE001 — un items.md illisible ne casse pas la fiche
         items = {}
-    return derived_combat(rpg.get("player") or {}, rpg.get("inventory") or {},
-                          items)
+    player = dict(rpg.get("player") or {})
+    stats, poses = bouchage.appliquer_stats(rpg, "player", player.get("stats"))
+    if poses:
+        player["stats"] = stats
+    out = derived_combat(player, rpg.get("inventory") or {}, items)
+    if poses and not out.get("error"):
+        out["provisoire"] = True
+        out["provisoire_ids"] = poses
+    return out
 
 
 # --- downed / death saves (I-213, D-271 §1) ---

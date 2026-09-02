@@ -474,20 +474,41 @@ def _attack_fiche(store, who: str) -> dict:
     (mêmes champs 5e que `encounter_member_from_record` lit — `ca`, `pv`,
     `attaque_bonus`, `degats` — mais lus SANS ses defaults silencieux).
     Un champ absent reste `None` ici : c'est `attack` qui prononce le refus,
-    selon ce dont le jet demandé a besoin."""
+    selon ce dont le jet demandé a besoin.
+
+    D-275 : avant que ce refus tombe, `rpg.provisoire` est consulté — APRÈS
+    la fiche, jamais à sa place. Les ids des valeurs empruntées ressortent
+    sous `provisoire_ids` ; sans bouchage, tout est inchangé octet pour
+    octet."""
     from coderain.templates import slugify
+    from coderain import bouchage as bouchage_mod
     rpg_mod = _load_rpg()
     if who is None or str(who).strip().lower() in ("player", "you", ""):
         rpg = store.rpg_state()
         derived = rpg_mod.player_combat(store)
-        if derived.get("error"):
-            return {"error": f"{derived['error']} — player sheet"}
         p = rpg.get("player") or {}
+        if derived.get("error"):
+            # La fiche ne dérive pas. Un bouchage peut encore porter les
+            # nombres manquants ; aucun -> le refus d'origine, tel quel.
+            fiche = {"kind": "player", "slug": "player", "name": "player",
+                     "ac": None, "attack_bonus": None, "damage": None,
+                     "weapon": None, "hp": p.get("hp"),
+                     "hp_max": p.get("hp_max")}
+            poses = bouchage_mod.appliquer_fiche(rpg, "player", fiche)
+            if not poses:
+                return {"error": f"{derived['error']} — player sheet"}
+            fiche["provisoire_ids"] = poses
+            return fiche
         w = derived.get("weapon") or {}
-        return {"kind": "player", "slug": "player", "name": "player",
-                "ac": derived["ac"], "attack_bonus": derived["attack_bonus"],
-                "damage": w.get("damage"), "weapon": w.get("slug"),
-                "hp": p.get("hp"), "hp_max": p.get("hp_max")}
+        fiche = {"kind": "player", "slug": "player", "name": "player",
+                 "ac": derived["ac"], "attack_bonus": derived["attack_bonus"],
+                 "damage": w.get("damage"), "weapon": w.get("slug"),
+                 "hp": p.get("hp"), "hp_max": p.get("hp_max")}
+        poses = list(derived.get("provisoire_ids") or [])
+        poses += bouchage_mod.appliquer_fiche(rpg, "player", fiche)
+        if poses:
+            fiche["provisoire_ids"] = poses
+        return fiche
 
     slug = slugify(str(who))
     attrs, name = None, slug
@@ -514,11 +535,15 @@ def _attack_fiche(store, who: str) -> dict:
         got = rpg_mod.opt_int(attrs.get(key))
         return None if (got is None or got is False) else got
 
-    return {"kind": "npc", "slug": slug, "name": name,
-            "ac": _num("ca"), "attack_bonus": _num("attaque_bonus"),
-            "damage": (str(attrs.get("degats")).strip()
-                       if str(attrs.get("degats") or "").strip() else None),
-            "weapon": None, "hp": None, "hp_max": _num("pv")}
+    fiche = {"kind": "npc", "slug": slug, "name": name,
+             "ac": _num("ca"), "attack_bonus": _num("attaque_bonus"),
+             "damage": (str(attrs.get("degats")).strip()
+                        if str(attrs.get("degats") or "").strip() else None),
+             "weapon": None, "hp": None, "hp_max": _num("pv")}
+    poses = bouchage_mod.appliquer_fiche(store.rpg_state(), slug, fiche)
+    if poses:
+        fiche["provisoire_ids"] = poses
+    return fiche
 
 
 # ── memory fold — coderain's summarizer, LLM step lifted out ─────
@@ -1733,13 +1758,15 @@ def _release_save_lock() -> None:
 # tests qui font `mcp_server.<outil>(...)` ou monkeypatchent l'etat partage
 # (`mcp_server._store = ...`) n'ont pas a changer.
 from coderain.mcp import (jets_combat, position_etat, narrateur,
-                          save_installation, auteur, memoire_rappel)
+                          save_installation, auteur, memoire_rappel,
+                          bouchage)
 from coderain.mcp.jets_combat import *
 from coderain.mcp.position_etat import *
 from coderain.mcp.narrateur import *
 from coderain.mcp.save_installation import *
 from coderain.mcp.auteur import *
 from coderain.mcp.memoire_rappel import *
+from coderain.mcp.bouchage import *
 
 
 if __name__ == "__main__":
