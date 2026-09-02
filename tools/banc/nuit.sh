@@ -24,6 +24,11 @@ FIXTURE_PY="$REPO_ROOT/bench/fixtures/personnage-banc.py"
 METRIQUES_PY="$REPO_ROOT/tools/banc/metriques_nuit.py"
 EXTRAIRE_PROSE_PY="$REPO_ROOT/tools/banc/extraire_prose.py"
 
+# Frontière bash ⊥ Windows (#270) : source la conversion partagée avec
+# verifier-liste-blanche-nuit.sh — jamais un chemin `pwd` brut (`/c/Users/...`)
+# vers python.exe/powershell.exe (voir tools/banc/README.md).
+source "$REPO_ROOT/tools/banc/chemin-windows.sh"
+
 POLL_SECS=20
 LIMITE_SESSION_IDLE_SECS=600   # 10 min — agent bloqué + idle sans progrès
 
@@ -332,10 +337,15 @@ attendre_fichier() {
 # "aucun LLM dans le script").
 partie_module_termine() {
   local save_dir="$1"
+  # Frontière bash ⊥ Windows (#270) : $save_dir est embarqué en LITTÉRAL dans
+  # le code source Python ci-dessous (r'...') — MSYS ne traduit que les
+  # arguments argv d'un exe natif, pas une chaîne cachée dans un -c ; il faut
+  # convertir explicitement avant.
+  local save_dir_win; save_dir_win="$(chemin_windows_depuis_bash "$save_dir")"
   python -c "
 import json, sys
 try:
-    d = json.load(open(r'$save_dir/state.json', encoding='utf-8'))
+    d = json.load(open(r'$save_dir_win/state.json', encoding='utf-8'))
 except Exception:
     sys.exit(1)
 conds = ((d.get('rpg') or {}).get('player') or {}).get('conditions') or []
