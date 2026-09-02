@@ -324,7 +324,7 @@ if ($EstRevue) {
         Write-Output "  git -C `"$RepoRoot`" fetch origin main"
         Write-Output "  $HerdrExe worktree create --cwd `"$RepoRoot`" --branch $revueBranch --base origin/main   (worktree JETABLE, jamais le checkout principal — lecture seule via gh, aucun commit attendu)"
         Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
-        Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $ModeleRevue --effort $EffortRevue --permission-mode acceptEdits"
+        Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $ModeleRevue --effort $EffortRevue --permission-mode bypassPermissions"
         Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
         Write-Output ""
         Write-Output "--- Prompt-gabarit (revue) ---"
@@ -392,7 +392,13 @@ if ($EstRevue) {
     }
 
     Write-Output "Démarrage de l'agent de revue ($ModeleRevue, effort $EffortRevue — figés)..."
-    & $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $ModeleRevue --effort $EffortRevue --permission-mode acceptEdits
+    # --permission-mode bypassPermissions (I-232) : acceptEdits laissait passer
+    # des demandes de permission bloquantes (création de fichiers hors édition
+    # simple, boucles `while`, garde d'écriture sur settings.json) qui
+    # gelaient la lane sans opérateur pour y répondre. Risque borné ailleurs :
+    # worktree jetable, `main` protégée côté serveur, CI + revue adversariale
+    # avant merge, force-push refusé partout dans le circuit (D-232).
+    & $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $ModeleRevue --effort $EffortRevue --permission-mode bypassPermissions
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Échec de 'herdr agent start' pour $agentName sur le pane $paneId."
         exit 1
@@ -574,7 +580,7 @@ if ($DryRun) {
     Write-Output "  git -C <worktree> config --worktree credential.helper `"`""
     Write-Output "  git -C <worktree> config --worktree --add credential.helper '!gh auth git-credential'"
     Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
-    Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode acceptEdits"
+    Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode bypassPermissions"
     Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
     Write-Output ""
     Write-Output "--- Prompt-gabarit ---"
@@ -683,10 +689,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output "Démarrage de l'agent claude ($Modele, effort $Effort)..."
-# --permission-mode acceptEdits : les éditions de fichiers sont auto-acceptées
-# (doc officielle claude) ; les commandes bash restent gouvernées par la
-# liste blanche de .claude/settings.json — pas un blanc-seing.
-& $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $Modele --effort $Effort --permission-mode acceptEdits
+# --permission-mode bypassPermissions (I-232, remplace acceptEdits) :
+# acceptEdits laissait passer des demandes de permission bloquantes (création
+# de `.mcp.json`, boucles `while`, garde d'écriture sur `settings.json`) —
+# trois lanes bloquées le 02/09, chacune exigeant une intervention humaine ou
+# du poste META. Le risque est borné ailleurs : worktree jetable, `main`
+# protégée côté serveur, CI + revue adversariale avant merge, force-push
+# refusé partout dans le circuit (D-232). Décision de Souhel, posée derrière
+# le label `prete` sur l'Issue #232 avant lancement de cette lane.
+& $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $Modele --effort $Effort --permission-mode bypassPermissions
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr agent start' pour $agentName sur le pane $paneId."
     exit 1
