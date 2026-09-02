@@ -22,6 +22,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LANCEUR_PS1="$REPO_ROOT/tools/lancer-banc-fumee.ps1"
 FIXTURE_PY="$REPO_ROOT/bench/fixtures/personnage-banc.py"
 METRIQUES_PY="$REPO_ROOT/tools/banc/metriques_nuit.py"
+EXTRAIRE_PROSE_PY="$REPO_ROOT/tools/banc/extraire_prose.py"
 
 POLL_SECS=20
 LIMITE_SESSION_IDLE_SECS=600   # 10 min — agent bloqué + idle sans progrès
@@ -387,7 +388,7 @@ jouer_partie() {
       # fait pas ») : le gabarit banc-mj.md (gelé D-276 §4) ne décrit pas de
       # protocole de tour 1 froid — le MJ ouvre lui-même la scène
       # (opening_scene) plutôt que d'attendre une action joueur inexistante.
-      herdr agent prompt banc-mj "go — tour $nn : ouverture, pas d'action joueur — établis la scène d'ouverture (opening_scene) puis écris tour-$nn.md/prose-$nn.md en conséquence" >/dev/null 2>&1
+      herdr agent prompt banc-mj "go — tour $nn : ouverture, pas d'action joueur — établis la scène d'ouverture (opening_scene) puis écris tour-$nn.md en conséquence" >/dev/null 2>&1
     else
       echo "=== partie $pnn tour $nn — go joueur $(date '+%H:%M:%S')"
       herdr agent prompt banc-joueur "go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md" >/dev/null 2>&1
@@ -404,12 +405,23 @@ jouer_partie() {
       herdr agent prompt banc-mj "go — tour $nn. Action du joueur (verbatim) : $action" >/dev/null 2>&1
     fi
 
-    attendre_fichier "$partie_dir/prose-$nn.md"; r=$?
+    attendre_fichier "$partie_dir/tour-$nn.md"; r=$?
     if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; fermer_panes; ecrire_nuit_md; exit 5; fi
     if [ "$r" -ne 0 ]; then
       raison="craquement-timeout"
-      ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant prose-$nn.md"
+      ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant tour-$nn.md"
       craquements+=("craquement-timeout-$nn.md")
+      break
+    fi
+
+    # Extraction MÉCANIQUE de prose-NN.md depuis tour-NN.md (#269) — jamais
+    # espérée du MJ : l'organe zéro-spoiler (D-219) doit exister même si le
+    # MJ n'a écrit que tour-NN.md (le seul livrable que le gabarit spécifie).
+    extraction_err="$(python "$EXTRAIRE_PROSE_PY" "$partie_dir/tour-$nn.md" "$partie_dir/prose-$nn.md" 2>&1)"
+    if [ $? -ne 0 ]; then
+      raison="craquement-prose-absente"
+      ecrire_craquement "$partie_dir" "$nn" "prose-absente" "$extraction_err"
+      craquements+=("craquement-prose-absente-$nn.md")
       break
     fi
 
