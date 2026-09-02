@@ -30,6 +30,23 @@ print(saves_dir())
 " 2>/dev/null)/$SAVE"
 [ -d "$SAVE_SRC" ] || refus "save '$SAVE' introuvable ($SAVE_SRC)."
 
+# --- envoi à blanc des deux gabarits (#263) ---------------------------------
+#
+# tools/lancer-banc-fumee.ps1 envoie chaque gabarit rendu en un seul argument
+# à `herdr agent prompt` (I-385, échappement Win32) — un `"` interne cassant
+# cet échappement casse la nuit ENTIÈRE en silence (nuit N0 du 02/09 : 4
+# parties/4 craquées au lancement, 0 tour joué). Envoi à blanc vers un agent
+# qu'on sait inexistant AVANT de démarrer la nuit : seul `agent_not_found`
+# (rc 1) est attendu (parsing OK, agent introuvable — normal). Tout rc 2
+# (erreur de parsing herdr, ex. `unknown option`) = échappement cassé =
+# REFUS de la garde, la nuit ne démarre pas.
+GARDE_ENVOI_PS1="$REPO_ROOT/tools/banc/verifier-envoi-gabarits.ps1"
+GARDE_ENVOI_JSON="$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$GARDE_ENVOI_PS1" 2>&1)"
+GARDE_ENVOI_RC=$?
+if [ "$GARDE_ENVOI_RC" -ne 0 ]; then
+  refus "envoi à blanc des gabarits en échec — $GARDE_ENVOI_JSON"
+fi
+
 # --- rien en vol : agents lane-*/revue-* (circuit.sh), PR ouvertes ---------
 agents_en_vol="$(herdr agent list 2>/dev/null | tr '{' '\n' \
   | grep -oE '"name":"(lane|revue)-[0-9]+"' | sort -u | tr '\n' ' ')"
