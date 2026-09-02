@@ -17,7 +17,11 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     A `skill` outside the actor's sheet + the canonical rules list (I-213
     corollary 3) is refused: {"error": "unknown skill ..."}. A known skill
     resolves either way, with `trained` saying whether the actor is proficient.
-    Returns {dc, mod, roll, total, success, win_chance, skill?, trained?}."""
+    A stat absent from the actor's sheet is looked up in `rpg.provisoire`
+    (D-275) before falling back to 0 — a borrowed modifier is flagged
+    `provisoire: true`.
+    Returns {dc, mod, roll, total, success, win_chance, skill?, trained?,
+    provisoire?, provisoire_ids?}."""
     store = mcp_server._require_store()
     rpg_mod = mcp_server._load_rpg()
     from coderain.templates import slugify
@@ -37,7 +41,17 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
         npc = next((e for e in store.entries("characters.md")
                     if e.slug == actor_slug), None)
         actor_stats = npc.stats() if npc else {}
-    mod = int(actor_stats.get(stat.strip().lower(), 0)) + sk_mod
+    # D-275 : le modificateur absent de la fiche se cherche dans
+    # `rpg.provisoire` APRÈS la fiche — et le jet DIT qu'il l'a emprunté.
+    stat_key = stat.strip().lower()
+    pose = None
+    if stat_key in actor_stats:
+        base = int(actor_stats[stat_key])
+    else:
+        from coderain import bouchage as bouchage_mod
+        pose, valeur = bouchage_mod.valeur_provisoire(rpg, actor_slug, stat_key)
+        base = bouchage_mod.entier(valeur) or 0
+    mod = base + sk_mod
     seed = rpg.get("seed", 0)
     nonce = rpg.get("rolls", 0) + 1
     result = rpg_mod.roll_check(mod, dc, seed, nonce)
@@ -46,6 +60,9 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     if skill:
         result["skill"] = skill
         result["trained"] = sk_mod > 0
+    if pose is not None:
+        result["provisoire"] = True
+        result["provisoire_ids"] = [pose]
     return result
 
 
@@ -116,8 +133,15 @@ def attack(attacker: str = "player", target: str = "monstre") -> dict:
     encore → {"error": "missing <champ> on <fiche>"}. Rien n'est jeté ni
     appliqué dans ce cas, et aucun défaut n'est emprunté à qui que ce soit.
 
+    SAUF si le trou a déjà été bouché (D-275) : `rpg.provisoire` est consulté
+    APRÈS la fiche et AVANT le refus ; une valeur provisoire enregistrée pour
+    ce champ et cette fiche s'applique, et le retour la signale
+    (`provisoire: true`, `provisoire_ids`). Un même trou ne se demande donc
+    pas deux fois — voir `demander_bouchage`/`enregistrer_bouchage`.
+
     Rend {attacker, target, roll, attack_bonus, total, target_ac, hit,
-    damage: {formula, dice, total}|null, applied: {...}|null}."""
+    damage: {formula, dice, total}|null, applied: {...}|null,
+    provisoire?: true, provisoire_ids?: [...]}."""
     store = mcp_server._require_store()
     rpg_mod = mcp_server._load_rpg()
     if not store.rpg_enabled():
@@ -155,6 +179,13 @@ def attack(attacker: str = "player", target: str = "monstre") -> dict:
            "roll": hit_roll["roll"], "attack_bonus": atk["attack_bonus"],
            "total": hit_roll["total"], "target_ac": tgt["ac"],
            "hit": bool(hit_roll["success"]), "damage": None, "applied": None}
+    # D-275 : si un des nombres vient d'un bouchage, l'attaque le DIT — la
+    # valeur est provisoire jusqu'à l'entre-deux (#97), jamais canonique.
+    poses = list(atk.get("provisoire_ids") or []) + \
+        list(tgt.get("provisoire_ids") or [])
+    if poses:
+        out["provisoire"] = True
+        out["provisoire_ids"] = poses
     if not out["hit"]:
         return out
 
