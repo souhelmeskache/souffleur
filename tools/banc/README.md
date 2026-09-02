@@ -80,6 +80,42 @@
 Origine : banc de nuit du 31/08 → 01/09/2026 (fiche #201). Versionnés en
 l'état, pas encore intégrés au lanceur (#210).
 
+## Frontière bash ⊥ Windows (#270)
+
+Un chemin produit sous Git Bash (`pwd`, `$REPO_ROOT`, `$partie_dir`, tout
+dérivé de `cd ... && pwd`) est en forme `/c/Users/...` — valide pour bash,
+**invalide pour tout binaire Windows natif** (`python.exe`, `powershell.exe`)
+qui le recevrait comme donnée plutôt que comme argument de ligne de commande :
+lu comme un chemin raciné sur le lecteur courant (`C:\c\Users\...`),
+silencieusement faux — jamais une erreur bruyante avant #270 (la garde de
+#267 refusait toute nuit avec un message trompeur : « n'est pas un JSON
+valide » alors que le fichier existait bel et bien).
+
+**Règle : jamais un chemin `pwd` brut vers Python/PowerShell.** Deux cas
+distincts, et un seul est piégeux :
+
+- **Argument passé à un exe natif directement par bash** (ex. `python
+  "$FIXTURE_PY" "$save_dest"`, ou `powershell.exe -File … -SavesDirOverride
+  "$partie_dir"`) : Git Bash (MSYS2) traduit ces arguments automatiquement au
+  moment de l'exec — **sans danger**, vérifié (#270).
+- **Chemin embarqué en littéral dans un bloc de code interprété** (ex.
+  `python -c "open(r'$chemin', ...)"`, où `$chemin` est interpolé dans le
+  texte source Python avant exécution) : MSYS ne voit passer AUCUN argument
+  ici, donc ne traduit rien — **c'est le cas qui casse** (#267, #270).
+  Convertir d'abord avec `chemin_windows_depuis_bash` (`tools/banc/chemin-windows.sh`,
+  `source`é par `verifier-liste-blanche-nuit.sh` et `nuit.sh`) :
+
+  ```bash
+  source "$(dirname "${BASH_SOURCE[0]}")/chemin-windows.sh"
+  chemin_win="$(chemin_windows_depuis_bash "$chemin")"
+  python -c "open(r'$chemin_win', ...)"
+  ```
+
+  Tests : `tests/chemin_windows_test.py` (la fonction seule, quatre formes :
+  `/c/Users/x`, `C:/Users/x`, `C:\Users\x`, `/home/x`) et
+  `tests/verifier_liste_blanche_nuit_test.py` cas 5 (la garde, chemin `/c/…`
+  simulé — reproduit le défaut #270 sans dépendre d'un vrai poste cassé).
+
 ## Liste blanche des agents du banc (#210, garantie #267)
 
 Les deux agents du banc (`banc-mj`, `banc-joueur`) tournent en

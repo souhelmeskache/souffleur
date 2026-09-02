@@ -15,6 +15,8 @@
 # code non nul sinon.
 set -u
 
+source "$(dirname "${BASH_SOURCE[0]}")/chemin-windows.sh"
+
 SETTINGS_LOCAL="${1:?usage : verifier-liste-blanche-nuit.sh <chemin-settings.local.json>}"
 
 refus() {
@@ -27,10 +29,17 @@ if [ ! -f "$SETTINGS_LOCAL" ]; then
   exit 0
 fi
 
+# Frontière bash ⊥ Windows (#270) : $SETTINGS_LOCAL vient typiquement d'un
+# $REPO_ROOT résolu par `pwd` sous Git Bash (forme `/c/Users/...`) — python.exe
+# (Windows natif, pas un python Cygwin) ne le comprend pas et lève un faux
+# FileNotFoundError, refusant toute nuit pour une raison trompeuse. On
+# convertit AVANT de traverser la frontière vers Python.
+SETTINGS_LOCAL_WIN="$(chemin_windows_depuis_bash "$SETTINGS_LOCAL")"
+
 MANQUANTS="$(python -c "
 import json, sys
 try:
-    with open(r'$SETTINGS_LOCAL', encoding='utf-8-sig') as f:
+    with open(r'$SETTINGS_LOCAL_WIN', encoding='utf-8-sig') as f:
         data = json.load(f)
 except Exception as e:
     print('JSON_INVALIDE: ' + str(e))
