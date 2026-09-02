@@ -29,6 +29,18 @@
 .PARAMETER Tours
     Nombre de tours maximum du banc. Défaut : 12.
 
+.PARAMETER Reprise
+    Horodatage d'un run déjà journalisé (`bench/banc-fumee/<horodatage>/`) à
+    reprendre plutôt que d'en ouvrir un neuf (Issue #212). Exclusif avec la
+    création d'un journal neuf : quand ce paramètre est fourni, ce script
+    n'ouvre AUCUN dossier — il pointe les deux agents vers le journal
+    existant, déduit le prochain numéro de tour du dernier `prose-NN.md`
+    présent, et leur transmet la liste des fichiers déjà présents pour ce
+    numéro (`action-NN`/`tour-NN`/`prose-NN`) pour qu'un Director ne rejoue
+    pas un jet déjà appliqué (cas vécu au tour 21, voir #212). Refuse de
+    démarrer (code de sortie non nul) si le dossier du run nommé n'existe
+    pas — y compris en `-DryRun`.
+
 .PARAMETER DryRun
     Affiche le montage complet (panes, gabarits remplis, chemin du journal)
     sans rien créer ni lancer.
@@ -37,6 +49,7 @@
     .\tools\lancer-banc-fumee.ps1 -SessionTour meta-rpg-ce -Save dks-banc -DryRun
     .\tools\lancer-banc-fumee.ps1 -SessionTour meta-rpg-ce -Save dks-banc
     .\tools\lancer-banc-fumee.ps1 -SessionTour meta-rpg-ce -Save dks-banc -Tours 20
+    .\tools\lancer-banc-fumee.ps1 -SessionTour meta-rpg-ce -Save dks-banc -Reprise 20260831-202617
 #>
 
 [CmdletBinding()]
@@ -48,6 +61,8 @@ param(
     [string]$Save,
 
     [int]$Tours = 12,
+
+    [string]$Reprise = '',
 
     [switch]$DryRun
 )
@@ -86,9 +101,45 @@ $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 # fiction au dépôt. Créé par CE script (critère d'acceptation #3), pas par
 # les panes eux-mêmes, pour que le chemin soit connu et stable avant même
 # l'envoi des prompts.
+#
+# Mode -Reprise (#212) : pas de nouveau dossier — le run nommé doit déjà
+# exister, et le prochain numéro de tour se déduit du dernier `prose-NN.md`
+# présent. Cette déduction tourne AUSSI en -DryRun (la validation « le run
+# existe » ne dépend pas de savoir si on lance pour de vrai).
 
-$Horodate = Get-Date -Format 'yyyyMMdd-HHmmss'
-$JournalDir = Join-Path $RepoRoot "bench\banc-fumee\$Horodate"
+$FichiersExistantsProchainTour = @()
+
+if ($Reprise) {
+    $Horodate = $Reprise
+    $JournalDir = Join-Path $RepoRoot "bench\banc-fumee\$Horodate"
+    if (-not (Test-Path $JournalDir)) {
+        Write-Error "Reprise impossible : dossier de journal introuvable ($JournalDir) — le run '$Reprise' n'existe pas."
+        exit 1
+    }
+
+    $derniereProseNum = 0
+    $proseFiles = Get-ChildItem -Path $JournalDir -Filter 'prose-*.md' -File -ErrorAction SilentlyContinue
+    foreach ($f in $proseFiles) {
+        if ($f.BaseName -match '^prose-(\d+)$') {
+            $n = [int]$Matches[1]
+            if ($n -gt $derniereProseNum) { $derniereProseNum = $n }
+        }
+    }
+    $ProchainTour = $derniereProseNum + 1
+    $ProchainTourStr = '{0:D2}' -f $ProchainTour
+
+    foreach ($prefixe in @('action', 'tour', 'prose')) {
+        $nomFichier = "$prefixe-$ProchainTourStr.md"
+        if (Test-Path (Join-Path $JournalDir $nomFichier)) {
+            $FichiersExistantsProchainTour += $nomFichier
+        }
+    }
+} else {
+    $Horodate = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $JournalDir = Join-Path $RepoRoot "bench\banc-fumee\$Horodate"
+    $ProchainTour = 1
+    $ProchainTourStr = '01'
+}
 
 # --- 2. Gabarits de prompt : lecture + substitution ------------------------
 #
@@ -120,14 +171,54 @@ function Get-GabaritRempli {
     return $texte
 }
 
+# Bloc -Reprise (#212) : ajouté APRÈS le gabarit figé (hors périmètre #209,
+# tools/prompts/banc-mj.md et banc-joueur.md n'ont pas de placeholder dédié)
+# — transmet aux deux agents le journal existant, le prochain numéro de tour
+# et les fichiers déjà présents pour ce numéro, pour qu'un Director ne
+# rejoue pas un jet déjà appliqué (cas vécu au tour 21, voir #212).
+
+function Get-BlocReprise {
+    param(
+        [Parameter(Mandatory)] [string]$JournalDir,
+        [Parameter(Mandatory)] [int]$ProchainTour,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$FichiersExistants
+    )
+
+    $listeFichiers = if ($FichiersExistants.Count -gt 0) { $FichiersExistants -join ', ' } else { 'aucun' }
+
+    @"
+
+## Reprise (paramètre -Reprise, hors gabarit — Issue #212)
+
+Ce lancement REPREND un journal existant, il n'en ouvre pas un neuf :
+
+- Journal existant : $JournalDir
+- Prochain numéro de tour à jouer : $ProchainTour
+- Fichiers déjà présents pour ce numéro de tour : $listeFichiers
+
+Si un fichier ci-dessus existe déjà pour ce numéro (ex. un jet déjà résolu et
+appliqué au moteur mais dont la prose ou `record_turn` n'a pas encore eu
+lieu), NE LE REJOUE PAS : lis son contenu et continue le tour depuis où il
+s'est arrêté, plutôt que de refaire un geste déjà appliqué.
+"@
+}
+
 $GabaritMjPath = Join-Path $RepoRoot 'tools\prompts\banc-mj.md'
 $GabaritJoueurPath = Join-Path $RepoRoot 'tools\prompts\banc-joueur.md'
 
 $PromptMj = Get-GabaritRempli -CheminGabarit $GabaritMjPath -Save $Save -Tours $Tours -SessionTour $SessionTour -JournalDir $JournalDir
 $PromptJoueur = Get-GabaritRempli -CheminGabarit $GabaritJoueurPath -Save $Save -Tours $Tours -SessionTour $SessionTour -JournalDir $JournalDir
 
-$AgentMj = "banc-mj-$Save"
-$AgentJoueur = "banc-joueur-$Save"
+if ($Reprise) {
+    $BlocReprise = Get-BlocReprise -JournalDir $JournalDir -ProchainTour $ProchainTour -FichiersExistants $FichiersExistantsProchainTour
+    $PromptMj += $BlocReprise
+    $PromptJoueur += $BlocReprise
+}
+
+# Correctif scratchpad (issue #196) : 32 chars max pour un nom d'agent herdr —
+# le slug de save faisait déborder ("banc-mj-beyond-the-vale-of-madness" = 33+).
+$AgentMj = "banc-mj"
+$AgentJoueur = "banc-joueur"
 
 # --- 3. Dry-run : affiche le montage complet sans rien lancer --------------
 
@@ -136,15 +227,25 @@ if ($DryRun) {
     Write-Output "Session tour   : $SessionTour"
     Write-Output "Save           : $Save"
     Write-Output "Tours (max)    : $Tours"
+    if ($Reprise) {
+        Write-Output "Reprise        : $Reprise (journal existant, aucun dossier créé)"
+        Write-Output "Prochain tour  : $ProchainTourStr"
+    }
     Write-Output "Journal        : $JournalDir"
     Write-Output "Pane MJ        : agent $AgentMj (claude, sonnet, effort medium)"
     Write-Output "Pane joueur    : agent $AgentJoueur (claude, sonnet, effort low)"
     Write-Output ""
     Write-Output "Commandes qui seraient exécutées :"
     Write-Output "  (herdr résolu : $HerdrExe)"
-    Write-Output "  New-Item -ItemType Directory -Force -Path `"$JournalDir`""
-    Write-Output "  `$paneMj = $HerdrExe pane current"
-    Write-Output "  `$paneJoueur = $HerdrExe pane split <paneMj> --direction right --cwd `"$RepoRoot`""
+    if ($Reprise) {
+        Write-Output "  (mode reprise : pas de New-Item, journal déjà présent)"
+    } else {
+        Write-Output "  New-Item -ItemType Directory -Force -Path `"$JournalDir`""
+    }
+    Write-Output "  `$paneCur = $HerdrExe pane current"
+    Write-Output "  `$paneMj = $HerdrExe pane split <paneCur> --direction right --cwd `"$RepoRoot`""
+    Write-Output "  `$paneJoueur = $HerdrExe pane split <paneMj> --direction down --cwd `"$RepoRoot`""
+    Write-Output "  (automode : pose .claude\settings.local.json dans $RepoRoot, sans écraser s'il existe déjà — Issue #210)"
     Write-Output "  $HerdrExe agent start $AgentMj --kind claude --pane <paneMj> -- --model sonnet --effort medium --permission-mode acceptEdits"
     Write-Output "  $HerdrExe agent start $AgentJoueur --kind claude --pane <paneJoueur> -- --model sonnet --effort low --permission-mode acceptEdits"
     Write-Output "  $HerdrExe agent prompt $AgentMj <prompt-gabarit MJ ci-dessous> --wait --until working --timeout 15000"
@@ -160,33 +261,82 @@ if ($DryRun) {
 
 # --- 4. Exécution réelle ----------------------------------------------------
 
-Write-Output "Création de l'arborescence du journal ($JournalDir)..."
-New-Item -ItemType Directory -Force -Path $JournalDir | Out-Null
+if ($Reprise) {
+    Write-Output "Reprise du journal existant ($JournalDir) — aucun dossier créé."
+} else {
+    Write-Output "Création de l'arborescence du journal ($JournalDir)..."
+    New-Item -ItemType Directory -Force -Path $JournalDir | Out-Null
+}
 
 Write-Output "Ouverture des deux panes (MJ + joueur-banc)..."
-$paneMjJson = & $HerdrExe pane current
+$paneCurJson = & $HerdrExe pane current
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Échec de 'herdr pane current' — impossible de localiser le pane courant pour y ancrer le pane MJ."
+    Write-Error "Échec de 'herdr pane current' — impossible de localiser le pane courant."
+    exit 1
+}
+$paneCurData = $paneCurJson | ConvertFrom-Json
+$paneCurId = $paneCurData.result.pane.pane_id
+if (-not $paneCurId) { $paneCurId = $paneCurData.result.pane_id }
+if (-not $paneCurId) { Write-Error "pane courant illisible"; exit 1 }
+
+# Correctif scratchpad (issue #196) : le MJ prend un pane NEUF (split), jamais
+# le pane courant — et le chemin JSON est result.pane.pane_id.
+$paneMjJson = & $HerdrExe pane split $paneCurId --direction right --cwd $RepoRoot
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Échec de 'herdr pane split' pour ouvrir le pane MJ."
     exit 1
 }
 $paneMjData = $paneMjJson | ConvertFrom-Json
-$paneMjId = $paneMjData.result.pane_id
+$paneMjId = $paneMjData.result.pane.pane_id
+if (-not $paneMjId) { $paneMjId = $paneMjData.result.pane_id }
+if (-not $paneMjId) { Write-Error "pane MJ illisible"; exit 1 }
 
-$paneJoueurJson = & $HerdrExe pane split $paneMjId --direction right --cwd $RepoRoot
+$paneJoueurJson = & $HerdrExe pane split $paneMjId --direction down --cwd $RepoRoot
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de 'herdr pane split' pour ouvrir le pane joueur-banc."
     exit 1
 }
 $paneJoueurData = $paneJoueurJson | ConvertFrom-Json
-$paneJoueurId = $paneJoueurData.result.pane_id
+$paneJoueurId = $paneJoueurData.result.pane.pane_id
+if (-not $paneJoueurId) { $paneJoueurId = $paneJoueurData.result.pane_id }
+if (-not $paneJoueurId) { Write-Error "pane joueur-banc illisible"; exit 1 }
 
 Write-Output "Pane MJ         : $paneMjId"
 Write-Output "Pane joueur-banc: $paneJoueurId"
 
-# Pas d'automode Bash(*) ici, à la différence de lancer-lane.ps1 : ce banc ne
-# crée ni branche ni PR (les deux panes n'ont pas besoin d'un large accès
-# shell pour jouer des tours via les outils MCP) — laissé aux permissions
-# déjà en place dans le worktree courant.
+# --- Automode local (Issue #210), même mécanisme que lancer-lane.ps1 -------
+#
+# lancer-lane.ps1 (lignes ~608-624) pose ce fichier dans un worktree NEUF à
+# chaque lane ; ce script tourne, lui, dans le worktree courant, relancé
+# plusieurs fois d'un run à l'autre (reprise) — on ne l'écrase donc PAS s'il
+# existe déjà, pour ne pas effacer un réglage local voulu par l'opérateur.
+#
+# Correctif revue PR #224 (REFUS) : Bash(*) seul ne couvre PAS le blocage
+# constaté dans #210 — les deux agents du banc jouent leurs tours via les
+# outils MCP `coderain-engine` (`module_get_node`, etc.), jamais via Bash.
+# `mcp__coderain-engine__*` en allow, en plus de Bash(*), pour que le
+# premier appel MCP du MJ ne se bloque plus sur une demande de permission.
+$claudeDir = Join-Path $RepoRoot '.claude'
+$settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
+if (-not (Test-Path $settingsLocalPath)) {
+    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+    $settingsLocal = [ordered]@{
+        permissions = [ordered]@{
+            allow = @('Bash(*)', 'mcp__coderain-engine__*')
+            deny  = @(
+                'Bash(git commit --no-verify*)',
+                'Bash(git commit -n*)',
+                'Bash(git push --no-verify*)',
+                'Bash(git push --force*)',
+                'Bash(git push -f*)'
+            )
+        }
+    }
+    ($settingsLocal | ConvertTo-Json -Depth 5) | Set-Content -Path $settingsLocalPath -Encoding utf8
+    Write-Output "Automode posé : $settingsLocalPath"
+} else {
+    Write-Output "Automode déjà présent, non modifié : $settingsLocalPath"
+}
 
 Write-Output "Démarrage de l'agent MJ ($AgentMj, sonnet, effort medium)..."
 & $HerdrExe agent start $AgentMj --kind claude --pane $paneMjId -- --model sonnet --effort medium --permission-mode acceptEdits
