@@ -228,24 +228,19 @@ function Invoke-NativeCommand {
     $script:LASTEXITCODE = $p.ExitCode
 }
 
-# --- Démarrage d'agent + écran bypass (#255) -------------------------------
+# --- Démarrage d'agent (#265) -----------------------------------------------
 #
-# `--permission-mode bypassPermissions` (I-232) affiche, au tout premier
-# lancement dans un worktree neuf, un écran d'acceptation interactif
-# (« Bypass Permissions mode … Yes, I accept ») AVANT de prendre la main sur
-# l'agent : `herdr agent start` détecte ce blocage et rend `agent_not_ready`
-# plutôt que d'attendre en silence (voir `herdr --skill`, § « Start and
-# coordinate an agent ») — c'est ce qui faisait perdre le gabarit envoyé
-# juste après par `herdr agent prompt` (5 lanes répondues à la main le
-# 02/09, avant que cette fonction existe).
-#
-# Réglage Claude Code qui supprime cet écran quand il est actif :
-# `skipDangerousModePermissionPrompt: true` dans `settings.json` (user,
-# projet ou managé — doc officielle Claude Code, « Settings Reference »).
-# Vérifié posé côté user sur ce poste (`~/.claude/settings.json`). Ce filet
-# reste nécessaire malgré tout : ce réglage vit sur le POSTE qui lance la
-# lane, pas dans le worktree qu'elle reçoit, et rien ne garantit qu'il soit
-# posé sur tout poste qui exécuterait ce script.
+# `--permission-mode auto` (remplace `bypassPermissions`, I-232/#255) :
+# aucun écran d'acceptation au démarrage — les règles `deny`/`ask` du
+# `settings.local.json` du worktree (`--no-verify`, `--force`, `-f`,
+# inchangées par cette lane) s'évaluent d'abord, puis un classificateur
+# décide (allow / deny motivé « Blocked by classifier » / pas de verdict =
+# deny). Jamais de question posée à un humain : l'agent reçoit le refus et
+# continue — voir doc officielle Claude Code, pages « permission-modes » et
+# « auto-mode-config ». Ce que ce mode ne couvre pas : un refus du
+# classificateur sur un geste légitime de la lane ; à observer sur les
+# premières lanes lancées en auto, à remonter en commentaire d'Issue si ça
+# arrive.
 function Start-AgentClaude {
     param(
         [Parameter(Mandatory)] [string]$HerdrExe,
@@ -255,29 +250,19 @@ function Start-AgentClaude {
         [Parameter(Mandatory)] [string]$Effort
     )
 
-    & $HerdrExe agent start $AgentName --kind claude --pane $PaneId -- --model $Modele --effort $Effort --permission-mode bypassPermissions
-    $demarrageOk = ($LASTEXITCODE -eq 0)
-
-    if (-not $demarrageOk) {
-        Write-Output "'herdr agent start' n'a pas confirmé $AgentName prêt immédiatement (code $LASTEXITCODE) — recherche de l'écran bypass sur le pane $PaneId."
-        & $HerdrExe pane wait-output $PaneId --match 'Yes, I accept' --timeout 10000 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Output "Écran bypass détecté sur le pane $PaneId — réponse automatique (touche 2 puis Entrée)."
-            & $HerdrExe pane send-keys $PaneId 2 | Out-Null
-            & $HerdrExe pane send-keys $PaneId enter | Out-Null
-        } else {
-            Write-Error "Échec de 'herdr agent start' pour $AgentName sur le pane $PaneId (pas d'écran bypass détecté sous 10s non plus)."
-            exit 1
-        }
+    & $HerdrExe agent start $AgentName --kind claude --pane $PaneId -- --model $Modele --effort $Effort --permission-mode auto
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Échec de 'herdr agent start' pour $AgentName sur le pane $PaneId (code $LASTEXITCODE)."
+        exit 1
     }
 
     # N'envoie le gabarit qu'une fois l'agent idle (boucle bornée 30s côté
-    # herdr, jamais avant) — que l'écran bypass ait dû être résolu ci-dessus
-    # ou non : un `agent start` réussi ne garantit pas à lui seul l'état
-    # idle (ex. readiness détectée sur un autre signal transitoire).
+    # herdr, jamais avant) — un `agent start` réussi ne garantit pas à lui
+    # seul l'état idle (ex. readiness détectée sur un autre signal
+    # transitoire).
     & $HerdrExe agent wait $AgentName --until idle --timeout 30000 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Agent $AgentName pas idle sous 30s après démarrage (écran bypass non résolu, ou autre blocage) — abandon."
+        Write-Error "Agent $AgentName pas idle sous 30s après démarrage — abandon."
         exit 1
     }
 }
@@ -417,8 +402,8 @@ if ($EstRevue) {
         Write-Output "  git -C `"$RepoRoot`" fetch origin main"
         Write-Output "  $HerdrExe worktree create --cwd `"$RepoRoot`" --branch $revueBranch --base origin/main   (worktree JETABLE, jamais le checkout principal — lecture seule via gh, aucun commit attendu)"
         Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
-        Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $ModeleRevue --effort $EffortRevue --permission-mode bypassPermissions"
-        Write-Output "  (si écran bypass détecté : $HerdrExe pane send-keys <pane_id> 2 puis enter, puis $HerdrExe agent wait $agentName --until idle --timeout 30000 — voir Start-AgentClaude)"
+        Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $ModeleRevue --effort $EffortRevue --permission-mode auto"
+        Write-Output "  $HerdrExe agent wait $agentName --until idle --timeout 30000   (voir Start-AgentClaude)"
         Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
         Write-Output ""
         Write-Output "--- Prompt-gabarit (revue) ---"
@@ -486,14 +471,19 @@ if ($EstRevue) {
     }
 
     Write-Output "Démarrage de l'agent de revue ($ModeleRevue, effort $EffortRevue — figés)..."
-    # --permission-mode bypassPermissions (I-232) : acceptEdits laissait passer
-    # des demandes de permission bloquantes (création de fichiers hors édition
-    # simple, boucles `while`, garde d'écriture sur settings.json) qui
-    # gelaient la lane sans opérateur pour y répondre. Risque borné ailleurs :
-    # worktree jetable, `main` protégée côté serveur, CI + revue adversariale
-    # avant merge, force-push refusé partout dans le circuit (D-232).
-    # Start-AgentClaude (#255) gère en plus l'écran bypass éventuel et
-    # n'envoie le prompt qu'une fois l'agent idle — voir sa définition.
+    # --permission-mode auto (#265, remplace bypassPermissions/I-232) :
+    # acceptEdits laissait passer des demandes de permission bloquantes
+    # (création de fichiers hors édition simple, boucles `while`, garde
+    # d'écriture sur settings.json) qui gelaient la lane sans opérateur pour
+    # y répondre ; bypassPermissions affichait à son tour un écran
+    # d'acceptation qui gelait tout démarrage sans humain (#264). Le mode
+    # auto n'affiche aucun écran : les règles `deny` du
+    # settings.local.json du worktree s'appliquent toujours, puis un
+    # classificateur tranche — risque borné ailleurs : worktree jetable,
+    # `main` protégée côté serveur, CI + revue adversariale avant merge,
+    # force-push refusé partout dans le circuit (D-232).
+    # Start-AgentClaude (#265) n'envoie le prompt qu'une fois l'agent idle —
+    # voir sa définition.
     Start-AgentClaude -HerdrExe $HerdrExe -AgentName $agentName -PaneId $paneId -Modele $ModeleRevue -Effort $EffortRevue
 
     Write-Output "Envoi du prompt-gabarit de revue..."
@@ -717,8 +707,8 @@ if ($DryRun) {
     Write-Output "  git -C <worktree> config --worktree credential.helper `"`""
     Write-Output "  git -C <worktree> config --worktree --add credential.helper '!gh auth git-credential'"
     Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
-    Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode bypassPermissions"
-    Write-Output "  (si écran bypass détecté : $HerdrExe pane send-keys <pane_id> 2 puis enter, puis $HerdrExe agent wait $agentName --until idle --timeout 30000 — voir Start-AgentClaude)"
+    Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode auto"
+    Write-Output "  $HerdrExe agent wait $agentName --until idle --timeout 30000   (voir Start-AgentClaude)"
     Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
     Write-Output ""
     Write-Output "--- Prompt-gabarit ---"
@@ -827,16 +817,26 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output "Démarrage de l'agent claude ($Modele, effort $Effort)..."
-# --permission-mode bypassPermissions (I-232, remplace acceptEdits) :
-# acceptEdits laissait passer des demandes de permission bloquantes (création
-# de `.mcp.json`, boucles `while`, garde d'écriture sur `settings.json`) —
-# trois lanes bloquées le 02/09, chacune exigeant une intervention humaine ou
-# du poste META. Le risque est borné ailleurs : worktree jetable, `main`
-# protégée côté serveur, CI + revue adversariale avant merge, force-push
-# refusé partout dans le circuit (D-232). Décision de Souhel, posée derrière
-# le label `prete` sur l'Issue #232 avant lancement de cette lane.
-# Start-AgentClaude (#255) gère en plus l'écran bypass éventuel et n'envoie
-# le prompt qu'une fois l'agent idle — voir sa définition.
+# --permission-mode auto (#265, remplace bypassPermissions/I-232, qui
+# remplaçait déjà acceptEdits) : acceptEdits laissait passer des demandes de
+# permission bloquantes (création de `.mcp.json`, boucles `while`, garde
+# d'écriture sur `settings.json`) — trois lanes bloquées le 02/09, chacune
+# exigeant une intervention humaine ou du poste META. bypassPermissions
+# réglait ce blocage mais affichait à son tour, au tout premier lancement
+# dans un worktree neuf, un écran d'acceptation interactif qui gelait
+# n'importe quel démarrage sans humain devant l'écran (#264 — le filet censé
+# y répondre seul n'a jamais fonctionné). Le mode auto n'affiche aucun
+# écran : les règles `deny` du settings.local.json du worktree (inchangées
+# par cette lane) s'évaluent d'abord, puis un classificateur décide
+# (allow / deny motivé / deny par défaut) sans jamais interroger un humain —
+# doc officielle Claude Code, pages « permission-modes » et
+# « auto-mode-config ». Ce qu'il ne couvre pas : un refus du classificateur
+# sur un geste légitime, à observer sur les premières lanes en auto. Risque
+# résiduel borné ailleurs : worktree jetable, `main` protégée côté serveur,
+# CI + revue adversariale avant merge, force-push refusé partout dans le
+# circuit (D-232).
+# Start-AgentClaude (#265) n'envoie le prompt qu'une fois l'agent idle — voir
+# sa définition.
 Start-AgentClaude -HerdrExe $HerdrExe -AgentName $agentName -PaneId $paneId -Modele $Modele -Effort $Effort
 
 # --until working (pas les défauts idle/done/blocked) : on veut seulement la

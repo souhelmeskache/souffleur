@@ -17,6 +17,15 @@
     systématiquement `garde` avant de lancer — plus de geste manuel séparé.
   - `revoir <PR>` : enveloppe `lancer-lane.ps1 -Revue <PR>`, même garde
     systématique avant lancement.
+  - Mode de démarrage des lanes et des revues (#265, remplace
+    `bypassPermissions`/I-232) : `--permission-mode auto`. Aucun écran
+    d'acceptation au démarrage — les règles `deny` du `settings.local.json`
+    du worktree (`--no-verify`, `--force`, `-f`) s'appliquent toujours en
+    premier, puis un classificateur tranche chaque appel restant (allow /
+    deny motivé / deny par défaut si aucun verdict), sans jamais interroger
+    un humain. Ce que ce mode ne couvre pas : un refus du classificateur sur
+    un geste légitime de la lane — à observer sur les premières lanes en
+    auto, à remonter en commentaire d'Issue si ça arrive.
   - `garde` : vérifie `core.bare` sur le checkout principal
     (`git config --show-origin --get core.bare`) ; s'il est présent, le
     retire (`--unset`) et journalise une ligne datée (heure, origine,
