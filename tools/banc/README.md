@@ -185,7 +185,10 @@ réécrase jamais une partie déjà jouée — idempotence).
    `-ModeleJoueur`, `-SavesDirOverride` et `-JournalDirOverride` — trois
    paramètres additifs #260, défauts inchangés pour le banc de fumée
    historique) — le journal ET la save isolée de la partie vivent tous deux
-   sous `bench/nuit-AAAAMMJJ/partie-NN/`.
+   sous `bench/nuit-AAAAMMJJ/partie-NN/`. `lancer-banc-fumee.ps1` REFUSE
+   nommément (« agent <nom> déjà en vol sur le pane <id> ») si `banc-mj` ou
+   `banc-joueur` est déjà en vol avant tout `pane split`/`agent start` (#271)
+   — au lieu d'un « échec de `herdr agent start` » muet.
 3. Boucle de tours par lots (go joueur → `action-NN.md` → go MJ →
    `prose-NN.md`/`tour-NN.md`), jusqu'à fin de partie, craquement, ou
    `-Tours`.
@@ -251,12 +254,40 @@ script, jamais un jugement).
   `raison_arret: lancement impossible (2 échecs de lancement consécutifs,
   partie NN)`, **sortie 6**.
 - **Interruption (Ctrl+C)** : `trap INT/TERM` — ferme les agents en vol,
-  écrit `nuit.md` avec `raison_arret: interrompu (SIGNAL)`, sort 130.
+  écrit `nuit.md` avec `raison_arret: interrompu (SIGNAL)`, sort 130. **Non
+  garanti sous Windows** (constat #271, nuit N0 02/09 : le trap n'a jamais
+  tourné depuis un shell Windows exécutant `nuit.sh` via Git Bash) — **pour
+  arrêter la nuit de façon garantie, créer le fichier
+  `bench/nuit-AAAAMMJJ/STOP`** (ou `tools/PAUSE`, déjà lu par
+  `lancer-lane.ps1`). Testé à chaque poll (`attendre_fichier`) et entre deux
+  parties, quel que soit le shell qui a lancé la nuit : nettoyage des agents
+  en vol, `nuit.md` réécrit (`raison_arret: arrêt demandé (fichier
+  STOP/PAUSE)`), sortie 130.
+- **Fin de partie vérifiée (#271)** : après la fermeture des panes, `nuit.sh`
+  attend (bornée 30 s) que `herdr agent list` ne porte plus ni `banc-mj` ni
+  `banc-joueur` — nuit N0 02/09 : un `banc-joueur` survivant a fait échouer
+  TOUTE partie suivante par collision de nom sur `agent start`. Un agent
+  survivant reçoit `/exit` (`herdr agent send-keys`, **jamais** `agent
+  prompt` depuis bash — `/exit` y est réécrit `C:/Program Files/Git/exit` par
+  la conversion de chemin MSYS de Git Bash) puis une dernière vérification ;
+  s'il survit encore, la nuit s'arrête (craquement `craquement-nettoyage-NN.md`,
+  `raison_arret: agent non fermé (partie NN : <agents>)`, **sortie 7**) —
+  jamais de partie suivante lancée sur un nom déjà pris. Si `herdr pane
+  close` répond `confirmation_required` (dernier pane d'un workspace, nuit N0
+  cas 1), c'est journalisé et `/exit` est tenté directement, sans dépendre
+  d'un pane « principal » resté ouvert.
+- **Environnement propre (#271)** : `SAVES_DIR` hérité de l'environnement du
+  pane qui lance `nuit.sh` (posé par `herdr pane split --env` sur une partie
+  précédente) est ignoré (`unset`, avec avertissement) — la save source se
+  résout toujours depuis `coderain/config.py::saves_dir()` sans override
+  hérité du pane.
 - **`0`** : la nuit s'est terminée normalement (budget `-Parties` consommé).
 - **`1`** : argument invalide (refus avant tout lancement).
 - **`5`** : limite de session — voir ci-dessus.
 - **`6`** : échec de lancement répété — voir ci-dessus.
-- **`130`** : interrompu (Ctrl+C).
+- **`7`** : agent non fermé après `pane close` + `/exit` — voir « Fin de
+  partie vérifiée » ci-dessus.
+- **`130`** : interrompu (Ctrl+C, ou fichier `STOP`/`tools/PAUSE`).
 
 ### Ce que la nuit ne fait pas
 

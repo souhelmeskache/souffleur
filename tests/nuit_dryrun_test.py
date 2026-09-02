@@ -58,6 +58,10 @@ def main() -> int:
         env = {
             **os.environ,
             "SAVES_DIR": str(lib_root / "saves"),
+            # #271 : nuit.sh efface SAVES_DIR hérité de l'environnement du
+            # pane par défaut -- ce test le pose délibérément pour pointer
+            # une Library jetable, donc demande explicitement de le garder.
+            "NUIT_CONSERVER_SAVES_DIR": "1",
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
         }
