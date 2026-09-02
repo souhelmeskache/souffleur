@@ -364,6 +364,7 @@ if ($EstRevue) {
     New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
     $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
     $settingsLocal = [ordered]@{
+        enableAllProjectMcpServers = $true
         permissions = [ordered]@{
             allow = @('Bash(*)')
             deny  = @(
@@ -507,6 +508,13 @@ $Body
   mention ``REVUE REQUISE`` (ex. ``TERMINÉ : <lien PR> — REVUE REQUISE``) —
   une lane de revue adversariale (``lancer-lane.ps1 -Revue <numero-PR>``)
   pourra alors être lancée dessus avant merge.
+- **Règle de fermeture de l'Issue.** N'écris ``Closes #$IssueNumber`` dans le
+  corps de la PR que si TOUS les points de l'Issue sont livrés (checklist
+  complète, ou, en l'absence de checklist, chaque défaut listé dans son
+  constat). Sinon écris ``Refs #$IssueNumber``, et liste explicitement dans
+  ton commentaire ``TERMINÉ : ...`` ce qui reste non traité. Ce commentaire
+  cite dans tous les cas l'URL de la PR et précise lequel des deux mots
+  (``Closes`` ou ``Refs``) a été employé.
 
 ## Commentaires d'Issue obligatoires (trois jalons, sur l'Issue #$IssueNumber)
 
@@ -605,10 +613,15 @@ Write-Output "Pane     : $paneId"
 # que personne ne verra, tout en gardant en deny les commandes qui
 # contourneraient les gardes déjà en place (garde pré-commit rouge, garde de
 # branche main) — --no-verify/-n restent interdits même avec Bash(*) en allow.
+# enableAllProjectMcpServers évite le blocage au démarrage sur la demande
+# d'acceptation des serveurs MCP versionnés (.mcp.json depuis #217) — sans
+# quoi le worktree jetable de la lane reste bloqué en attente d'acceptation
+# manuelle (agent_not_ready côté herdr).
 $claudeDir = Join-Path $worktreePath '.claude'
 New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
 $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
 $settingsLocal = [ordered]@{
+    enableAllProjectMcpServers = $true
     permissions = [ordered]@{
         allow = @('Bash(*)')
         deny  = @(
