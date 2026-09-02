@@ -31,6 +31,7 @@ from coderain.converter import projection
 from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record
 from coderain.memory import Entry, Library
+from coderain import validator as validator_mod
 
 import mcp_server
 
@@ -101,7 +102,7 @@ mcp_server._slug = slug
 mcp_server._last_applied_events = None
 
 state = store.world_state()
-assert state.get("location") == "para-01", state.get("location")
+assert validator_mod.current_location(state) == "para-01", state.get("player")
 
 section("1) R1 mord sans enveloppe appliquée ce tour")
 try:

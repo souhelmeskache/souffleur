@@ -1469,7 +1469,7 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     n'ont pas cours ici : la sélection par position n'a ni budget ni passe
     large/étroite, elle est déterministe (node courant + records ancrés) —
     même divergence assumée que `engine._messages()` sur le chemin position."""
-    location = str(state.get("location", ""))
+    location = validator_mod.current_location(state)
     sections = assembleur_position.build_sections(
         partition_dir, store, location, history, player_action,
         secrets=secrets, role_section=role_section)
@@ -2042,7 +2042,7 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
             store, pdir, state, history, action_joueur, recent_turns,
             event_rules=False, secrets=False, role_section=False)
         rendu_md = assembleur_position.rendu_md_for(
-            pdir, str(state.get("location", "")))
+            pdir, validator_mod.current_location(state))
     else:
         text, info = _assemble_text(action_joueur, 120000, recent_turns,
                                     0, True, False, SECRETS_WINDOW_TURNS,
