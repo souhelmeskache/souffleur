@@ -1,18 +1,27 @@
-"""Issue #216 : tools/lancer-banc-fumee.ps1 -- trois cas en -DryRun sur un
-dossier temporaire, sur le modèle de tests/lancer_lane_argv_test.py (un vrai
+"""Issue #216 : tools/lancer-banc-fumee.ps1 -- quatre cas sur un dossier
+temporaire, sur le modèle de tests/lancer_lane_argv_test.py (un vrai
 process PowerShell, pas une relecture de texte) :
 
-1. Lancement neuf (pas de -Reprise) : réussit, ne crée aucun dossier
-   (contrat -DryRun).
-2. -Reprise sur un run synthétique portant prose-01.md à prose-03.md :
-   réussit, déduit le prochain tour = 04, ne crée aucun dossier.
-3. -Reprise sur un run absent : échoue, code de sortie non nul.
+1. Lancement neuf (pas de -Reprise), -DryRun : réussit, ne crée aucun
+   dossier (contrat -DryRun).
+2. -Reprise sur un run synthétique portant prose-01.md à prose-03.md,
+   -DryRun : réussit, déduit le prochain tour = 04 (assertion ancrée sur la
+   ligne complète « Prochain tour  : 04 »), ne crée aucun dossier.
+3. -Reprise sur un run absent, -DryRun : échoue, code de sortie non nul.
+4. Exécution réelle (pas de -DryRun, herdr factice) : le settings.local.json
+   posé pour les deux panes autorise Bash(*) ET mcp__coderain-engine__* —
+   sans cette dernière règle, le premier appel MCP réel du MJ se bloque sur
+   une demande de permission (constat #210, revue PR #224) — puis, relancé
+   une seconde fois sur un fichier déjà présent, ne l'écrase pas.
 
-Aucun `herdr`/`gh` réel n'est invoqué : -DryRun sort avant tout appel
-externe, mais le script résout quand même le chemin de `herdr` en tête de
-fichier (Resolve-ExternalCommand) -- un faux exécutable `herdr` est donc
-posé en tête de PATH pour ce process, comme le ferait un vrai binaire, sans
-jamais être réellement lancé.
+Cas 1-3 : -DryRun sort avant tout appel externe, mais le script résout quand
+même le chemin de `herdr` en tête de fichier (Resolve-ExternalCommand) --
+un faux exécutable `herdr` est donc posé en tête de PATH pour ce process,
+comme le ferait un vrai binaire, sans jamais être réellement lancé.
+Cas 4 : le faux `herdr` DOIT répondre (JSON minimal) aux sous-commandes
+`pane current`/`pane split` pour que le script aille jusqu'à la pose du
+fichier d'automode ; `agent start`/`agent prompt` n'ont besoin que de
+réussir (code 0), leur contenu n'est pas vérifié ici.
 
 Le script est copié (avec les deux gabarits dont il dépend) dans un dépôt
 Git jetable, 100% synthétique, plutôt que d'écrire dans le vrai
@@ -20,6 +29,7 @@ bench/banc-fumee/ du dépôt courant : $RepoRoot du script se déduit de
 `git -C $PSScriptRoot rev-parse --show-toplevel`, donc un dépôt jetable
 isolé garantit qu'aucun test ne peut toucher au bench/ réel.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -50,16 +60,30 @@ def find_powershell():
     return None
 
 
-def build_repo_jetable(tmp_root: Path) -> Path:
+def build_repo_jetable(tmp_root: Path, nom: str = "repo-jetable", gabarits_minimaux: bool = False) -> Path:
     """Dépôt Git jetable portant une copie du script sous test + ses deux
     gabarits (banc-mj.md, banc-joueur.md) -- suffisant pour que -DryRun
-    tourne de bout en bout sans toucher au vrai dépôt."""
-    repo = tmp_root / "repo-jetable"
+    tourne de bout en bout sans toucher au vrai dépôt.
+
+    gabarits_minimaux=True : gabarits synthétiques (un placeholder chacun)
+    au lieu d'une copie des vrais fichiers -- pour le cas 4 (exécution
+    réelle), qui n'a besoin d'aucun contenu de prompt fidèle et où le vrai
+    contenu, une fois substitué, produit une ligne de commande trop longue
+    pour le faux `herdr.cmd` (limite de cmd.exe, ~8191 caractères -- une
+    limite propre à l'interprète de script, pas à un vrai .exe herdr)."""
+    repo = tmp_root / nom
     (repo / "tools" / "prompts").mkdir(parents=True)
 
     shutil.copy(SCRIPT_REEL, repo / "tools" / "lancer-banc-fumee.ps1")
-    shutil.copy(GABARIT_MJ_REEL, repo / "tools" / "prompts" / "banc-mj.md")
-    shutil.copy(GABARIT_JOUEUR_REEL, repo / "tools" / "prompts" / "banc-joueur.md")
+    if gabarits_minimaux:
+        for nom_gabarit in ("banc-mj.md", "banc-joueur.md"):
+            (repo / "tools" / "prompts" / nom_gabarit).write_text(
+                "gabarit synthétique de test -- {{SAVE}} {{TOURS}} {{SESSION_TOUR}} {{JOURNAL_DIR}}\n",
+                encoding="utf-8",
+            )
+    else:
+        shutil.copy(GABARIT_MJ_REEL, repo / "tools" / "prompts" / "banc-mj.md")
+        shutil.copy(GABARIT_JOUEUR_REEL, repo / "tools" / "prompts" / "banc-joueur.md")
 
     subprocess.run(["git", "init", "-q"], cwd=repo, env=ENV_SANS_GIT, check=True)
     return repo
@@ -72,6 +96,43 @@ def build_fake_herdr(tmp_root: Path) -> Path:
     bin_dir.mkdir()
     (bin_dir / "herdr.cmd").write_text(FAKE_HERDR_CMD, encoding="utf-8")
     return bin_dir
+
+
+# Faux `herdr` pour le cas 4 (exécution réelle, pas -DryRun) : répond aux
+# sous-commandes `pane current`/`pane split` par le JSON minimal attendu
+# (result.pane.pane_id) pour que le script avance jusqu'à la pose du
+# fichier d'automode ; toute autre sous-commande (`agent start`,
+# `agent prompt`) réussit simplement (code 0) -- son contenu n'est pas
+# vérifié par ce cas.
+FAKE_HERDR_REEL_CMD = (
+    "@echo off\r\n"
+    'if "%~1"=="pane" (\r\n'
+    '  echo {"result":{"pane":{"pane_id":"pane-test"}}}\r\n'
+    "  exit /b 0\r\n"
+    ")\r\n"
+    "exit /b 0\r\n"
+)
+
+
+def build_fake_herdr_reel(tmp_root: Path) -> Path:
+    bin_dir = tmp_root / "fake-bin-reel"
+    bin_dir.mkdir()
+    (bin_dir / "herdr.cmd").write_text(FAKE_HERDR_REEL_CMD, encoding="utf-8")
+    return bin_dir
+
+
+def run_reel(ps_exe, script_path: Path, fake_bin: Path, args):
+    """Comme run_dryrun, mais SANS -DryRun -- exécution réelle du script
+    (herdr factice, cas 4 uniquement)."""
+    env = {**ENV_SANS_GIT, "PATH": f"{fake_bin}{os.pathsep}{ENV_SANS_GIT.get('PATH', '')}"}
+    cmd = [
+        ps_exe, "-NoProfile", "-File", str(script_path),
+        "-SessionTour", "banc-test-tour", "-Save", "banc-test-save",
+    ] + args
+    return subprocess.run(
+        cmd, capture_output=True, timeout=60, env=env,
+        encoding="utf-8", errors="replace",
+    )
 
 
 def run_dryrun(ps_exe, script_path: Path, fake_bin: Path, args):
@@ -141,8 +202,8 @@ def main():
             f"-Reprise (run present) : code de sortie attendu 0, recu {p2.returncode}\n"
             f"stdout={p2.stdout}\nstderr={p2.stderr}"
         )
-        assert "04" in p2.stdout, (
-            f"-Reprise : prochain tour attendu 04 (dernier prose-03.md + 1) absent de la sortie\n"
+        assert "Prochain tour  : 04" in p2.stdout, (
+            f"-Reprise : ligne 'Prochain tour  : 04' (dernier prose-03.md + 1) absente de la sortie\n"
             f"stdout={p2.stdout}"
         )
         apres = lister_dossiers_bench(repo)
@@ -162,7 +223,52 @@ def main():
         )
         print("PASS: -Reprise sur run absent (échec, code de sortie non nul)")
 
-        print("lancer_banc_fumee_test: 3/3 OK")
+        # ------------------------------------------------------------
+        # Cas 4 : exécution réelle (herdr factice) -- settings.local.json
+        # autorise Bash(*) ET mcp__coderain-engine__* (revue PR #224,
+        # point bloquant #210), et n'écrase pas un fichier déjà présent.
+        # ------------------------------------------------------------
+        repo4 = build_repo_jetable(tmp_root, nom="repo-jetable-cas4", gabarits_minimaux=True)
+        fake_bin_reel = build_fake_herdr_reel(tmp_root)
+        script_path4 = repo4 / "tools" / "lancer-banc-fumee.ps1"
+        settings_path = repo4 / ".claude" / "settings.local.json"
+
+        assert not settings_path.exists(), "cas 4 : settings.local.json ne devrait pas encore exister"
+        p4a = run_reel(ps_exe, script_path4, fake_bin_reel, [])
+        assert p4a.returncode == 0, (
+            f"cas 4 (pose initiale) : code de sortie attendu 0, recu {p4a.returncode}\n"
+            f"stdout={p4a.stdout}\nstderr={p4a.stderr}"
+        )
+        assert settings_path.is_file(), "cas 4 : settings.local.json n'a pas été posé"
+
+        # Set-Content -Encoding utf8 (PowerShell) pose un BOM -- utf-8-sig
+        # le tolère silencieusement.
+        settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+        allow = settings.get("permissions", {}).get("allow", [])
+        assert "Bash(*)" in allow, f"cas 4 : Bash(*) absent de permissions.allow ({allow})"
+        assert "mcp__coderain-engine__*" in allow, (
+            f"cas 4 : mcp__coderain-engine__* absent de permissions.allow -- le premier appel "
+            f"MCP du MJ se bloquerait (constat #210, revue PR #224) ({allow})"
+        )
+        print("PASS: settings.local.json posé autorise Bash(*) et mcp__coderain-engine__*")
+
+        # Non-écrasement : un second lancement sur un fichier déjà présent
+        # (portant un marqueur synthétique) ne doit PAS le modifier.
+        marqueur = {"permissions": {"allow": ["marqueur-synthetique-test"]}}
+        settings_path.write_text(json.dumps(marqueur), encoding="utf-8")
+        p4b = run_reel(ps_exe, script_path4, fake_bin_reel, [])
+        assert p4b.returncode == 0, (
+            f"cas 4 (second lancement) : code de sortie attendu 0, recu {p4b.returncode}\n"
+            f"stdout={p4b.stdout}\nstderr={p4b.stderr}"
+        )
+        settings_apres = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+        assert settings_apres == marqueur, (
+            f"cas 4 : un settings.local.json deja present a ete ecrase "
+            f"(attendu={marqueur}, recu={settings_apres})"
+        )
+        print("PASS: settings.local.json déjà présent n'est pas écrasé")
+
+        print("lancer_banc_fumee_test: 4/4 OK")
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 

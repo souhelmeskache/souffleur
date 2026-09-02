@@ -310,13 +310,19 @@ Write-Output "Pane joueur-banc: $paneJoueurId"
 # chaque lane ; ce script tourne, lui, dans le worktree courant, relancé
 # plusieurs fois d'un run à l'autre (reprise) — on ne l'écrase donc PAS s'il
 # existe déjà, pour ne pas effacer un réglage local voulu par l'opérateur.
+#
+# Correctif revue PR #224 (REFUS) : Bash(*) seul ne couvre PAS le blocage
+# constaté dans #210 — les deux agents du banc jouent leurs tours via les
+# outils MCP `coderain-engine` (`module_get_node`, etc.), jamais via Bash.
+# `mcp__coderain-engine__*` en allow, en plus de Bash(*), pour que le
+# premier appel MCP du MJ ne se bloque plus sur une demande de permission.
 $claudeDir = Join-Path $RepoRoot '.claude'
 $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
 if (-not (Test-Path $settingsLocalPath)) {
     New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
     $settingsLocal = [ordered]@{
         permissions = [ordered]@{
-            allow = @('Bash(*)')
+            allow = @('Bash(*)', 'mcp__coderain-engine__*')
             deny  = @(
                 'Bash(git commit --no-verify*)',
                 'Bash(git commit -n*)',
