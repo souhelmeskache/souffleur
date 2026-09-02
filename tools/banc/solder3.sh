@@ -35,6 +35,19 @@ for i in $(seq 1 40); do
   [ "$ms" = "CLEAN" ] && break
   echo "mergeState=$ms (attente)"; sleep 30
 done
-gh pr merge $PR -R $REPO --squash --delete-branch && echo "PR $PR MERGEE" || echo "ECHEC MERGE"
+head_branch=$(gh pr view $PR -R $REPO --json headRefName --jq '.headRefName')
+if gh pr merge $PR -R $REPO --squash --delete-branch; then
+  echo "PR $PR MERGEE"
+  # Ce qui crée détruit (I-243) : teardown de la lane ET de sa revue,
+  # idempotent, jamais un geste manuel.
+  if [[ "$head_branch" =~ ^(lane|revue)-[0-9]+$ ]]; then
+    bash /c/Users/souhe/souffleur/tools/banc/circuit.sh nettoyer "$head_branch"
+  else
+    echo "branche $head_branch : pas au format strict lane-NNN/revue-NNN, circuit.sh nettoyer sauté"
+  fi
+  bash /c/Users/souhe/souffleur/tools/banc/circuit.sh nettoyer "revue-$PR"
+else
+  echo "ECHEC MERGE"
+fi
 git -C C:/Users/souhe/souffleur pull --ff-only 2>&1 | tail -3
 echo "=== FIN ==="
