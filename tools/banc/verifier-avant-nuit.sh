@@ -22,6 +22,24 @@ herdr workspace list >/dev/null 2>&1 || refus "herdr injoignable (herdr workspac
 command -v claude >/dev/null 2>&1 || refus "claude introuvable dans le PATH."
 command -v gh >/dev/null 2>&1 || refus "gh introuvable dans le PATH."
 
+# --- liste blanche du banc complète (#267) ----------------------------------
+#
+# tools/lancer-banc-fumee.ps1 GARANTIT désormais la liste blanche d'un
+# .claude/settings.local.json déjà présent (fusion des entrées manquantes,
+# #267) au lieu de le laisser tel quel — mais cette garde tourne AVANT le
+# lanceur : si le fichier existe déjà et n'a pas encore été complété (ex.
+# posé à la main, ou par un ancien correctif #210/#224 plus étroit), la nuit
+# ne doit pas démarrer avec une liste blanche incomplète (constat nuit N0,
+# 02/09 : agents bloqués sur demande de permission jusqu'au timeout).
+#
+# Vérification déléguée à verifier-liste-blanche-nuit.sh (extrait pour être
+# testable indépendamment de herdr/gh/claude — tests/verifier_liste_blanche_nuit_test.py).
+GARDE_LISTE_BLANCHE_SORTIE="$("$REPO_ROOT/tools/banc/verifier-liste-blanche-nuit.sh" "$REPO_ROOT/.claude/settings.local.json" 2>&1)"
+GARDE_LISTE_BLANCHE_RC=$?
+if [ "$GARDE_LISTE_BLANCHE_RC" -ne 0 ]; then
+  refus "${GARDE_LISTE_BLANCHE_SORTIE#REFUS : }"
+fi
+
 SAVE_SRC="$(cd "$REPO_ROOT" && python -c "
 import sys
 sys.path.insert(0, '.')

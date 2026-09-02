@@ -80,6 +80,44 @@
 Origine : banc de nuit du 31/08 → 01/09/2026 (fiche #201). Versionnés en
 l'état, pas encore intégrés au lanceur (#210).
 
+## Liste blanche des agents du banc (#210, garantie #267)
+
+Les deux agents du banc (`banc-mj`, `banc-joueur`) tournent en
+`--permission-mode acceptEdits` (Haiku ne supporte pas `auto`, voir doc
+Claude Code § « permission modes ») : sans liste blanche, chaque appel Bash
+ou outil MCP `coderain-engine` redemande une autorisation à la main — une
+nuit sans humain se fige (agent `blocked`) jusqu'au timeout.
+
+- **Où elle vit** : `.claude\settings.local.json` du checkout/worktree qui
+  lance le banc — fichier **ignoré par Git**, propriété de l'opérateur, à ne
+  jamais confondre avec `.claude\settings.json` (suivi par Git, checkout
+  principal). Un correctif manuel posé par erreur dans `settings.json` au
+  lieu de `settings.local.json` a causé le constat #267 (nuit N0 du 02/09) :
+  deux fichiers au nom voisin, deux rôles.
+- **Ce que le lanceur garantit** (`tools\lancer-banc-fumee.ps1`, fonction
+  `Assure-ListeBlancheBanc` extraite dans `tools\banc\liste-blanche.ps1`) :
+  - fichier absent → création complète (`allow`: `Bash(*)`,
+    `mcp__coderain-engine__*` ; `deny`: les cinq refus `--no-verify`/
+    `--force`/`-f` sur `git commit`/`git push`).
+  - fichier présent, JSON valide → **complète** les entrées `allow`/`deny`
+    du gabarit qui manquent, sans retirer quoi que ce soit que l'opérateur y
+    a mis. C'est le correctif #267 : avant, un fichier déjà présent mais
+    plus étroit (ex. cinq outils MCP historiques seulement, aucun `Bash`)
+    n'était jamais complété — « Automode déjà présent, non modifié » alors
+    que la liste blanche réelle était incomplète.
+  - fichier présent, JSON invalide → **REFUS explicite** (le lanceur
+    s'arrête, code de sortie non nul), jamais un écrasement.
+- **Garde avant nuit** (`tools\banc\verifier-avant-nuit.sh`, délègue à
+  `tools\banc\verifier-liste-blanche-nuit.sh`) : REFUSE de démarrer une nuit
+  si `.claude\settings.local.json` existe et ne porte pas encore les deux
+  entrées `allow` requises (message : ce qui manque) — la nuit ne démarre
+  plus avec une liste blanche incomplète en apparence « vérifiée ».
+- **Tests** : `tests/liste_blanche_banc_test.py` (la fonction, trois
+  fichiers synthétiques : absent, partiel, complet, + JSON invalide) et
+  `tests/verifier_liste_blanche_nuit_test.py` (la garde, mêmes cas) —
+  dossier temporaire uniquement, jamais le `.claude\settings.local.json`
+  réel du checkout principal.
+
 ## Banc de nuit N1 (#201, D-276 ; #260) — la boucle-ferme sans LLM
 
 Joue des parties complètes la nuit, sans humain, sans analyste, avec budget,
