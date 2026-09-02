@@ -49,29 +49,37 @@ Deux passes :
    contourné (D-274 §1).
 2. **Mesure sur 1 000 graines** (0-999), même algorithme que `attack()`
    (`roll_check` puis, sur touche, `roll_damage` — même discipline
-   seed+nonce), jusqu'à `downed` du joueur ou 40 tours (plafond du banc).
+   seed+nonce), jusqu'à `downed` du joueur ou 40 rounds de combat (soit
+   jusqu'à 80 tours au sens banc — plafond de sécurité large, jamais
+   atteint : `downed` tombe en 7 tours médians, voir plus bas).
 
-## Résultat du rejeu littéral (seed = graine du save réel, 1079851431)
+## Résultat du rejeu littéral (seed synthétique 42 — PAS la vraie graine du save, voir « zéro-spoiler » ci-dessous)
 
 ```
-tour 21 brute-des-glaces-banc -> player               : roll=3 total=8  vs CA 11 hit=False
+tour 21 brute-des-glaces-banc -> player               : roll=18 total=23 vs CA 11 hit=True  damage=4
 tour 22               player -> brute-des-glaces-banc : REFUS — missing degats on player
-tour 23 brute-des-glaces-banc -> player               : roll=3 total=8  vs CA 11 hit=False
+tour 23 brute-des-glaces-banc -> player               : roll=20 total=25 vs CA 11 hit=True  damage=5
 tour 24               player -> brute-des-glaces-banc : REFUS — missing degats on player
-tour 25 brute-des-glaces-banc -> player               : roll=5 total=10 vs CA 11 hit=False
+tour 25 brute-des-glaces-banc -> player               : roll=1  total=6  vs CA 11 hit=False
 tour 26               player -> brute-des-glaces-banc : REFUS — missing degats on player
-tour 27 brute-des-glaces-banc -> player               : roll=6 total=11 vs CA 11 hit=True  damage=11
+tour 27 brute-des-glaces-banc -> player               : roll=16 total=21 vs CA 11 hit=True  damage=9
 ```
 
-Sur cette graine précise, les nombres réels donnent une narration
-**différente** du banc (la créature rate trois fois avant de toucher, au
-lieu de toucher 4 fois sur 4) — attendu : le banc n'a jamais consommé le
-compteur de dés seed+nonce du save (ses jets passaient par des appels
-`resolve_check`/`roll_damage` ad hoc), donc aucune reproduction bit-à-bit
-n'était possible ni recherchée. Ce qui compte ici : chaque tour où le joueur
-attaque est un refus **identique et systématique**, quelle que soit la
-graine — `attack` ne jette même pas de dé (D-274 §1, « refus AVANT tout
-jet »).
+**Zéro-spoiler :** ce rejeu utilise une graine synthétique (42), pas la
+vraie `rpg.seed` du save réel. Le moteur jette chaque dé avec
+`random.Random(f"{seed}-{nonce}")` (`coderain/modules/rpg.py:83,119`) —
+publier la vraie graine rendrait précalculable tout jet futur de la partie
+`beyond-the-vale-of-madness`, y compris pour son propre joueur. N'importe
+quelle graine démontre la même chose, puisque le banc n'a de toute façon
+jamais consommé ce compteur (ses jets passaient par des appels
+`resolve_check`/`roll_damage` ad hoc) : aucune reproduction bit-à-bit du
+banc n'était possible ni recherchée. Sur cette graine, le joueur encaisse
+4+5+9=18 dégâts et finit à 2/20 PV (pas `downed`) au tour 27 — un résultat
+différent du banc (18→0 sur 25 dégâts en 4 touches), preuve que la
+narration précise dépend de la graine, mais pas le résultat structurel
+qui compte : chaque tour où le joueur attaque est un refus **identique et
+systématique**, quelle que soit la graine — `attack` ne jette même pas de
+dé (D-274 §1, « refus AVANT tout jet »).
 
 ## Mesure sur 1 000 graines
 

@@ -13,10 +13,21 @@ reconstituées du save `beyond-the-vale-of-madness` (corpus privé
 `ttrpg-corpus`, hors périmètre de ce dépôt — D-109/D-206), puis mesure sur
 1000 graines la létalité réelle de ce combat pour comparaison au banc.
 
-Fixture 100% synthétique dérivée de ces valeurs (D-109) : le nom de la
-créature du module n'apparaît nulle part ici — seuls ses champs mécaniques
-`ca`/`pv`/`attaque_bonus`/`degats`, DÉJÀ publiés en clair dans le corps de
-l'Issue #237, sont repris sous un nom fictif.
+Fixture 100% synthétique dérivée de ces valeurs (D-109) : le combattant
+créé dans le save de fixture porte un nom fictif (`brute-des-glaces-banc`)
+— seuls ses champs mécaniques `ca`/`pv`/`attaque_bonus`/`degats` sont repris
+du record réel. Le nom réel du module et de la créature ne sont PAS des
+secrets à protéger ici (déjà publics : Issue #237, `catalogue/`,
+`monster_bridge.py`) — ils apparaissent dans cette docstring et dans
+`docs/letalite-rejeu-tours-21-27.md` à titre de contexte, mais jamais comme
+slug/titre d'une entrée de fixture.
+
+Zéro-spoiler (distinct de D-109) : ce script ne câble AUCUNE graine ni
+compteur de jets réel du save `beyond-the-vale-of-madness` — seule une
+graine synthétique (42) est utilisée pour le rejeu littéral, et le moteur
+jette chaque dé avec `random.Random(f"{seed}-{nonce}")`
+(`coderain/modules/rpg.py:83,119`) : publier la vraie graine du save
+rendrait précalculable tout jet futur de cette partie réelle.
 
 ## Reconstitution du tour 21 (voir docs/letalite-rejeu-tours-21-27.md)
 
@@ -69,11 +80,15 @@ PLAYER_STATS = {
 }
 PLAYER_LEVEL = 1
 PLAYER_HP_MAX = 20
-REAL_SAVE_SEED = 1079851431   # rpg.seed du save réel — fil de continuité,
-                              # pas une reproduction bit-à-bit du banc (les
-                              # 7 tours du banc n'ont jamais consommé ce
-                              # compteur : ils passaient par resolve_check/
-                              # roll_damage ad hoc, hors discipline nonce).
+# Graine SYNTHÉTIQUE (D-109 zéro-spoiler) — surtout pas la vraie `rpg.seed`
+# du save : avec `random.Random(f"{seed}-{nonce}")` (rpg.py:83,119), publier
+# la graine réelle rendrait précalculable tout jet futur de cette partie.
+# N'importe quelle valeur démontre la même chose : le rejeu littéral n'a de
+# toute façon jamais visé une reproduction bit-à-bit du banc (ses 7 tours
+# passaient par `resolve_check`/`roll_damage` ad hoc, hors discipline
+# nonce de `attack`) — seul compte le résultat structurel (refus côté
+# joueur), indépendant de la graine.
+REJOUE_SEED = 42
 
 
 def _make_store():
@@ -122,7 +137,7 @@ def rejeu_tours_21_27() -> list[dict]:
     tour-27.md) via `attack`, avec la vraie fiche. Rend un tour de rejeu
     par tour banc, y compris toute erreur de refus."""
     store = _make_store()
-    _reset_player(store, seed=REAL_SAVE_SEED)
+    _reset_player(store, seed=REJOUE_SEED)
     # séquence réelle : impair = fiend attaque le joueur, pair = joueur
     # attaque la créature (tours 21-27, cf. les journaux tour-NN.md).
     sequence = [
@@ -139,7 +154,10 @@ def rejeu_tours_21_27() -> list[dict]:
         res = mcp_server.attack(attacker=attacker, target=target)
         out.append({"tour": tour, "attacker": attacker, "target": target,
                     "result": res})
-        # un `downed` du joueur arrête le rejeu, comme au banc (tour 27).
+        # un `downed` du joueur arrêterait le rejeu avant tour 27 (comme au
+        # banc, où c'est arrivé pile à ce tour) — sur la graine synthétique
+        # de ce rejeu littéral, ça n'arrive pas forcément : la boucle
+        # s'arrête alors simplement en épuisant la séquence des 7 tours.
         p = store.rpg_state().get("player") or {}
         if "downed" in (p.get("conditions") or []) or "dead" in (p.get("conditions") or []):
             break
@@ -156,7 +174,13 @@ def rejeu_tours_21_27() -> list[dict]:
 FIEND_ATTACK_BONUS = 5
 FIEND_DAMAGE = "9 (1d8+3) slashing"
 PLAYER_AC = 11        # derived_combat(agility=1) : 10 + 1
-MAX_ROUNDS = 40        # plafond du banc (« jouer ... 40 tours max »)
+# Plafond de sécurité en ROUNDS de combat (1 round = 1 attaque fiend + 1
+# tentative joueur = 2 tours au sens banc) — 40 rounds, donc jusqu'à 80
+# tours banc, largement au-delà du plafond réel du banc (« jouer ... 40
+# tours max »). Sans effet sur la mesure : `downed` tombe bien avant
+# (7 tours médians, cf. `median_tours_to_downed`) — ce plafond n'existe
+# que pour borner la boucle, jamais atteint en pratique.
+MAX_ROUNDS = 40
 
 
 def _simulate_one(seed: int) -> dict:
