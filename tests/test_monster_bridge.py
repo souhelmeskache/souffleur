@@ -130,4 +130,25 @@ asyncio.run(brute_bridge_probe())
 print("3) record de module -> template 'brute' (monster_bridge) => intent "
       "non-pass, zéro avertissement")
 
+
+# 4) I-239 (D-274 §1) : ca/pv/attaque_bonus absent -> ConversionException
+# nommée, jamais un default fabriqué (10/1/0) en silence.
+from coderain.converter.ruletables import ConversionException  # noqa: E402
+
+for missing_field in ("ca", "pv", "attaque_bonus"):
+    stats = {k: v for k, v in FAKE_CREATURE_RECORD["stats"].items()
+             if k != missing_field}
+    record = {"meta": FAKE_CREATURE_RECORD["meta"], "stats": stats}
+    try:
+        encounter_member_from_record(
+            record, record_id="creature-factice", entity_id="pnj:factice-2",
+            zone_id="z1", initiative=8)
+        raise AssertionError(f"attendu ConversionException pour {missing_field!r} absent")
+    except ConversionException as e:
+        assert missing_field in str(e), e
+        assert "creature-factice" in str(e), e
+
+print("4) ca/pv/attaque_bonus absent => ConversionException nommée, "
+      "jamais un default fabriqué")
+
 print("\nMONSTER-BRIDGE TESTS PASSED")
