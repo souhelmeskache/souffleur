@@ -30,6 +30,7 @@ from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record
 from coderain.engine import Engine
 from coderain.memory import Entry, Library
+from coderain import validator as validator_mod
 
 FAIT = []
 
@@ -157,7 +158,7 @@ h1 = [{"role": "player", "text": "J'observe la porte."}]
 h2 = [{"role": "player", "text": "J'inspecte les gonds."},
      {"role": "player", "text": "Je tends l'oreille."}]
 state_c = store_c.world_state()
-loc = state_c["location"]
+loc = validator_mod.current_location(state_c)
 prefix_1 = ap.stable_prefix(ap.build_sections(
     partition_dir, store_c, loc, h1, "Je pousse la porte."))
 prefix_2 = ap.stable_prefix(ap.build_sections(

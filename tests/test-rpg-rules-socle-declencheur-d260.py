@@ -41,6 +41,7 @@ from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record
 from coderain.engine import Engine
 from coderain.memory import Library
+from coderain import validator as validator_mod
 
 FAIT = []
 
@@ -175,7 +176,7 @@ for label, pending in (("pending_grant=0", 0), ("pending_grant=2", 2)):
     sys_1, sys_2 = msgs_1[0]["content"], msgs_2[0]["content"]
 
     state = store.world_state()
-    loc = state["location"]
+    loc = validator_mod.current_location(state)
     rpg_rules = engine._rpg_rules_served()
     prefix_1 = ap.stable_prefix(ap.build_sections(
         partition_dir, store, loc, h1, "Je pousse la porte.", rpg_on=True,

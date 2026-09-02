@@ -20,6 +20,7 @@ from pathlib import Path
 
 from coderain.memory import Library, MemoryStore
 from coderain.profiles import Entry
+from coderain import validator as validator_mod
 
 from .aval import _split_front, get_record
 
@@ -186,14 +187,12 @@ def derive(partition_dir: Path, root_dir: Path, save_slug: str,
         playable = next((n for n in nodes
                          if n["id"].startswith("para-")), nodes[0])
         state = json.loads(state_p.read_text(encoding="utf-8"))
-        if not state.get("location"):
-            state["location"] = playable["id"]
-            # Issue #197 : seed les DEUX champs — `player.location` (lu par
-            # la feuille/mémoire) doit s'accorder avec `state.location`
-            # racine (lu par l'assembleur par position) dès la création,
-            # même logique que le guichet `validator.apply_world`.
+        if not validator_mod.current_location(state):
+            # Issue #219 : une seule source — `player.location` — voir
+            # `validator.current_location()`. Le guichet `apply_world`
+            # applique la même règle.
             player = state.setdefault("player", {})
-            if isinstance(player, dict) and not player.get("location"):
+            if isinstance(player, dict):
                 player["location"] = playable["id"]
             state_p.write_text(json.dumps(state, ensure_ascii=False, indent=1),
                                encoding="utf-8")

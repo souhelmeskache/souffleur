@@ -25,6 +25,7 @@ from coderain.converter import projection
 from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition
 from coderain.memory import Library
+from coderain import validator as validator_mod
 from coderain.modules.trinity import _writer_directive
 
 FAIT = []
@@ -74,7 +75,7 @@ slug = lib.create_story("Test I-181", "Un donjon oublié.")
 projection.derive(partition_dir, TMP / "app", slug, corpus_dir=TMP / "corpus")
 store = lib.saves.store(slug)
 state = store.world_state()
-assert state.get("location") == "para-01", state.get("location")
+assert validator_mod.current_location(state) == "para-01", state.get("player")
 
 section("1) rendu_md_for lit le node courant, chaîne vide sur node sans rendu_md")
 assert ap.rendu_md_for(partition_dir, "para-01") == COULEUR

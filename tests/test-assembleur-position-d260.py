@@ -25,6 +25,7 @@ from coderain.converter import projection
 from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record, Secret
 from coderain.memory import Library
+from coderain import validator as validator_mod
 
 FAIT = []
 
@@ -115,7 +116,7 @@ store = lib.saves.store(slug)
 
 section("1) bout-en-bout : la save projetée est éligible + assemblage réussit")
 state = store.world_state()
-assert state.get("location") == "para-01", state.get("location")
+assert validator_mod.current_location(state) == "para-01", state.get("player")
 assert ap.eligible(store, state)
 history = [{"role": "player", "text": "J'observe la porte."}]
 messages = ap.assemble(partition_dir, store, state, history,

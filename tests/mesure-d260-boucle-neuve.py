@@ -42,6 +42,7 @@ from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record, Secret
 from coderain.engine import Engine
 from coderain.memory import Library, MemoryStore
+from coderain import validator as validator_mod
 
 CHARS_PER_TOKEN = 4  # convention mesure I-158, coderain/memory.py:1309,1544
 
@@ -314,7 +315,7 @@ def run_corpus_b():
     slug = save_dir.name
     store = lib.saves.store(slug)
     state = store.world_state()
-    location = str(state.get("location", ""))
+    location = validator_mod.current_location(state)
     if not location or not ap.eligible(store, state):
         print("\n--- CORPUS B — réel : SKIP (save non éligible assembleur position) ---")
         return None

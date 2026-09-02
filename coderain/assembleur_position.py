@@ -55,6 +55,7 @@ from .memory import (Entry, MemoryStore, SCENARIO_STAGE_FILE,
                      _context_render, trigger_gate)
 from .converter.aval import _split_front
 from .modules.trinity import DIRECTOR_SYS, _ENV_RPG, _ENV_WORLD
+from . import validator as validator_mod
 
 _BRIEF_START = "<!-- P4-BRIEF-START -->"
 _BRIEF_END = "<!-- P4-BRIEF-END -->"
@@ -76,7 +77,8 @@ def eligible(store: MemoryStore, state: dict) -> bool:
     `assemble()` que si la save porte À LA FOIS une position ET une
     partition projetée (au moins un node dans locations.md). Toute autre
     save retombe sur `assemble()`, inchangé (zéro régression)."""
-    return bool(state.get("location")) and bool(store.entries("locations.md"))
+    return (bool(validator_mod.current_location(state))
+            and bool(store.entries("locations.md")))
 
 
 def _read_json_front(path: Path) -> dict:
@@ -350,7 +352,7 @@ def assemble(partition_dir: str | Path, store: MemoryStore, state: dict,
     partition projetée (voir `eligible()`). Même forme de sortie que
     `MemoryStore.assemble()` — le point d'appel choisit l'un ou l'autre
     selon `eligible()`, sans toucher au contrat du Director."""
-    location = str(state.get("location", ""))
+    location = validator_mod.current_location(state)
     sections = build_sections(partition_dir, store, location, history,
                               player_input, scenes_tail, char_sheet, rpg_on,
                               secrets, rpg_rules, response_length)
