@@ -123,6 +123,166 @@ def roll_damage(formula: str, seed: int, nonce: int) -> dict:
             "total": total}
 
 
+# --- combat dérivé de la fiche (I-463, D-274 §1) -----------------------------
+# Le joueur n'avait NI classe d'armure NI bonus d'attaque dans le moteur : au
+# banc, le Director fabriquait les deux. Ils se DÉRIVENT ici, à la lecture, de
+# ce que la fiche porte déjà (stats, niveau, équipement équipé) — jamais une
+# valeur stockée en dur dans state.json, jamais un défaut silencieux.
+#
+# Vocabulaire du socle : le « DEX » de la 5e est la stat `agility`, le « FOR »
+# est `strength` (cf. sidecar.DEFAULT_CFG["stats"]). Les valeurs de `stats`
+# sont DÉJÀ des modificateurs — roll_check les additionne telles quelles au d20.
+AC_BASE = 10                 # 5e : CA sans armure = 10 + mod DEX
+STAT_DEX = "agility"
+STAT_STR = "strength"
+
+# Champs lus sur l'entrée `items.md` d'un objet ÉQUIPÉ (le Markdown reste la
+# source de vérité ; le miroir `inventory` de state.json ne porte que
+# {qty, equipped}) :
+#   armure: 14       CA de base de l'armure (remplace le 10 nu)
+#   dex_max: 2       plafond du mod DEX qu'ajoute cette armure (optionnel)
+#   degats: 1d8+2    dés de l'arme — même champ que la fiche créature (I-206)
+#   stat: strength   caractéristique de l'attaque avec cette arme (optionnel)
+#   finesse: true    arme de finesse : le meilleur des mods FOR/DEX (optionnel)
+ITEM_AC = "armure"
+ITEM_DEX_MAX = "dex_max"
+ITEM_DAMAGE = "degats"
+ITEM_STAT = "stat"
+ITEM_FINESSE = "finesse"
+
+_TRUE_WORDS = ("true", "yes", "oui", "1", "on")
+
+
+def proficiency_bonus(level) -> int:
+    """Maîtrise 5e : +2 au niveau 1, puis +1 tous les 4 niveaux."""
+    return 2 + (max(1, _as_int(level, 1)) - 1) // 4
+
+
+def opt_int(value):
+    """L'entier d'un champ de fiche, ou None si le champ est absent/vide.
+    Rend `False` (et non None) sur une valeur PRÉSENTE mais illisible — un
+    champ écrit mais incompréhensible n'est pas la même chose qu'un champ
+    absent, et ni l'un ni l'autre ne doit devenir un 0 par défaut."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        return False
+    m = re.search(r"[+-]?\d+", str(value))
+    return int(m.group(0)) if m else False
+
+
+def _stat_mod(stats: dict, name: str):
+    """Le modificateur `name` de la fiche, ou None s'il est absent/illisible."""
+    v = (stats or {}).get(name)
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    got = opt_int(v)
+    return None if (got is None or got is False) else got
+
+
+def derived_combat(player: dict, inventory: dict | None = None,
+                   items: dict | None = None) -> dict:
+    """CA, bonus d'attaque et arme du joueur, DÉRIVÉS de sa fiche (D-274 §1).
+
+    Règle 5e simple, versionnée ici et nulle part ailleurs :
+      * CA = 10 + mod DEX sans armure ; avec une armure équipée, CA = `armure:`
+        de l'objet + mod DEX (plafonné par son `dex_max:` s'il en porte un) ;
+      * bonus d'attaque = mod de la caractéristique de l'arme + maîtrise du
+        niveau (`proficiency_bonus`). L'arme dit sa caractéristique par
+        `stat:` ; `finesse: true` prend le meilleur de FOR/DEX ; sans arme
+        équipée c'est l'attaque à mains nues, au FOR ;
+      * les dés de dégâts sont ceux de l'arme (`degats:`) — aucune arme
+        équipée, aucun dé : `attack` refusera, il n'en invente pas.
+
+    `player` = le bloc `rpg["player"]` (stats, level), `inventory` = le miroir
+    `rpg["inventory"]` ({slug: {qty, equipped}}), `items` = {slug: attrs} lu
+    sur items.md. Fonction PURE : elle ne lit ni n'écrit aucun fichier, et rien
+    de ce qu'elle rend n'est stocké — tout se recalcule à chaque lecture.
+
+    Rend {ac, attack_bonus, proficiency, attack_stat, weapon, armor} ou
+    {"error": ...} : un modificateur nécessaire absent des `stats` est un
+    REFUS explicite, jamais un 0 par défaut (D-274 §1).
+    """
+    stats = (player or {}).get("stats")
+    if not isinstance(stats, dict):
+        return {"error": "missing stats on player sheet"}
+    dex = _stat_mod(stats, STAT_DEX)
+    if dex is None:
+        return {"error": f"missing stat '{STAT_DEX}' on player sheet "
+                         f"(needed to derive AC)"}
+    defs = items or {}
+    armor = weapon = None
+    # Ordre de slug : deux armures (ou deux armes) équipées à la fois donnent
+    # le même résultat d'une lecture à l'autre — la première l'emporte.
+    for slug in sorted(inventory or {}):
+        held = (inventory or {}).get(slug)
+        if not isinstance(held, dict) or not held.get("equipped"):
+            continue
+        attrs = {str(k).strip().lower(): v
+                 for k, v in (defs.get(slug) or {}).items()}
+        if armor is None and ITEM_AC in attrs:
+            val = opt_int(attrs.get(ITEM_AC))
+            if val is False or val is None:
+                return {"error": f"unreadable '{ITEM_AC}' on item '{slug}' "
+                                 f"({attrs.get(ITEM_AC)!r})"}
+            cap = opt_int(attrs.get(ITEM_DEX_MAX))
+            if cap is False:
+                return {"error": f"unreadable '{ITEM_DEX_MAX}' on item "
+                                 f"'{slug}' ({attrs.get(ITEM_DEX_MAX)!r})"}
+            armor = {"slug": slug, "ac": val, "dex_max": cap}
+        if weapon is None and str(attrs.get(ITEM_DAMAGE) or "").strip():
+            weapon = {"slug": slug, "damage": str(attrs[ITEM_DAMAGE]).strip(),
+                      "stat": str(attrs.get(ITEM_STAT) or "").strip().lower(),
+                      "finesse": str(attrs.get(ITEM_FINESSE) or "").strip().lower()
+                      in _TRUE_WORDS}
+
+    if armor is None:
+        ac = AC_BASE + dex
+    else:
+        ac = armor["ac"] + (dex if armor["dex_max"] is None
+                            else min(dex, armor["dex_max"]))
+
+    if weapon is not None and weapon["stat"]:
+        stat_name = weapon["stat"]
+        mod = _stat_mod(stats, stat_name)
+        if mod is None:
+            return {"error": f"missing stat '{stat_name}' on player sheet "
+                             f"(weapon '{weapon['slug']}' attacks with it)"}
+    elif weapon is not None and weapon["finesse"]:
+        str_mod = _stat_mod(stats, STAT_STR)
+        if str_mod is None:
+            stat_name, mod = STAT_DEX, dex
+        else:
+            stat_name, mod = ((STAT_STR, str_mod) if str_mod >= dex
+                              else (STAT_DEX, dex))
+    else:
+        stat_name = STAT_STR
+        mod = _stat_mod(stats, stat_name)
+        if mod is None:
+            return {"error": f"missing stat '{stat_name}' on player sheet "
+                             f"(needed to derive the attack bonus)"}
+    prof = proficiency_bonus((player or {}).get("level", 1))
+    return {"ac": int(ac), "attack_bonus": int(mod) + prof, "proficiency": prof,
+            "attack_stat": stat_name, "weapon": weapon, "armor": armor}
+
+
+def player_combat(store, cfg: dict | None = None) -> dict:
+    """`derived_combat` lu sur un save : stats/niveau du bloc `rpg`, objets
+    équipés du miroir `inventory`, définitions d'objets sur items.md. Rien
+    n'est écrit — la dérivation se refait à chaque appel."""
+    rpg = store.rpg_state()
+    items: dict[str, dict] = {}
+    try:
+        for e in store.entries("items.md"):
+            items[e.slug] = dict(e.attrs)
+    except Exception:  # noqa: BLE001 — un items.md illisible ne casse pas la fiche
+        items = {}
+    return derived_combat(rpg.get("player") or {}, rpg.get("inventory") or {},
+                          items)
+
+
 # --- downed / death saves (I-213, D-271 §1) ---
 def _hp_zero_damage_failure(player: dict, events: list[str], crit: bool) -> None:
     """5e: damage taken while already downed at 0 HP is an automatic
@@ -544,10 +704,13 @@ def apply(store, sidecar: dict, cfg: dict | None = None) -> list[str]:
 
 
 # --- rendering (context for the narrator + player display) ---
-def render_sheet_lines(rpg: dict, world: dict | None = None) -> str:
+def render_sheet_lines(rpg: dict, world: dict | None = None,
+                       combat: dict | None = None) -> str:
     """The sheet as a vertical read-out — every value on its own line. Used by the
     GUI's pinned side panel; the CLI keeps the compact render_sheet(). Pass the
-    world state to prepend the clock / weather / location (Wave 1)."""
+    world state to prepend the clock / weather / location (Wave 1), and the
+    `derived_combat` read-out to show the derived CA/attack bonus (I-463) —
+    derived, never stored, so it is passed in rather than read off `rpg`."""
     head: list[str] = []
     if isinstance(world, dict):
         t = world.get("time", {})
@@ -576,6 +739,19 @@ def render_sheet_lines(rpg: dict, world: dict | None = None) -> str:
         lines.append("")
         lines.append("— Stats —")
         lines += [f"{k.title():<13}{v:+d}" for k, v in stats.items()]
+    if isinstance(combat, dict):
+        lines.append("")
+        lines.append("— Combat —")
+        if combat.get("error"):
+            lines.append(f"indisponible : {combat['error']}")
+        else:
+            lines.append(f"AC     {combat.get('ac')}")
+            lines.append(f"Attack {combat.get('attack_bonus'):+d}"
+                         if isinstance(combat.get("attack_bonus"), int)
+                         else f"Attack {combat.get('attack_bonus')}")
+            w = combat.get("weapon")
+            lines.append(f"Weapon {w['slug']}  {w['damage']}" if isinstance(w, dict)
+                         else "Weapon unarmed")
     gold = ((world or {}).get("player") or {}).get("gold") \
         if isinstance((world or {}).get("player"), dict) else None
     if gold is not None:

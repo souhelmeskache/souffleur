@@ -574,8 +574,14 @@ def undo_last() -> dict:
 @mcp.tool()
 def get_world_state() -> dict:
     """Get the full world state: time, player location, flags, quests, RPG block
-    (HP/mana/XP/inventory/companions/enemies)."""
-    return _require_store().world_state()
+    (HP/mana/XP/inventory/companions/enemies) + the derived `combat` section
+    (I-463: CA, bonus d'attaque et arme du joueur, recalculés à chaque lecture
+    depuis la fiche — jamais stockés dans state.json)."""
+    store = _require_store()
+    state = store.world_state()
+    if store.rpg_enabled():
+        state["combat"] = _load_rpg().player_combat(store)
+    return state
 
 
 @mcp.tool()
@@ -857,6 +863,167 @@ def roll_damage(formula: str) -> dict:
     rpg["rolls"] = nonce
     store.set_rpg_state(rpg)
     return result
+
+
+# ── attaque de bout en bout (I-463, D-274 §1-2) ──────────────────
+# Au banc (run 20260831-202617, tours 21-27) le Director a simulé sept attaques
+# à coups de resolve_check, avec une DEX fabriquée et une CA inventée, puis a
+# joué le monstre lui-même : aucun outil ne résolvait une attaque de bout en
+# bout. `attack` est ce chemin — il LIT les deux fiches, jette, et applique par
+# le guichet. Tout nombre qu'il ne trouve pas sur une fiche est un REFUS ;
+# aucun `default=` n'est consulté (surtout pas ceux de monster_bridge.py:214).
+
+def _attack_fiche(store, who: str) -> dict:
+    """La fiche de combat d'un camp, telle qu'elle est ÉCRITE — jamais complétée.
+
+    `who` = "player" (fiche joueur, CA/bonus dérivés par rpg.derived_combat)
+    ou un slug : entrée de `characters.md`, sinon record de créature du module
+    (mêmes champs 5e que `encounter_member_from_record` lit — `ca`, `pv`,
+    `attaque_bonus`, `degats` — mais lus SANS ses defaults silencieux).
+    Un champ absent reste `None` ici : c'est `attack` qui prononce le refus,
+    selon ce dont le jet demandé a besoin."""
+    from coderain.templates import slugify
+    rpg_mod = _load_rpg()
+    if who is None or str(who).strip().lower() in ("player", "you", ""):
+        rpg = store.rpg_state()
+        derived = rpg_mod.player_combat(store)
+        if derived.get("error"):
+            return {"error": f"{derived['error']} — player sheet"}
+        p = rpg.get("player") or {}
+        w = derived.get("weapon") or {}
+        return {"kind": "player", "slug": "player", "name": "player",
+                "ac": derived["ac"], "attack_bonus": derived["attack_bonus"],
+                "damage": w.get("damage"), "weapon": w.get("slug"),
+                "hp": p.get("hp"), "hp_max": p.get("hp_max")}
+
+    slug = slugify(str(who))
+    attrs, name = None, slug
+    for e in store.entries("characters.md"):
+        if e.slug == slug:
+            attrs = {str(k).strip().lower(): v for k, v in e.attrs.items()}
+            name = e.title
+            break
+    if attrs is None:
+        try:
+            from coderain.converter.aval import get_record
+            rec = get_record(_module_partition(), str(who))
+        except Exception:  # noqa: BLE001 — ni fiche ni record : refus plus bas
+            rec = None
+        if not isinstance(rec, dict):
+            return {"error": f"unknown combatant '{who}' (no entry on "
+                             f"characters.md, no module record)"}
+        stats = rec.get("stats", rec)
+        attrs = {str(k).strip().lower(): v
+                 for k, v in (stats if isinstance(stats, dict) else {}).items()}
+        name = str(attrs.get("nom") or slug)
+
+    def _num(key):
+        got = rpg_mod.opt_int(attrs.get(key))
+        return None if (got is None or got is False) else got
+
+    return {"kind": "npc", "slug": slug, "name": name,
+            "ac": _num("ca"), "attack_bonus": _num("attaque_bonus"),
+            "damage": (str(attrs.get("degats")).strip()
+                       if str(attrs.get("degats") or "").strip() else None),
+            "weapon": None, "hp": None, "hp_max": _num("pv")}
+
+
+@mcp.tool()
+def attack(attacker: str = "player", target: str = "monstre") -> dict:
+    """Résoudre UNE attaque de bout en bout : toucher, dégâts, application.
+
+    Le LLM choisit l'action, jamais les chiffres. Cet outil lit les DEUX
+    fiches — bonus d'attaque et dés de dégâts de l'attaquant, CA (et PV) de la
+    cible —, jette le d20 + bonus contre la CA puis les dégâts sur touche (même
+    discipline RNG que roll_check/roll_damage : seed + nonce, un cran de
+    `rpg["rolls"]` par jet), et APPLIQUE la perte de PV par le guichet
+    (D-141, `apply_envelope`) : `hp_delta` sur le joueur — avec le `downed`/
+    `dead` de D-271 — ou `deltas.enemies.<slug>.hp_delta` sur la cible.
+
+    `attacker`/`target` : "player", ou un slug (entrée de `characters.md`,
+    sinon record de créature du module).
+
+    UN NOMBRE ABSENT EST UN REFUS (D-274 §1) : pas de CA sur la cible, pas de
+    dés sur l'attaquant, pas de PV sur une cible que le combat ne connaît pas
+    encore → {"error": "missing <champ> on <fiche>"}. Rien n'est jeté ni
+    appliqué dans ce cas, et aucun défaut n'est emprunté à qui que ce soit.
+
+    Rend {attacker, target, roll, attack_bonus, total, target_ac, hit,
+    damage: {formula, dice, total}|null, applied: {...}|null}."""
+    store = _require_store()
+    rpg_mod = _load_rpg()
+    if not store.rpg_enabled():
+        return {"error": "rpg mechanics are disabled on this save"}
+    atk = _attack_fiche(store, attacker)
+    if atk.get("error"):
+        return {"error": atk["error"]}
+    tgt = _attack_fiche(store, target)
+    if tgt.get("error"):
+        return {"error": tgt["error"]}
+    if atk["slug"] == tgt["slug"]:
+        return {"error": f"'{atk['slug']}' cannot attack itself"}
+
+    # --- refus AVANT tout jet : un dé consommé sur une attaque impossible
+    # décalerait le nonce pour rien.
+    if atk.get("attack_bonus") is None:
+        return {"error": f"missing attaque_bonus on {atk['slug']}"}
+    if not atk.get("damage"):
+        return {"error": f"missing degats on {atk['slug']}"}
+    if tgt.get("ac") is None:
+        return {"error": f"missing ca on {tgt['slug']}"}
+    rpg = store.rpg_state()
+    known_enemy = tgt["slug"] in (rpg.get("enemies") or {})
+    if tgt["kind"] == "npc" and not known_enemy and tgt.get("hp_max") is None:
+        return {"error": f"missing pv on {tgt['slug']} "
+                         f"(the encounter does not know its HP yet)"}
+
+    seed = rpg.get("seed", 0)
+    nonce = rpg.get("rolls", 0) + 1
+    hit_roll = rpg_mod.roll_check(atk["attack_bonus"], tgt["ac"], seed, nonce)
+    rpg["rolls"] = nonce
+    store.set_rpg_state(rpg)
+
+    out = {"attacker": atk["slug"], "target": tgt["slug"],
+           "roll": hit_roll["roll"], "attack_bonus": atk["attack_bonus"],
+           "total": hit_roll["total"], "target_ac": tgt["ac"],
+           "hit": bool(hit_roll["success"]), "damage": None, "applied": None}
+    if not out["hit"]:
+        return out
+
+    rpg = store.rpg_state()
+    nonce = rpg.get("rolls", 0) + 1
+    try:
+        dmg = rpg_mod.roll_damage(atk["damage"], seed, nonce)
+    except ValueError as e:
+        return {"error": f"unreadable degats on {atk['slug']}: {e}"}
+    rpg["rolls"] = nonce
+    store.set_rpg_state(rpg)
+    out["damage"] = dmg
+
+    # --- application par le guichet, jamais une écriture directe.
+    if tgt["kind"] == "player":
+        env = {"deltas": {"hp_delta": -dmg["total"]}}
+    else:
+        spec = {"hp_delta": -dmg["total"]}
+        if not known_enemy:
+            spec["hp_max"] = tgt["hp_max"]     # lu sur la fiche, pas deviné
+        env = {"deltas": {"enemies": {tgt["slug"]: spec}}}
+    events = apply_envelope(json.dumps(env))
+
+    after = store.rpg_state()
+    if tgt["kind"] == "player":
+        p = after.get("player") or {}
+        applied = {"events": events, "target_hp": p.get("hp"),
+                   "target_hp_max": p.get("hp_max"),
+                   "conditions": list(p.get("conditions") or [])}
+    else:
+        e = (after.get("enemies") or {}).get(tgt["slug"])
+        applied = {"events": events,
+                   "target_hp": (e or {}).get("hp", 0),
+                   "target_hp_max": (e or {}).get("hp_max", tgt.get("hp_max")),
+                   "defeated": e is None}
+    out["applied"] = applied
+    return out
 
 
 # ── memory & recall ──────────────────────────────────────────────
@@ -2252,7 +2419,12 @@ def ui_sheet() -> dict:
         return {"error": "écran non ouvert — appeler ui_open d'abord"}
     try:
         from coderain.modules import rpg as rpg_mod
-        sheet = rpg_mod.render_sheet_lines(_require_store().rpg_state())
+        store = _require_store()
+        # La section Combat est DÉRIVÉE (I-463) : elle se passe en argument,
+        # elle ne se lit pas dans le bloc rpg — rien ne l'y stocke.
+        sheet = rpg_mod.render_sheet_lines(
+            store.rpg_state(),
+            combat=rpg_mod.player_combat(store) if store.rpg_enabled() else None)
     except Exception as e:  # noqa: BLE001
         return {"error": f"feuille non rendue: {e}"}
     webui.set_sheet(sheet)
