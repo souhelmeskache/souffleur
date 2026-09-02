@@ -1,10 +1,14 @@
 #!/bin/bash
-# circuit.sh — verbes de teardown du circuit de lane (I-243, ce qui crée détruit).
+# circuit.sh — point d'entrée unique du circuit de lane (I-243/#255).
 #
 # Usage :
-#   tools/banc/circuit.sh nettoyer <lane-NNN|revue-NNN>   # ferme workspace + worktree + branche d'UNE lane/revue
-#   tools/banc/circuit.sh nettoyer --orphelins            # purge les dossiers de worktree morts (ni Git ni herdr)
-#   tools/banc/circuit.sh etat                             # photo lisible : lanes en vol, PR, workspaces, worktrees, orphelins
+#   tools/banc/circuit.sh lancer <ISSUE> [modele] [effort] # lance une lane (enveloppe lancer-lane.ps1)
+#   tools/banc/circuit.sh veiller <ISSUE>                   # veille de circuit, toutes phases jusqu'au merge
+#   tools/banc/circuit.sh revoir <PR>                       # lance une lane de revue adversariale sur une PR
+#   tools/banc/circuit.sh nettoyer <lane-NNN|revue-NNN>     # ferme workspace + worktree + branche d'UNE lane/revue
+#   tools/banc/circuit.sh nettoyer --orphelins              # purge les dossiers de worktree morts (ni Git ni herdr)
+#   tools/banc/circuit.sh etat                              # photo lisible : lanes en vol, PR, workspaces, worktrees, orphelins
+#   tools/banc/circuit.sh garde                             # garde core.bare (#231), rejouable seule
 #
 # Toutes les étapes de "nettoyer" tolèrent l'absence de leur cible : sortie 0
 # si tout est déjà propre. Aucune suppression n'a lieu hors de $WORKTREES_DIR.
@@ -14,6 +18,21 @@ REPO=souhelmeskache/souffleur
 MAIN_REPO="C:/Users/souhe/souffleur"
 WORKTREES_DIR="C:/Users/souhe/.herdr/worktrees/souffleur"
 LANCEUR="C:/Users/souhe/souffleur/tools/lancer-lane.ps1"
+CORE_BARE_LOG="$MAIN_REPO/tools/banc/core-bare.log"
+
+# Imprime l'aide des six verbes — appelée sans argument ou sur verbe inconnu.
+usage() {
+  cat >&2 <<EOF
+Usage :
+  $0 lancer <ISSUE> [modele] [effort]   # lance une lane (enveloppe lancer-lane.ps1)
+  $0 veiller <ISSUE>                    # veille de circuit, toutes phases jusqu'au merge
+  $0 revoir <PR>                        # lance une lane de revue adversariale sur une PR
+  $0 nettoyer <lane-NNN|revue-NNN>      # ferme workspace + worktree + branche d'UNE lane/revue
+  $0 nettoyer --orphelins               # purge les dossiers de worktree morts (ni Git ni herdr)
+  $0 etat                               # photo lisible du circuit
+  $0 garde                              # garde core.bare (#231), rejouable seule
+EOF
+}
 
 # --- utilitaires JSON (pas de jq sur ce poste) ------------------------------
 
@@ -546,6 +565,58 @@ veiller() {
   done
 }
 
+# --- garde <core.bare> (I-231) -------------------------------------------------
+#
+# core.bare = true réapparaît dans .git/config du checkout principal (cause
+# inconnue, #231) et casse tout worktree qui en dépend — geste manuel avant
+# chaque lancement jusqu'ici. Vérifié/retiré ici, systématiquement avant
+# `lancer`/`revoir`, et rejouable seul en verbe `garde`. Idempotent : sortie
+# 0 que core.bare ait été trouvé (et retiré) ou déjà absent.
+garde_core_bare() {
+  local commande="${1:-garde (manuel)}"
+  local valeur
+  valeur=$(git -C "$MAIN_REPO" config --show-origin --get core.bare 2>/dev/null)
+  if [ -z "$valeur" ]; then
+    echo "garde core.bare : absent — rien à faire."
+    return 0
+  fi
+  echo "garde core.bare : présent ($valeur) — retrait."
+  git -C "$MAIN_REPO" config --unset core.bare
+  printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$valeur" "$commande" >> "$CORE_BARE_LOG"
+  echo "garde core.bare : retiré, journalisé dans $CORE_BARE_LOG"
+  return 0
+}
+
+# --- lancer <issue> [modele] [effort] / revoir <pr> ---------------------------
+#
+# Enveloppent lancer-lane.ps1 (point d'entrée unique, #255) : `circuit.sh
+# lancer`/`revoir` sont désormais l'unique façon d'invoquer le lanceur — la
+# garde core.bare (#231) est systématique avant tout lancement, jamais un
+# geste manuel séparé.
+
+lancer() {
+  local issue="${1:-}" modele="${2:-}" effort="${3:-}"
+  if [ -z "$issue" ]; then
+    echo "Usage : $0 lancer <ISSUE> [modele] [effort]" >&2
+    return 1
+  fi
+  garde_core_bare "lancer $issue"
+  local args=(-NoProfile -ExecutionPolicy Bypass -File "$LANCEUR" "$issue")
+  [ -n "$modele" ] && args+=(-Modele "$modele")
+  [ -n "$effort" ] && args+=(-Effort "$effort")
+  powershell.exe "${args[@]}"
+}
+
+revoir() {
+  local pr="${1:-}"
+  if [ -z "$pr" ]; then
+    echo "Usage : $0 revoir <PR>" >&2
+    return 1
+  fi
+  garde_core_bare "revoir $pr"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$LANCEUR" -Revue "$pr"
+}
+
 # --- dispatch -----------------------------------------------------------------
 #
 # Gardé derrière ce test (BASH_SOURCE == $0) pour que les tests puissent
@@ -553,6 +624,15 @@ veiller() {
 # déclencher le dispatch.
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
 case "${1:-}" in
+  lancer)
+    lancer "${2:-}" "${3:-}" "${4:-}"
+    ;;
+  revoir)
+    revoir "${2:-}"
+    ;;
+  garde)
+    garde_core_bare "garde (manuel)"
+    ;;
   nettoyer)
     case "${2:-}" in
       --orphelins) nettoyer_orphelins ;;
@@ -572,9 +652,7 @@ case "${1:-}" in
     veiller "$2"
     ;;
   *)
-    echo "Usage : $0 nettoyer <lane-NNN|revue-NNN>|--orphelins" >&2
-    echo "        $0 etat" >&2
-    echo "        $0 veiller <ISSUE>" >&2
+    usage
     exit 1
     ;;
 esac

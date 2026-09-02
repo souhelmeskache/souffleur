@@ -106,6 +106,27 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# --- UTF-8 de bout en bout (#255) -----------------------------------------
+#
+# Constat du 02/09 : `-DryRun` affichait le gabarit en mojibake (« R´┐¢gles »
+# au lieu de « Règles »). Vérifié en reproduisant le mécanisme : sous
+# PowerShell 5.1, `$OutputEncoding` (pas `[Console]::OutputEncoding`) gouverne
+# le DÉCODAGE de la sortie d'un programme natif capturée dans le pipeline
+# (`& $GhExe ...`) — sa valeur par défaut n'est pas UTF-8, et un corps
+# d'Issue accentué capturé depuis `gh` ressort corrompu en mémoire (une
+# lettre accentuée UTF-8 devient plusieurs caractères .NET distincts, avant
+# même l'affichage). `[Console]::OutputEncoding` gouverne ensuite l'encodage
+# utilisé quand CE script écrit à son tour (Write-Output/-Error) — les deux
+# réglages sont nécessaires, et doivent être posés avant le premier appel à
+# gh/herdr et avant la première écriture.
+$OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {
+    # Pas de console réelle rattachée (sortie entièrement redirigée) : sans
+    # objet, `$OutputEncoding` ci-dessus suffit pour ce cas.
+}
+
 $EstRevue = ($PSCmdlet.ParameterSetName -eq 'Revue')
 
 # Jamais Haiku (D-225) — filet en plus du ValidateSet, au cas où un appelant
@@ -205,6 +226,60 @@ function Invoke-NativeCommand {
     $p = [System.Diagnostics.Process]::Start($psi)
     $p.WaitForExit()
     $script:LASTEXITCODE = $p.ExitCode
+}
+
+# --- Démarrage d'agent + écran bypass (#255) -------------------------------
+#
+# `--permission-mode bypassPermissions` (I-232) affiche, au tout premier
+# lancement dans un worktree neuf, un écran d'acceptation interactif
+# (« Bypass Permissions mode … Yes, I accept ») AVANT de prendre la main sur
+# l'agent : `herdr agent start` détecte ce blocage et rend `agent_not_ready`
+# plutôt que d'attendre en silence (voir `herdr --skill`, § « Start and
+# coordinate an agent ») — c'est ce qui faisait perdre le gabarit envoyé
+# juste après par `herdr agent prompt` (5 lanes répondues à la main le
+# 02/09, avant que cette fonction existe).
+#
+# Réglage Claude Code qui supprime cet écran quand il est actif :
+# `skipDangerousModePermissionPrompt: true` dans `settings.json` (user,
+# projet ou managé — doc officielle Claude Code, « Settings Reference »).
+# Vérifié posé côté user sur ce poste (`~/.claude/settings.json`). Ce filet
+# reste nécessaire malgré tout : ce réglage vit sur le POSTE qui lance la
+# lane, pas dans le worktree qu'elle reçoit, et rien ne garantit qu'il soit
+# posé sur tout poste qui exécuterait ce script.
+function Start-AgentClaude {
+    param(
+        [Parameter(Mandatory)] [string]$HerdrExe,
+        [Parameter(Mandatory)] [string]$AgentName,
+        [Parameter(Mandatory)] [string]$PaneId,
+        [Parameter(Mandatory)] [string]$Modele,
+        [Parameter(Mandatory)] [string]$Effort
+    )
+
+    & $HerdrExe agent start $AgentName --kind claude --pane $PaneId -- --model $Modele --effort $Effort --permission-mode bypassPermissions
+    $demarrageOk = ($LASTEXITCODE -eq 0)
+
+    if (-not $demarrageOk) {
+        Write-Output "'herdr agent start' n'a pas confirmé $AgentName prêt immédiatement (code $LASTEXITCODE) — recherche de l'écran bypass sur le pane $PaneId."
+        & $HerdrExe pane wait-output $PaneId --match 'Yes, I accept' --timeout 10000 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Output "Écran bypass détecté sur le pane $PaneId — réponse automatique (touche 2 puis Entrée)."
+            & $HerdrExe pane send-keys $PaneId 2 | Out-Null
+            & $HerdrExe pane send-keys $PaneId enter | Out-Null
+        } else {
+            Write-Error "Échec de 'herdr agent start' pour $AgentName sur le pane $PaneId (pas d'écran bypass détecté sous 10s non plus)."
+            exit 1
+        }
+    }
+
+    # N'envoie le gabarit qu'une fois l'agent idle (boucle bornée 30s côté
+    # herdr, jamais avant) — que l'écran bypass ait dû être résolu ci-dessus
+    # ou non : un `agent start` réussi ne garantit pas à lui seul l'état
+    # idle (ex. readiness détectée sur un autre signal transitoire).
+    & $HerdrExe agent wait $AgentName --until idle --timeout 30000 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Agent $AgentName pas idle sous 30s après démarrage (écran bypass non résolu, ou autre blocage) — abandon."
+        exit 1
+    }
 }
 
 $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
@@ -343,6 +418,7 @@ if ($EstRevue) {
         Write-Output "  $HerdrExe worktree create --cwd `"$RepoRoot`" --branch $revueBranch --base origin/main   (worktree JETABLE, jamais le checkout principal — lecture seule via gh, aucun commit attendu)"
         Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
         Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $ModeleRevue --effort $EffortRevue --permission-mode bypassPermissions"
+        Write-Output "  (si écran bypass détecté : $HerdrExe pane send-keys <pane_id> 2 puis enter, puis $HerdrExe agent wait $agentName --until idle --timeout 30000 — voir Start-AgentClaude)"
         Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
         Write-Output ""
         Write-Output "--- Prompt-gabarit (revue) ---"
@@ -416,11 +492,9 @@ if ($EstRevue) {
     # gelaient la lane sans opérateur pour y répondre. Risque borné ailleurs :
     # worktree jetable, `main` protégée côté serveur, CI + revue adversariale
     # avant merge, force-push refusé partout dans le circuit (D-232).
-    & $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $ModeleRevue --effort $EffortRevue --permission-mode bypassPermissions
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Échec de 'herdr agent start' pour $agentName sur le pane $paneId."
-        exit 1
-    }
+    # Start-AgentClaude (#255) gère en plus l'écran bypass éventuel et
+    # n'envoie le prompt qu'une fois l'agent idle — voir sa définition.
+    Start-AgentClaude -HerdrExe $HerdrExe -AgentName $agentName -PaneId $paneId -Modele $ModeleRevue -Effort $EffortRevue
 
     Write-Output "Envoi du prompt-gabarit de revue..."
     # Invoke-NativeCommand (I-385), pas `&` : le prompt de revue ne porte pas
@@ -467,6 +541,32 @@ if ($labelNames -notcontains 'prete') {
 
 if (-not $Effort) {
     $Effort = if ($labelNames -contains 'mecanique') { 'low' } else { 'medium' }
+}
+
+# --- 3bis. Commentaires de cadrage (#255) ---------------------------------
+#
+# Le lanceur ne transmettait que le CORPS de l'Issue : un cadrage posté en
+# commentaire après l'ouverture (cas vécu sur #233) n'atteignait jamais la
+# lane. Tout commentaire dont le corps commence par `Cadrage` est maintenant
+# inclus dans le gabarit, sous un titre dédié, à la suite du corps.
+$commentsJson = & $GhExe issue view $Issue --repo $RepoSlug --json comments
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Impossible de lire les commentaires de l'Issue #$Issue sur $RepoSlug."
+    exit 1
+}
+$commentsData = $commentsJson | ConvertFrom-Json
+$commentairesCadrage = @($commentsData.comments | Where-Object { $_.body -and $_.body.TrimStart().StartsWith('Cadrage') })
+
+$bodyPourGabarit = $issueData.body
+if ($commentairesCadrage.Count -gt 0) {
+    $texteCadrage = ($commentairesCadrage | ForEach-Object { $_.body }) -join "`n`n---`n`n"
+    $bodyPourGabarit = @"
+$($issueData.body)
+
+## Cadrage (commentaires de l'Issue)
+
+$texteCadrage
+"@
 }
 
 # --- 4. Gabarit de prompt -------------------------------------------------
@@ -591,7 +691,7 @@ $sonnette
 "@
 }
 
-$promptText = Build-LanePrompt -IssueNumber $issueData.number -Title $issueData.title -Body $issueData.body -RepoSlug $RepoSlug -SessionTour $SessionTour
+$promptText = Build-LanePrompt -IssueNumber $issueData.number -Title $issueData.title -Body $bodyPourGabarit -RepoSlug $RepoSlug -SessionTour $SessionTour
 
 $branch = "lane-$Issue"
 $agentName = "lane-$Issue"
@@ -618,6 +718,7 @@ if ($DryRun) {
     Write-Output "  git -C <worktree> config --worktree --add credential.helper '!gh auth git-credential'"
     Write-Output "  $HerdrExe pane run <pane_id_du_worktree> `$env:GH_TOKEN = [Environment]::GetEnvironmentVariable(...GH_TOKEN_LANES...)  (jeton jamais lu/affiché par ce script)"
     Write-Output "  $HerdrExe agent start $agentName --kind claude --pane <pane_id_du_worktree> -- --model $Modele --effort $Effort --permission-mode bypassPermissions"
+    Write-Output "  (si écran bypass détecté : $HerdrExe pane send-keys <pane_id> 2 puis enter, puis $HerdrExe agent wait $agentName --until idle --timeout 30000 — voir Start-AgentClaude)"
     Write-Output "  $HerdrExe agent prompt $agentName <prompt-gabarit ci-dessous> --wait --until working --timeout 15000"
     Write-Output ""
     Write-Output "--- Prompt-gabarit ---"
@@ -734,11 +835,9 @@ Write-Output "Démarrage de l'agent claude ($Modele, effort $Effort)..."
 # protégée côté serveur, CI + revue adversariale avant merge, force-push
 # refusé partout dans le circuit (D-232). Décision de Souhel, posée derrière
 # le label `prete` sur l'Issue #232 avant lancement de cette lane.
-& $HerdrExe agent start $agentName --kind claude --pane $paneId -- --model $Modele --effort $Effort --permission-mode bypassPermissions
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Échec de 'herdr agent start' pour $agentName sur le pane $paneId."
-    exit 1
-}
+# Start-AgentClaude (#255) gère en plus l'écran bypass éventuel et n'envoie
+# le prompt qu'une fois l'agent idle — voir sa définition.
+Start-AgentClaude -HerdrExe $HerdrExe -AgentName $agentName -PaneId $paneId -Modele $Modele -Effort $Effort
 
 # --until working (pas les défauts idle/done/blocked) : on veut seulement la
 # confirmation que le prompt a été accepté et que l'agent s'est mis au

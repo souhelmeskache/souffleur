@@ -5,9 +5,23 @@
   fichier PAUSE.
 - `veiller.sh` : veille sur l'apparition d'un fichier du journal, sans
   envoyer de go ; mêmes conditions de sortie que ci-dessus.
-- `circuit.sh` : teardown du circuit de lane (I-243, « ce qui crée détruit »)
-  et veille de circuit (I-250, « la veille est dans l'outil, pas dans un
-  scratchpad »).
+- `circuit.sh` : **point d'entrée unique du circuit de lane** (I-243, « ce
+  qui crée détruit » ; I-250, « la veille est dans l'outil, pas dans un
+  scratchpad » ; #255, un seul point d'entrée). Sans argument, imprime
+  l'aide des six verbes.
+  - `lancer <ISSUE> [modele] [effort]` : enveloppe `lancer-lane.ps1 <ISSUE>
+    [-Modele <modele>] [-Effort <effort>]` (appel
+    `powershell.exe -NoProfile -ExecutionPolicy Bypass -File …`). Appelle
+    systématiquement `garde` avant de lancer — plus de geste manuel séparé.
+  - `revoir <PR>` : enveloppe `lancer-lane.ps1 -Revue <PR>`, même garde
+    systématique avant lancement.
+  - `garde` : vérifie `core.bare` sur le checkout principal
+    (`git config --show-origin --get core.bare`) ; s'il est présent, le
+    retire (`--unset`) et journalise une ligne datée (heure, origine,
+    commande en cours) dans `tools/banc/core-bare.log` (I-231, #231 — cause
+    de réapparition inconnue). Idempotent : sortie 0 que `core.bare` ait été
+    trouvé et retiré, ou déjà absent. Appelée par `lancer`/`revoir`, et
+    rejouable seule.
   - `nettoyer <lane-NNN|revue-NNN>` ferme le workspace herdr, retire le
     worktree Git et la branche ; `nettoyer --orphelins` purge les dossiers de
     `.herdr/worktrees/souffleur/` qu'aucun worktree Git ni workspace herdr ne
