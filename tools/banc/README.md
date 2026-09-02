@@ -2,9 +2,6 @@
 
 - `nuit.sh` / `nuit.cmd` / `verifier-avant-nuit.sh` / `metriques_nuit.py` :
   **banc de nuit N1** (#201, D-276 ; #260) — voir section dédiée ci-dessous.
-- `jouer-tours-4.sh` : boucle de tours du banc (fil 2), avec détection d'agent
-  bloqué ; sort sur lot fini, agent bloqué, nouveau craquement, timeout ou
-  fichier PAUSE.
 - `veiller.sh` : veille sur l'apparition d'un fichier du journal, sans
   envoyer de go ; mêmes conditions de sortie que ci-dessus.
 - `circuit.sh` : **point d'entrée unique du circuit de lane** (I-243, « ce
@@ -196,6 +193,25 @@ réécrase jamais une partie déjà jouée — idempotence).
    banc de `circuit.sh nettoyer`, I-243 : ce qui crée détruit).
 5. Partie suivante.
 
+### Contrat de fichiers du tour (#269)
+
+| fichier | écrit par | quand | contenu |
+|---|---|---|---|
+| `action-NN.md` | joueur (banc-joueur) | sur le « go » joueur | l'action du joueur, un paragraphe, verbatim |
+| `tour-NN.md` | MJ (banc-mj) | sur le « go » MJ, spécifié par le gabarit `banc-mj.md` (§ Journal du banc) | visée du Director, chemins/tailles de paquets, événements moteur, ET la section `## Prose du Narrateur (verbatim)` |
+| `prose-NN.md` | `tools/banc/extraire_prose.py`, appelé par `nuit.sh` | juste après que `tour-NN.md` apparaît, avant le « go » joueur suivant | UNIQUEMENT le corps de la section « Prose du Narrateur » de `tour-NN.md` — l'organe zéro-spoiler (D-219) : c'est le seul fichier que lit le joueur |
+
+`prose-NN.md` n'est **jamais** un livrable attendu du MJ — le gabarit
+`banc-mj.md` (gelé, D-276 §4) ne spécifie que `tour-NN.md` ; le message
+« go » d'ouverture de `nuit.sh` ne demande plus que celui-ci. L'extraction
+(`tools/banc/extraire_prose.py`) est purement mécanique (aucun LLM) :
+elle cherche une ligne de titre `#`…`######` suivie de « Prose du
+Narrateur » (casse libre, suffixe libre — ex. « (verbatim) »), tolérante
+aux variantes de titre, et prend tout le texte jusqu'au titre suivant (ou
+la fin du fichier). Si la section est absente ou vide, la partie craque
+(`craquement-prose-absente-NN.md`, classe Director, D-276 §4) et se ferme —
+comme un timeout de tour, ça n'arrête pas la nuit.
+
 ### Sorties en forme fixe
 
 `bench/nuit-AAAAMMJJ/partie-NN/` reçoit `tour-NN.md`, `prose-NN.md`,
@@ -211,9 +227,14 @@ script, jamais un jugement).
 
 ### Budget, arrêt propre, codes de sortie
 
-- **Timeout par tour** (`-TimeoutTour`, défaut 6 min) : craquement
-  `timeout` journalisé, partie fermée, suivante lancée — n'arrête PAS la
-  nuit.
+- **Timeout par tour** (`-TimeoutTour`, défaut 6 min, en attente de
+  `action-NN.md` ou `tour-NN.md`) : craquement `timeout` journalisé, partie
+  fermée, suivante lancée — n'arrête PAS la nuit.
+- **Section prose absente ou vide** (#269) : `tour-NN.md` apparaît mais ne
+  porte aucune section « Prose du Narrateur » exploitable — craquement
+  `prose-absente` journalisé (`craquement-prose-absente-NN.md`), partie
+  fermée, suivante lancée — n'arrête PAS la nuit non plus (voir § Contrat de
+  fichiers du tour ci-dessus).
 - **Limite de session** : texte « session limit »/« usage limit » détecté
   dans un pane, OU agent `blocked` + idle sans progrès > 10 min → `nuit.md`
   écrit, les deux panes de la partie en cours sont fermés, **sortie 5** —
