@@ -37,13 +37,25 @@ workspace_id_for_label() {
 # --- garde de chemin ---------------------------------------------------------
 
 # Vérifie que $1 est un sous-dossier direct de $WORKTREES_DIR (jamais le
-# checkout principal, jamais un ancêtre) ; sortie 1 + message sinon.
+# checkout principal, jamais un ancêtre) ; sortie 1 + message sinon. Résout
+# le chemin (realpath -m — fonctionne même si la cible n'existe pas encore)
+# avant le test de préfixe : un label ou un dossier contenant des segments
+# ".." ne doit jamais pouvoir remonter hors de $WORKTREES_DIR (REVUE #247).
 verifier_chemin_sous_worktrees() {
   local chemin="$1"
-  case "$chemin" in
-    "$WORKTREES_DIR"/*) ;;
+  local resolu resolu_racine
+  resolu=$(realpath -m -- "$chemin") || {
+    echo "REFUS : impossible de résoudre le chemin '$chemin' — rien supprimé." >&2
+    return 1
+  }
+  resolu_racine=$(realpath -m -- "$WORKTREES_DIR") || {
+    echo "REFUS : impossible de résoudre $WORKTREES_DIR — rien supprimé." >&2
+    return 1
+  }
+  case "$resolu" in
+    "$resolu_racine"/*) ;;
     *)
-      echo "REFUS : chemin '$chemin' hors de $WORKTREES_DIR — rien supprimé." >&2
+      echo "REFUS : chemin '$chemin' (résolu '$resolu') hors de $resolu_racine — rien supprimé." >&2
       return 1
       ;;
   esac
@@ -54,13 +66,14 @@ verifier_chemin_sous_worktrees() {
 
 nettoyer_une() {
   local label="$1"
-  case "$label" in
-    lane-*|revue-*) ;;
-    *)
-      echo "REFUS : '$label' n'est ni lane-NNN ni revue-NNN." >&2
-      return 1
-      ;;
-  esac
+  # Validation stricte (pas un simple préfixe glob) : un label du genre
+  # "lane-1/../../.." matcherait "lane-*" mais remonterait hors de
+  # $WORKTREES_DIR une fois concaténé à $dest — refusé ici avant toute
+  # construction de chemin (REVUE #247).
+  if ! [[ "$label" =~ ^(lane|revue)-[0-9]+$ ]]; then
+    echo "REFUS : '$label' n'est pas au format strict lane-NNN ou revue-NNN." >&2
+    return 1
+  fi
 
   local dest="$WORKTREES_DIR/$label"
   verifier_chemin_sous_worktrees "$dest" || return 1
@@ -108,7 +121,7 @@ nettoyer_une() {
 
   # 5. si le dossier existe encore et n'est plus dans `git worktree list` : le supprime.
   if [ -d "$dest" ]; then
-    if git -C "$MAIN_REPO" worktree list --porcelain | grep -qF "worktree $dest"; then
+    if git -C "$MAIN_REPO" worktree list --porcelain | grep -qxF "worktree $dest"; then
       echo "  dossier $dest toujours référencé par git worktree list — non touché"
     else
       verifier_chemin_sous_worktrees "$dest" || return 1
@@ -157,8 +170,9 @@ for w in d.get("result", {}).get("worktrees", []) or []:
     local nom
     nom=$(basename "$d")
 
-    # tenu par git worktree list ?
-    if echo "$git_paths" | grep -qiF "$d"; then
+    # tenu par git worktree list ? (ligne entière — un chemin ne doit pas
+    # matcher comme simple sous-chaîne d'un autre, ex. lane-1 dans lane-11)
+    if echo "$git_paths" | grep -qixF "$d"; then
       continue
     fi
     # tenu par un workspace herdr (par label, garde-fou en plus du chemin) ?
@@ -168,7 +182,7 @@ for w in d.get("result", {}).get("worktrees", []) or []:
       continue
     fi
     # tenu par `herdr worktree list` (au cas où le label ne correspond pas au dossier) ?
-    if [ -n "$herdr_paths" ] && echo "$herdr_paths" | grep -qiF "$d"; then
+    if [ -n "$herdr_paths" ] && echo "$herdr_paths" | grep -qixF "$d"; then
       continue
     fi
 
@@ -261,10 +275,10 @@ for w in d.get("result", {}).get("worktrees", []) or []:
       [ -d "$d" ] || continue
       d="${d%/}"
       nom=$(basename "$d")
-      echo "$git_paths" | grep -qiF "$d" && continue
+      echo "$git_paths" | grep -qixF "$d" && continue
       wsid=$(workspace_id_for_label "$nom")
       [ -n "$wsid" ] && continue
-      [ -n "$herdr_paths" ] && echo "$herdr_paths" | grep -qiF "$d" && continue
+      [ -n "$herdr_paths" ] && echo "$herdr_paths" | grep -qixF "$d" && continue
       echo "  orphelin : $d"
       trouve=1
     done
@@ -281,7 +295,7 @@ case "${1:-}" in
   nettoyer)
     case "${2:-}" in
       --orphelins) nettoyer_orphelins ;;
-      lane-*|revue-*) nettoyer_une "$2" ;;
+      lane-[0-9]*|revue-[0-9]*) nettoyer_une "$2" ;;
       *)
         echo "Usage : $0 nettoyer <lane-NNN|revue-NNN>" >&2
         echo "        $0 nettoyer --orphelins" >&2
