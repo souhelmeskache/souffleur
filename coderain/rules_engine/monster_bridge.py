@@ -40,6 +40,7 @@ import importlib
 import re
 from typing import Any
 
+from ..converter.ruletables import ConversionException
 from . import engine as _engine_fn
 
 __all__ = [
@@ -62,9 +63,16 @@ def brute_template_slug(record_id: str) -> str:
     return f"brute:{record_id}"
 
 
-def _first_int(value: Any, default: int) -> int:
+def _required_int(stats: dict, field: str, *, record_id: str) -> int:
+    """Lit un champ numérique obligatoire de `stats` — refuse s'il est absent
+    (D-274 §1) : jamais de nombre fabriqué à sa place (I-239)."""
+    value = stats.get(field)
     m = _INT_RE.search(str(value)) if value is not None else None
-    return int(m.group(1)) if m else default
+    if not m:
+        raise ConversionException(
+            f"record {record_id!r} : champ {field!r} absent ou illisible "
+            f"({value!r}) — aucun défaut ne le remplace")
+    return int(m.group(1))
 
 
 def _parse_dice(value: Any) -> tuple[int, int, int]:
@@ -207,13 +215,18 @@ def encounter_member_from_record(record: dict, *, record_id: str, entity_id: str
     correspondant (`install_brute_template`) puis retourne un dict prêt à
     entrer dans ``encounter=[...]`` de `start_combat`, `monster_template_slug`
     déjà résolu.
+
+    Lève `ConversionException` si `ca`, `pv` ou `attaque_bonus` est absent ou
+    illisible sur `stats` (D-274 §1, I-239) : un nombre manquant n'entre
+    jamais en combat fabriqué — l'appelant doit remonter ce refus (jamais un
+    `pass` silencieux), typiquement en `{"error": str(e)}` côté pont MCP.
     """
     stats = record.get("stats", record) if isinstance(record, dict) else {}
     meta = record.get("meta", {}) if isinstance(record, dict) else {}
     nom = stats.get("nom") or meta.get("nom") or entity_id
-    ac = _first_int(stats.get("ca"), default=10)
-    hp = _first_int(stats.get("pv"), default=1)
-    attack_bonus = _first_int(stats.get("attaque_bonus"), default=0)
+    ac = _required_int(stats, "ca", record_id=record_id)
+    hp = _required_int(stats, "pv", record_id=record_id)
+    attack_bonus = _required_int(stats, "attaque_bonus", record_id=record_id)
     damage = stats.get("degats")
 
     slug = install_brute_template(
