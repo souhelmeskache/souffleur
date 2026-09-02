@@ -128,6 +128,64 @@ function Resolve-ExternalCommand {
 
 $HerdrExe = Resolve-ExternalCommand -Name 'herdr' -FallbackPaths @("$env:LOCALAPPDATA\Programs\Herdr\bin\herdr.exe")
 
+# --- 0bis. Envoi du prompt sans interprétation shell (I-385, #263) ---------
+#
+# Les deux gabarits (tools/prompts/banc-mj.md/banc-joueur.md) sont envoyés en
+# UN SEUL argument à `herdr agent prompt` via `&` natif de PowerShell 5.1
+# (Windows PowerShell, pas de $PSNativeCommandArgumentPassing) : celui-ci
+# réinterprète les guillemets doubles internes avant de construire la ligne
+# de commande Win32 — un nombre IMPAIR de guillemets dans le gabarit éclate
+# l'argument en plusieurs argv (herdr lit un mot du gabarit comme option,
+# `unknown option`). Constaté sur la nuit N0 du 02/09 (#263) : #258 a ajouté
+# au gabarit MJ un exemple JSON avec des guillemets doubles, la nuit a joué
+# 0 tour, 4 parties/4 craquées au lancement.
+#
+# Même contournement que lancer-lane.ps1 (I-385, mêmes fonctions reprises à
+# l'identique) : construire nous-mêmes la ligne de commande avec
+# l'échappement Win32 standard (CommandLineToArgvW / argv C), puis lancer le
+# process via .NET (ProcessStartInfo.Arguments — pas .ArgumentList, absent
+# du .NET Framework de Windows PowerShell 5.1) en contournant l'invocation
+# native `&`. $script:LASTEXITCODE est reposé en sortie pour que les
+# `if ($LASTEXITCODE -ne 0)` déjà en place restent inchangés.
+
+function ConvertTo-Win32Arg {
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string]$Value)
+    if ($Value -eq '') { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $len = $Value.Length
+    for ($i = 0; $i -lt $len; $i++) {
+        $numBackslashes = 0
+        while ($i -lt $len -and $Value[$i] -eq '\') { $numBackslashes++; $i++ }
+        if ($i -eq $len) {
+            [void]$sb.Append('\' * ($numBackslashes * 2))
+        } elseif ($Value[$i] -eq '"') {
+            [void]$sb.Append('\' * ($numBackslashes * 2 + 1))
+            [void]$sb.Append('"')
+        } else {
+            [void]$sb.Append('\' * $numBackslashes)
+            [void]$sb.Append($Value[$i])
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory)] [string]$FilePath,
+        [Parameter(Mandatory)] [string[]]$Arguments
+    )
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = ($Arguments | ForEach-Object { ConvertTo-Win32Arg $_ }) -join ' '
+    $psi.UseShellExecute = $false
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $p.WaitForExit()
+    $script:LASTEXITCODE = $p.ExitCode
+}
+
 $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 
 # --- 1. Horodate + arborescence du journal ---------------------------------
@@ -411,14 +469,23 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output "Envoi du prompt-gabarit MJ..."
-& $HerdrExe agent prompt $AgentMj $PromptMj --wait --until working --timeout 15000
+# Invoke-NativeCommand (I-385, #263) : $PromptMj porte le gabarit rendu,
+# potentiellement truffé de guillemets doubles (exemples JSON) — voir la
+# section 0bis plus haut.
+Invoke-NativeCommand -FilePath $HerdrExe -Arguments @(
+    'agent', 'prompt', $AgentMj, $PromptMj,
+    '--wait', '--until', 'working', '--timeout', '15000'
+)
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de l'envoi du prompt à $AgentMj (ou l'agent n'est pas passé en 'working' sous 15s)."
     exit 1
 }
 
 Write-Output "Envoi du prompt-gabarit joueur-banc..."
-& $HerdrExe agent prompt $AgentJoueur $PromptJoueur --wait --until working --timeout 15000
+Invoke-NativeCommand -FilePath $HerdrExe -Arguments @(
+    'agent', 'prompt', $AgentJoueur, $PromptJoueur,
+    '--wait', '--until', 'working', '--timeout', '15000'
+)
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Échec de l'envoi du prompt à $AgentJoueur (ou l'agent n'est pas passé en 'working' sous 15s)."
     exit 1

@@ -35,6 +35,7 @@ SAVE="beyond-the-vale-of-madness"
 TIMEOUT_TOUR_MIN=6
 DRYRUN=0
 RUN_DIR_OVERRIDE=""
+LANCEMENT_CMD_OVERRIDE=""
 
 usage() {
   cat >&2 <<EOF
@@ -55,6 +56,12 @@ while [ $# -gt 0 ]; do
     # dossier bench/ pendant un test (D-109/D-178). Non documenté comme
     # paramètre de nuit opérationnelle dans le README (usage réel : rien).
     -RunDir) RUN_DIR_OVERRIDE="${2:-}"; shift 2 ;;
+    # -LancementCmd : usage interne / tests (tests/nuit_echec_lancement_test.py,
+    # #263) — remplace l'appel powershell.exe/lancer-banc-fumee.ps1 par la
+    # commande donnée (évaluée telle quelle), pour reproduire un échec de
+    # lancement DÉTERMINISTE sans herdr/powershell réels. Non documenté comme
+    # paramètre de nuit opérationnelle dans le README (usage réel : rien).
+    -LancementCmd) LANCEMENT_CMD_OVERRIDE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "REFUS : argument inconnu '$1'." >&2; usage; exit 1 ;;
   esac
@@ -113,6 +120,14 @@ PARTIE_DIR_COURANTE=""
 DEBUT_NUIT=$(date +%s)
 TABLE_PARTIES=()   # lignes déjà écrites de la table nuit.md, dans l'ordre
 RAISON_ARRET_NUIT=""
+
+# Échecs de LANCEMENT consécutifs (#263) — distinct des craquements de tour
+# (timeout, fixture) qui n'arrêtent que la partie courante. Un gabarit cassé
+# à l'envoi (nuit N0 du 02/09) échoue au lancement de TOUTE partie de la même
+# façon : consommer tout le budget -Parties sur cet échec identique, répété,
+# est un symptôme de la même famille que le budget « atteint » silencieux.
+# Deux échecs consécutifs → arrêt de la nuit (voir README, § codes de sortie).
+ECHECS_LANCEMENT_CONSECUTIFS=0
 
 # --- 2. Aides ---------------------------------------------------------------
 
@@ -328,23 +343,37 @@ jouer_partie() {
 
   echo "=== partie $pnn : lancement (director=$modele) ==="
   local session_tour="nuit-$DATE_JOUR-p$pnn"
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$LANCEUR_PS1" \
-    -SessionTour "$session_tour" -Save save -Tours "$TOURS" \
-    -ModeleMj "$modele" -ModeleJoueur haiku \
-    -SavesDirOverride "$partie_dir" -JournalDirOverride "$partie_dir" \
-    > "$partie_dir/lancement.log" 2>&1
+  if [ -n "$LANCEMENT_CMD_OVERRIDE" ]; then
+    # Test uniquement (#263) — voir -LancementCmd ci-dessus. Sous-shell
+    # obligatoire : un `eval "exit 1"` direct sortirait CE script, pas
+    # seulement la commande de test.
+    ( eval "$LANCEMENT_CMD_OVERRIDE" ) > "$partie_dir/lancement.log" 2>&1
+  else
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$LANCEUR_PS1" \
+      -SessionTour "$session_tour" -Save save -Tours "$TOURS" \
+      -ModeleMj "$modele" -ModeleJoueur haiku \
+      -SavesDirOverride "$partie_dir" -JournalDirOverride "$partie_dir" \
+      > "$partie_dir/lancement.log" 2>&1
+  fi
   local rc_lancement=$?
   PANE_MJ_COURANT="$(grep -m1 '^Pane MJ' "$partie_dir/lancement.log" | sed 's/^[^:]*: *//' | tr -d '\r\n')"
   PANE_JOUEUR_COURANT="$(grep -m1 '^Pane joueur-banc' "$partie_dir/lancement.log" | sed 's/^[^:]*: *//' | tr -d '\r\n')"
   if [ "$rc_lancement" -ne 0 ]; then
     raison="lancement"
+    ECHECS_LANCEMENT_CONSECUTIFS=$((ECHECS_LANCEMENT_CONSECUTIFS + 1))
     ecrire_craquement "$partie_dir" "00" "lancement" "$(tail -30 "$partie_dir/lancement.log")"
     craquements+=("craquement-lancement-00.md")
     fermer_panes
     ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "${craquements[@]}"
     TABLE_PARTIES+=("| $pnn | $modele | 0 | N | $raison |")
+    if [ "$ECHECS_LANCEMENT_CONSECUTIFS" -ge 2 ]; then
+      RAISON_ARRET_NUIT="lancement impossible (2 échecs de lancement consécutifs, partie $pnn)"
+      ecrire_nuit_md
+      exit 6
+    fi
     return 0
   fi
+  ECHECS_LANCEMENT_CONSECUTIFS=0
 
   # --- boucle de tours (fil 2, sans LLM dans CE script) ---------------------
   local tour=1

@@ -92,7 +92,10 @@ cmd.exe), **sans ouvrir Claude Code**. Résout Git Bash lui-même (pas de
 dépendance au PATH pour bash), reste ouverte le temps de la nuit, et
 enchaîne : `git pull --ff-only` → garde de prérequis + « rien en vol »
 (`verifier-avant-nuit.sh` : herdr joignable, `claude`/`gh` présents, save
-présente, aucun agent `lane-*`/`revue-*` de circuit.sh, aucune PR ouverte) →
+présente, aucun agent `lane-*`/`revue-*` de circuit.sh, aucune PR ouverte,
+envoi à blanc des deux gabarits rendus vers un agent inexistant — #263,
+`tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
+l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
 `tools/banc/nuit.sh -Parties 4 -Director ab` (défauts — un argument passé au
 `.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd -Parties 8
 -Director sonnet`) → affiche le chemin de `nuit.md` produit.
@@ -169,11 +172,22 @@ script, jamais un jugement).
   écrit, les deux panes de la partie en cours sont fermés, **sortie 5** —
   arrête TOUTE la nuit (jamais un agent laissé en vol), même si `-Parties`
   n'est pas atteint.
+- **Échec de lancement répété** (#263) : `lancer-banc-fumee.ps1` échoue
+  (rc non nul) à lancer les deux agents d'une partie. Un échec isolé craque
+  SEULEMENT cette partie (`craquement-lancement-00.md`), la suivante
+  démarre — mais **deux échecs de lancement consécutifs** signalent une
+  cause structurelle (ex. gabarit qui casse l'échappement de l'envoi, voir
+  `tools/lancer-banc-fumee.ps1` § 0bis) qui répétera l'échec à l'identique
+  sur chaque partie restante : la nuit s'arrête là plutôt que de consommer
+  tout le budget `-Parties` sur le même craquement, `nuit.md` reçoit
+  `raison_arret: lancement impossible (2 échecs de lancement consécutifs,
+  partie NN)`, **sortie 6**.
 - **Interruption (Ctrl+C)** : `trap INT/TERM` — ferme les agents en vol,
   écrit `nuit.md` avec `raison_arret: interrompu (SIGNAL)`, sort 130.
 - **`0`** : la nuit s'est terminée normalement (budget `-Parties` consommé).
 - **`1`** : argument invalide (refus avant tout lancement).
 - **`5`** : limite de session — voir ci-dessus.
+- **`6`** : échec de lancement répété — voir ci-dessus.
 - **`130`** : interrompu (Ctrl+C).
 
 ### Ce que la nuit ne fait pas
