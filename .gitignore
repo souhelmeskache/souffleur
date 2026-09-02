@@ -26,6 +26,10 @@ config.yaml
 # versionne, même le journal mécanique qui la cite ---
 bench/banc-fumee/
 
+# --- garde core.bare (I-231/#255) : journal machine (horodatage, origine,
+# commande en cours), pas du matériau à versionner ---
+tools/banc/core-bare.log
+
 # --- P4 converter input corpus: extracted module text + measures (campaign material) ---
 corpus-modules/
 
