@@ -3,12 +3,25 @@ que `player.location`, tandis que l'assembleur par position et le pont MCP
 lisent `state["location"]` racine (seedée une fois par la projection,
 D-180). Le joueur se déplaçait sans que la scène servie suive.
 
-Correctif : le guichet (`apply_world`) écrit désormais les DEUX champs —
-compat minimale, aucun lecteur de position touché. Ce test rejoue le
-scénario du banc de fumée D-264 sur une partition SYNTHÉTIQUE (D-109) :
-save positionnée au node A, `apply_envelope` déplace vers B, puis
-`assemble_context_to_file` ET `paquet_narrateur` doivent servir B — jamais
-A. Régime dégradé (pas d'Engine chargé, comme test-paquet-narrateur-i192) :
+Premier correctif (#197 / PR #199) : le guichet écrivait les DEUX champs —
+compat minimale, aucun lecteur touché. Mais ça doublait l'écriture au lieu
+de choisir un lecteur : deux vérités pour une donnée, le bug attendait son
+prochain déclencheur (Issue #219).
+
+Correctif définitif (#219) : une seule source, `player.location`. Un
+accesseur unique, `validator.current_location(state)`, la lit — et ne
+replie sur la racine `state["location"]` QUE pour les saves antérieures qui
+n'ont jamais vu `player.location` écrit. Les écrivains (`apply_world`,
+`projection.derive`) n'écrivent plus que `player.location` ; les trois
+lecteurs (`assembleur_position.eligible`/`assemble`, `engine._messages`)
+passent par l'accesseur.
+
+Ce test rejoue le scénario du banc de fumée D-264 sur une partition
+SYNTHÉTIQUE (D-109) : save positionnée au node A, `apply_envelope` déplace
+vers B, puis `assemble_context_to_file` ET `paquet_narrateur` doivent
+servir B — jamais A — et la racine ne doit PLUS être écrite (#219). Un
+second scénario couvre le repli sur un state ancien, racine seule. Régime
+dégradé (pas d'Engine chargé, comme test-paquet-narrateur-i192) :
 l'application passe par `validator.apply_world` directement, la fonction du
 schisme."""
 from __future__ import annotations
@@ -27,6 +40,7 @@ from coderain.converter import projection
 from coderain.converter.emit import write_partition
 from coderain.converter.schemas import Manifest, Node, Partition, Record
 from coderain.memory import Library
+from coderain import validator as validator_mod
 
 import mcp_server
 
@@ -110,13 +124,15 @@ events = mcp_server.apply_envelope(
 assert any("para-b" in e for e in events), events
 print("  OK : événement location -> para-b journalisé")
 
-section("3) get_world_state confirme B sur LES DEUX champs")
+section("3) get_world_state : player.location avance, la racine N'EST PLUS écrite (#219)")
 st1 = store.world_state()
 assert st1.get("player", {}).get("location") == "para-b", st1.get("player")
-assert st1.get("location") == "para-b", (
-    "state racine encore figé sur A -- le schisme I-197 n'est pas corrigé : "
-    f"{st1.get('location')!r}")
-print("  OK : player.location ET state.location racine s'accordent sur B")
+assert st1.get("location") == "para-a", (
+    "state racine touchée par le guichet -- #219 veut UNE seule source "
+    f"(player.location) : racine = {st1.get('location')!r}")
+assert validator_mod.current_location(st1) == "para-b", (
+    "l'accesseur ne suit pas player.location")
+print("  OK : player.location avance vers B, racine intacte, accesseur suit B")
 
 section("4) assemble_context_to_file sert la scène B, jamais A")
 result = mcp_server.assemble_context_to_file("J'avance vers le trône.")
@@ -135,5 +151,17 @@ assert RENDU_B in texte2, "paquet_narrateur ne sert pas la DIRECTION DE RENDU de
 assert RENDU_A not in texte2
 assert "Le vestibule" not in texte2
 print("  OK : paquet_narrateur suit le joueur jusqu'à B")
+
+section("6) repli (#219) : state ancien racine-seule, sans player.location")
+etat_ancien = {"location": "para-a"}
+assert validator_mod.current_location(etat_ancien) == "para-a", (
+    "l'accesseur doit replier sur la racine quand player.location est absent")
+etat_ancien_player_vide = {"location": "para-a", "player": {}}
+assert validator_mod.current_location(etat_ancien_player_vide) == "para-a", (
+    "repli attendu même avec un player dict vide")
+etat_moderne = {"location": "para-a", "player": {"location": "para-b"}}
+assert validator_mod.current_location(etat_moderne) == "para-b", (
+    "player.location doit primer sur la racine dès qu'il est présent")
+print("  OK : current_location() replie sur la racine seulement en son absence")
 
 print(f"\nOK test-schisme-position-i197 — {len(FAIT)} sections vertes")

@@ -152,10 +152,26 @@ CREUX.
    substitue à aucun autre : il vient APRÈS la prose, avant le journal du
    banc (§ Journal du banc ci-dessous).
 
+8. **Vérifie sur le disque, avant de rendre la main** — relis `prose-NN.md`
+   et `tour-NN.md` (les fichiers réellement écrits aux étapes 5-7, pas ceux
+   que tu crois avoir écrits) et confirme qu'ils **existent et sont non
+   vides**. Un rapport de sous-agent n'est pas un effet constaté : le retour
+   du narrateur à l'étape 5 dit ce qu'il PRÉTEND avoir produit, ta propre
+   relecture (§ Journal du banc, étape 7) dit ce que TU as écrit — aucun des
+   deux ne dispense de vérifier ce qui est réellement sur le disque. Si l'un
+   des deux fichiers manque ou est vide, ne rends jamais la main comme si le
+   tour était terminé : corrige (réécris le fichier manquant depuis ce que tu
+   as en main) avant d'attendre le « go » suivant, et consigne l'incident au
+   journal du banc.
+
 ## Interdits
 
 - Tu ne narres JAMAIS toi-même — toute prose vient du sous-agent narrateur
   spawné à l'étape 5 du tour, jamais de ta propre plume.
+- Ne rapporte jamais comme fait un geste que tu n'as pas constaté sur le
+  disque — voir étape 8 (vérification disque) : un renvoi à `prose-NN.md`
+  dans `tour-NN.md` n'est légitime que si tu as relu ce fichier et confirmé
+  qu'il existe et n'est pas vide.
 - Ne révèle jamais un secret qui n'a pas été déclenché par le moteur à ce
   tour précis (le paquet ne sert que ce qui doit l'être — un secret absent
   du paquet reste hors-champ).

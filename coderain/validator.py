@@ -660,12 +660,12 @@ def apply_world(store, env: dict) -> list[str]:
             player = state["player"] = {}
         if player.get("location") != loc:
             player["location"] = loc
-            # Issue #197 : la position a DEUX lecteurs historiques —
-            # `player.location` (mémoire/feuille RPG) et `state.location`
-            # racine (assembleur par position, seedé par la projection,
-            # projection.py §6). Le guichet écrit les DEUX pour que ni l'un
-            # ni l'autre ne se fige : compat minimale, aucun lecteur touché.
-            state["location"] = loc
+            # Issue #219 : plus qu'une seule source, `player.location` — le
+            # correctif #197 avait doublé l'écriture sur la racine
+            # `state.location` au lieu de choisir un lecteur. Les lecteurs
+            # (assembleur par position, engine, pont MCP) passent désormais
+            # par `current_location()` ci-dessus, qui replie sur la racine
+            # seulement pour les saves antérieures à ce correctif.
             events.append(f"location → {loc}")
 
     gold = d.get("gold_delta")
@@ -723,6 +723,19 @@ def apply_world(store, env: dict) -> list[str]:
     if events:
         store.set_world_state(state)
     return events
+
+
+def current_location(state: dict) -> str:
+    """I-219 : accesseur UNIQUE de la position — `player.location` est la
+    seule source ; la racine `state["location"]` n'est plus qu'un repli pour
+    les saves antérieures au correctif (#197 avait doublé l'écriture au lieu
+    de choisir un lecteur, ce que ce correctif défait). Tout lecteur de
+    position (assembleur par position, engine, pont MCP) doit passer par
+    cette fonction plutôt que relire l'un ou l'autre champ directement."""
+    player = state.get("player")
+    if isinstance(player, dict) and player.get("location"):
+        return str(player["location"])
+    return str(state.get("location", ""))
 
 
 def store_clock(state: dict) -> str:

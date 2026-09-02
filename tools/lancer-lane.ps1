@@ -364,6 +364,7 @@ if ($EstRevue) {
     New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
     $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
     $settingsLocal = [ordered]@{
+        enableAllProjectMcpServers = $true
         permissions = [ordered]@{
             allow = @('Bash(*)')
             deny  = @(
@@ -502,11 +503,24 @@ $Body
 - Petite PR ciblée vers ``main`` (verrouillée côté serveur : PR + CI obligatoires) — pas de commit direct sur ``main``.
 - CI verte attendue avant de considérer la lane terminée.
 - **Jamais ``--no-verify``** sur aucune commande git, en aucune circonstance.
+- **En cas de conflit avec ``main`` : ``git merge origin/main`` dans la
+  branche de lane, jamais ``git rebase``.** Le force-push est refusé partout
+  dans le circuit, et un rebase laisse la PR irréparable.
+- **Avant d'ouvrir la PR, si ``main`` a bougé depuis la création de la
+  branche** : faire ce merge d'abord, relancer la suite de tests, puis
+  pousser.
 - Une fois la PR ouverte : si elle touche autre chose que ``docs/`` seul,
   signale-le explicitement dans ton commentaire ``TERMINÉ : ...`` avec la
   mention ``REVUE REQUISE`` (ex. ``TERMINÉ : <lien PR> — REVUE REQUISE``) —
   une lane de revue adversariale (``lancer-lane.ps1 -Revue <numero-PR>``)
   pourra alors être lancée dessus avant merge.
+- **Règle de fermeture de l'Issue.** N'écris ``Closes #$IssueNumber`` dans le
+  corps de la PR que si TOUS les points de l'Issue sont livrés (checklist
+  complète, ou, en l'absence de checklist, chaque défaut listé dans son
+  constat). Sinon écris ``Refs #$IssueNumber``, et liste explicitement dans
+  ton commentaire ``TERMINÉ : ...`` ce qui reste non traité. Ce commentaire
+  cite dans tous les cas l'URL de la PR et précise lequel des deux mots
+  (``Closes`` ou ``Refs``) a été employé.
 
 ## Commentaires d'Issue obligatoires (trois jalons, sur l'Issue #$IssueNumber)
 
@@ -605,10 +619,15 @@ Write-Output "Pane     : $paneId"
 # que personne ne verra, tout en gardant en deny les commandes qui
 # contourneraient les gardes déjà en place (garde pré-commit rouge, garde de
 # branche main) — --no-verify/-n restent interdits même avec Bash(*) en allow.
+# enableAllProjectMcpServers évite le blocage au démarrage sur la demande
+# d'acceptation des serveurs MCP versionnés (.mcp.json depuis #217) — sans
+# quoi le worktree jetable de la lane reste bloqué en attente d'acceptation
+# manuelle (agent_not_ready côté herdr).
 $claudeDir = Join-Path $worktreePath '.claude'
 New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
 $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
 $settingsLocal = [ordered]@{
+    enableAllProjectMcpServers = $true
     permissions = [ordered]@{
         allow = @('Bash(*)')
         deny  = @(
