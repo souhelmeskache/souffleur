@@ -276,6 +276,24 @@ une revue réelle.
 Puis poste un second commentaire sur la même PR, commençant littéralement par
 ``TERMINÉ : `` confirmant que le verdict est posté.
 
+## Règle fixe — appels shell simples
+
+Chaque commande shell (Bash) est un appel simple : une seule commande par
+appel, jamais de boucle d'attente (``while``, ``until``, ``sleep`` en boucle),
+jamais de substitution de commande imbriquée dans un appel Bash. Tout test ou
+vérification se lance en avant-plan et s'attend jusqu'à sa sortie, jamais en
+tâche de fond interrogée en boucle. Raison : chaque boucle d'attente shell a
+bloqué une lane sur invite de permission (9 blocages constatés le 02/09, dont
+7 sur la seule lane #235, tous de ce type) — voir Issue #244.
+
+## BLOQUÉ : systématique
+
+Dès que tu rencontres l'un de ces cas : une invite de permission apparaît, un
+outil t'est refusé, ou une ambiguïté de la PR/de l'Issue liée t'empêche de
+continuer — poste immédiatement ``BLOQUÉ : <cause exacte, verbatim de
+l'invite ou de l'erreur>`` en commentaire de la PR #$PrNumber et ARRÊTE-TOI :
+n'attends jamais en silence, ne contourne jamais.
+
 ## Ce que tu ne fais PAS
 
 - Pas de commit, pas de push, pas de modification de fichier, pas de nouvelle
@@ -529,6 +547,25 @@ $Body
   ton commentaire ``TERMINÉ : ...`` ce qui reste non traité. Ce commentaire
   cite dans tous les cas l'URL de la PR et précise lequel des deux mots
   (``Closes`` ou ``Refs``) a été employé.
+
+## Règle fixe — appels shell simples
+
+Chaque commande shell (Bash) est un appel simple : une seule commande par
+appel, jamais de boucle d'attente (``while``, ``until``, ``sleep`` en boucle),
+jamais de substitution de commande imbriquée dans un appel Bash. Les tests se
+lancent en avant-plan et s'attendent jusqu'à leur sortie, jamais en tâche de
+fond interrogée en boucle. Raison : chaque boucle d'attente shell a bloqué une
+lane sur invite de permission (9 blocages constatés le 02/09, dont 7 sur la
+seule lane #235, tous de ce type) — voir Issue #244.
+
+## BLOQUÉ : systématique
+
+Dès que tu rencontres l'un de ces cas : une invite de permission apparaît, un
+outil t'est refusé, un test que tu ne parviens pas à faire passer en trois
+essais, ou une ambiguïté de l'Issue qui t'empêche de continuer — poste
+immédiatement ``BLOQUÉ : <cause exacte, verbatim de l'invite ou de l'erreur>``
+en commentaire de l'Issue #$IssueNumber et ARRÊTE-TOI : n'attends jamais en
+silence, ne contourne jamais.
 
 ## Commentaires d'Issue obligatoires (trois jalons, sur l'Issue #$IssueNumber)
 
