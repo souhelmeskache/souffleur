@@ -353,7 +353,7 @@ if ($DryRun) {
     $envArgAffiche = if ($SavesDirOverride) { " --env `"SAVES_DIR=$SavesDirOverride`"" } else { "" }
     Write-Output "  `$paneMj = $HerdrExe pane split <paneCur> --direction right --cwd `"$RepoRoot`"$envArgAffiche"
     Write-Output "  `$paneJoueur = $HerdrExe pane split <paneMj> --direction down --cwd `"$RepoRoot`"$envArgAffiche"
-    Write-Output "  (automode : pose .claude\settings.local.json dans $RepoRoot, sans écraser s'il existe déjà — Issue #210)"
+    Write-Output "  (automode : pose ou complète .claude\settings.local.json dans $RepoRoot — Issue #210, garanti #267)"
     Write-Output "  $HerdrExe agent start $AgentMj --kind claude --pane <paneMj> -- --model $ModeleMj --effort medium --permission-mode acceptEdits"
     Write-Output "  $HerdrExe agent start $AgentJoueur --kind claude --pane <paneJoueur> -- --model $ModeleJoueur --effort low --permission-mode acceptEdits"
     Write-Output "  $HerdrExe agent prompt $AgentMj <prompt-gabarit MJ ci-dessous> --wait --until working --timeout 15000"
@@ -420,38 +420,27 @@ if (-not $paneJoueurId) { Write-Error "pane joueur-banc illisible"; exit 1 }
 Write-Output "Pane MJ         : $paneMjId"
 Write-Output "Pane joueur-banc: $paneJoueurId"
 
-# --- Automode local (Issue #210), même mécanisme que lancer-lane.ps1 -------
+# --- Automode local (Issue #210, garanti #267), même mécanisme que
+# lancer-lane.ps1 -------------------------------------------------------
 #
 # lancer-lane.ps1 (lignes ~608-624) pose ce fichier dans un worktree NEUF à
 # chaque lane ; ce script tourne, lui, dans le worktree courant, relancé
-# plusieurs fois d'un run à l'autre (reprise) — on ne l'écrase donc PAS s'il
-# existe déjà, pour ne pas effacer un réglage local voulu par l'opérateur.
-#
-# Correctif revue PR #224 (REFUS) : Bash(*) seul ne couvre PAS le blocage
-# constaté dans #210 — les deux agents du banc jouent leurs tours via les
-# outils MCP `coderain-engine` (`module_get_node`, etc.), jamais via Bash.
-# `mcp__coderain-engine__*` en allow, en plus de Bash(*), pour que le
-# premier appel MCP du MJ ne se bloque plus sur une demande de permission.
+# plusieurs fois d'un run à l'autre (reprise). Fichier absent : création
+# complète, comme avant. Fichier déjà présent : Assure-ListeBlancheBanc
+# (tools\banc\liste-blanche.ps1) COMPLÈTE la liste blanche (entrées `allow`/
+# `deny` du gabarit manquantes) au lieu de se contenter de constater sa
+# présence — #267, nuit N0 du 02/09 : un settings.local.json préexistant
+# plus étroit (cinq outils moteur seulement, pas de Bash) avait laissé les
+# deux agents redemander des autorisations toute la nuit. Rien de ce que
+# l'opérateur y a mis n'est retiré ; un JSON invalide REFUSE plutôt que
+# d'écraser.
+. (Join-Path $RepoRoot 'tools\banc\liste-blanche.ps1')
 $claudeDir = Join-Path $RepoRoot '.claude'
 $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
-if (-not (Test-Path $settingsLocalPath)) {
-    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
-    $settingsLocal = [ordered]@{
-        permissions = [ordered]@{
-            allow = @('Bash(*)', 'mcp__coderain-engine__*')
-            deny  = @(
-                'Bash(git commit --no-verify*)',
-                'Bash(git commit -n*)',
-                'Bash(git push --no-verify*)',
-                'Bash(git push --force*)',
-                'Bash(git push -f*)'
-            )
-        }
-    }
-    ($settingsLocal | ConvertTo-Json -Depth 5) | Set-Content -Path $settingsLocalPath -Encoding utf8
-    Write-Output "Automode posé : $settingsLocalPath"
-} else {
-    Write-Output "Automode déjà présent, non modifié : $settingsLocalPath"
+$resultatListeBlanche = Assure-ListeBlancheBanc -SettingsLocalPath $settingsLocalPath
+Write-Output $resultatListeBlanche.Message
+if ($resultatListeBlanche.Status -eq 'refus') {
+    exit 1
 }
 
 Write-Output "Démarrage de l'agent MJ ($AgentMj, $ModeleMj, effort medium)..."

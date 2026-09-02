@@ -41,6 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_REEL = REPO_ROOT / "tools" / "lancer-banc-fumee.ps1"
 GABARIT_MJ_REEL = REPO_ROOT / "tools" / "prompts" / "banc-mj.md"
 GABARIT_JOUEUR_REEL = REPO_ROOT / "tools" / "prompts" / "banc-joueur.md"
+LISTE_BLANCHE_REEL = REPO_ROOT / "tools" / "banc" / "liste-blanche.ps1"
 
 FAKE_HERDR_CMD = "@echo off\r\nexit /b 0\r\n"
 
@@ -73,8 +74,10 @@ def build_repo_jetable(tmp_root: Path, nom: str = "repo-jetable", gabarits_minim
     limite propre à l'interprète de script, pas à un vrai .exe herdr)."""
     repo = tmp_root / nom
     (repo / "tools" / "prompts").mkdir(parents=True)
+    (repo / "tools" / "banc").mkdir(parents=True)
 
     shutil.copy(SCRIPT_REEL, repo / "tools" / "lancer-banc-fumee.ps1")
+    shutil.copy(LISTE_BLANCHE_REEL, repo / "tools" / "banc" / "liste-blanche.ps1")
     if gabarits_minimaux:
         for nom_gabarit in ("banc-mj.md", "banc-joueur.md"):
             (repo / "tools" / "prompts" / nom_gabarit).write_text(
@@ -161,6 +164,7 @@ def main():
     assert SCRIPT_REEL.exists(), f"script absent : {SCRIPT_REEL}"
     assert GABARIT_MJ_REEL.exists(), f"gabarit absent : {GABARIT_MJ_REEL}"
     assert GABARIT_JOUEUR_REEL.exists(), f"gabarit absent : {GABARIT_JOUEUR_REEL}"
+    assert LISTE_BLANCHE_REEL.exists(), f"module absent : {LISTE_BLANCHE_REEL}"
 
     tmp_root = Path(tempfile.mkdtemp(prefix="lancer-banc-fumee-test-"))
     try:
@@ -252,8 +256,12 @@ def main():
         )
         print("PASS: settings.local.json posé autorise Bash(*) et mcp__coderain-engine__*")
 
-        # Non-écrasement : un second lancement sur un fichier déjà présent
-        # (portant un marqueur synthétique) ne doit PAS le modifier.
+        # Fusion (#267) : un second lancement sur un fichier déjà présent
+        # mais INCOMPLET (portant un marqueur synthétique de l'opérateur, ni
+        # Bash(*) ni mcp__coderain-engine__*) doit COMPLÉTER la liste
+        # blanche sans retirer le marqueur -- constat nuit N0 (02/09) : un
+        # settings.local.json préexistant plus étroit laissait les deux
+        # agents redemander des autorisations toute la nuit.
         marqueur = {"permissions": {"allow": ["marqueur-synthetique-test"]}}
         settings_path.write_text(json.dumps(marqueur), encoding="utf-8")
         p4b = run_reel(ps_exe, script_path4, fake_bin_reel, [])
@@ -262,11 +270,15 @@ def main():
             f"stdout={p4b.stdout}\nstderr={p4b.stderr}"
         )
         settings_apres = json.loads(settings_path.read_text(encoding="utf-8-sig"))
-        assert settings_apres == marqueur, (
-            f"cas 4 : un settings.local.json deja present a ete ecrase "
-            f"(attendu={marqueur}, recu={settings_apres})"
+        allow_apres = settings_apres.get("permissions", {}).get("allow", [])
+        assert "marqueur-synthetique-test" in allow_apres, (
+            f"cas 4 : le marqueur posé par l'opérateur a été perdu lors de la fusion ({allow_apres})"
         )
-        print("PASS: settings.local.json déjà présent n'est pas écrasé")
+        assert "Bash(*)" in allow_apres, f"cas 4 : Bash(*) pas ajouté par la fusion ({allow_apres})"
+        assert "mcp__coderain-engine__*" in allow_apres, (
+            f"cas 4 : mcp__coderain-engine__* pas ajouté par la fusion ({allow_apres})"
+        )
+        print("PASS: settings.local.json déjà présent mais incomplet est complété sans perte (#267)")
 
         print("lancer_banc_fumee_test: 4/4 OK")
     finally:
