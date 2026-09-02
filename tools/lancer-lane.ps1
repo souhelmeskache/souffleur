@@ -503,6 +503,12 @@ $Body
 - Petite PR ciblée vers ``main`` (verrouillée côté serveur : PR + CI obligatoires) — pas de commit direct sur ``main``.
 - CI verte attendue avant de considérer la lane terminée.
 - **Jamais ``--no-verify``** sur aucune commande git, en aucune circonstance.
+- **En cas de conflit avec ``main`` : ``git merge origin/main`` dans la
+  branche de lane, jamais ``git rebase``.** Le force-push est refusé partout
+  dans le circuit, et un rebase laisse la PR irréparable.
+- **Avant d'ouvrir la PR, si ``main`` a bougé depuis la création de la
+  branche** : faire ce merge d'abord, relancer la suite de tests, puis
+  pousser.
 - Une fois la PR ouverte : si elle touche autre chose que ``docs/`` seul,
   signale-le explicitement dans ton commentaire ``TERMINÉ : ...`` avec la
   mention ``REVUE REQUISE`` (ex. ``TERMINÉ : <lien PR> — REVUE REQUISE``) —
