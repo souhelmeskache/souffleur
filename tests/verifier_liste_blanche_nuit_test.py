@@ -8,6 +8,12 @@ tests/liste_blanche_banc_test.py (absent, partiel, complet), + JSON invalide.
    citant les entrées manquantes.
 3. Fichier complet (gabarit posé) : OK, code 0.
 4. JSON invalide : REFUS, code non nul, message dédié.
+5. Chemin en forme Git Bash (`/c/Users/...`) — reproduit le défaut #270 :
+   fichier complet, mais chemin passé au format `/c/...` au lieu du format
+   Windows natif que `pwd` sous Git Bash produit toujours pour un
+   $REPO_ROOT réel. Doit rester OK (conversion faite avant python), pas un
+   faux REFUS "n'est pas un JSON valide ([Errno 2] No such file or
+   directory: ...)".
 """
 import json
 import shutil
@@ -111,7 +117,29 @@ def main():
         assert "JSON valide" in p4.stderr, f"cas 4 : message REFUS ne mentionne pas le JSON invalide ({p4.stderr})"
         print("PASS: cas 4 -- JSON invalide, REFUS dédié")
 
-        print("verifier_liste_blanche_nuit_test: 4/4 OK")
+        # --------------------------------------------------------------
+        # Cas 5 (#270) : même fichier complet que le cas 3, mais chemin en
+        # forme Git Bash (`/c/Users/...`) -- reproduit exactement ce que
+        # `REPO_ROOT="$(cd ... && pwd)"` produit sous Git Bash. Doit rester
+        # OK : la conversion vers un chemin Windows doit avoir lieu avant
+        # que python.exe ne voie le chemin.
+        # --------------------------------------------------------------
+        drive = settings3.drive.rstrip(":").lower()
+        reste = str(settings3)[len(settings3.drive):].replace("\\", "/")
+        settings5_gitbash = f"/{drive}{reste}"
+        assert settings5_gitbash.startswith(f"/{drive}/"), settings5_gitbash
+
+        p5 = lancer(Path(settings5_gitbash))
+        assert p5.returncode == 0, (
+            f"cas 5 (#270) : code attendu 0 pour un chemin /{drive}/..., "
+            f"reçu {p5.returncode}\nstdout={p5.stdout}\nstderr={p5.stderr}"
+        )
+        assert "n'est pas un JSON valide" not in p5.stderr, (
+            f"cas 5 (#270) : faux REFUS JSON invalide sur chemin /{drive}/... non converti ({p5.stderr})"
+        )
+        print("PASS: cas 5 (#270) -- chemin /c/... converti, OK")
+
+        print("verifier_liste_blanche_nuit_test: 5/5 OK")
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 
