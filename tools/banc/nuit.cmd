@@ -6,8 +6,10 @@ rem (.\tools\banc\nuit.cmd), SANS ouvrir Claude Code. Enchaine, dans une
 rem fenetre qui reste ouverte :
 rem   git pull --ff-only
 rem   -> garde (herdr/claude/gh presents, save presente, rien en vol)
-rem   -> tools/banc/nuit.sh -Parties 4 -Director ab (surchargeable par les
-rem      arguments passes a ce .cmd)
+rem   -> tools/banc/nuit.sh -Parties 4 -Director ab -FinA 06:00 (surchargeable
+rem      par les arguments passes a ce .cmd) -- s'arrete au plus tard a
+rem      l'heure -FinA (Issue #276), rapport-nuit.md ecrit et poste sur
+rem      l'Issue #201 a la fin de la nuit quelle que soit la raison d'arret
 rem   -> affiche le chemin de nuit.md
 rem Voir tools/banc/README.md.
 
@@ -43,7 +45,7 @@ if errorlevel 1 (
 )
 
 set "NUIT_ARGS=%*"
-if "%NUIT_ARGS%"=="" set "NUIT_ARGS=-Parties 4 -Director ab"
+if "%NUIT_ARGS%"=="" set "NUIT_ARGS=-Parties 4 -Director ab -FinA 06:00"
 
 echo.
 echo === tools/banc/nuit.sh %NUIT_ARGS% ===
@@ -54,7 +56,8 @@ for /f "delims=" %%D in ('"%GITBASH%" -c "date +%%Y%%m%%d"') do set "DATEJOUR=%%
 echo.
 echo === nuit terminee (code %NUIT_RC%) ===
 echo Journal : %REPO_ROOT%\bench\nuit-%DATEJOUR%\nuit.md
-echo Le matin : ouvre un fil et dis "lis la nuit" (Claude relit nuit.md et les resume-run.md).
+echo Rapport : %REPO_ROOT%\bench\nuit-%DATEJOUR%\rapport-nuit.md (poste sur l'Issue #201 si possible, #276).
+echo Le matin : le rapport est deja sur l'Issue #201 -- sinon ouvre un fil et dis "lis la nuit".
 
 popd
 pause
