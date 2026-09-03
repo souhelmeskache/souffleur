@@ -21,6 +21,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "tools" / "lancer-lane.ps1"
+REFUS_HAIKU_AUTO = REPO_ROOT / "tools" / "refus-haiku-auto.ps1"
 
 # Faux herdr : journalise l'argv de chaque appel dans un fichier JSON lines,
 # répond succès (exit 0) systématiquement — Start-AgentClaude ne doit pas
@@ -39,6 +40,9 @@ HARNESS_TEMPLATE = textwrap.dedent("""\
     $end = $src.IndexOf('$RepoRoot = (git -C $PSScriptRoot')
     if ($start -lt 0 -or $end -lt 0) {{ throw "extraction des fonctions a echoue" }}
     Invoke-Expression $src.Substring($start, $end - $start)
+    # Assure-ModeAutoCompatibleAvecModele (#276) : Start-AgentClaude en
+    # dépend maintenant -- chargée depuis le vrai fichier, jamais dupliquée.
+    . '{refus_haiku_auto}'
 
     Start-AgentClaude -HerdrExe '{fake_herdr}' -AgentName 'agent-test' -PaneId 'pane-test' -Modele 'sonnet' -Effort 'medium'
     exit 0
@@ -71,6 +75,7 @@ def main():
         harness = HARNESS_TEMPLATE.format(
             script=str(SCRIPT).replace("'", "''"),
             fake_herdr=str(fake_herdr_path).replace("'", "''"),
+            refus_haiku_auto=str(REFUS_HAIKU_AUTO).replace("'", "''"),
         )
         harness_path = tmp / "harness.ps1"
         harness_path.write_text(harness, encoding="utf-8")

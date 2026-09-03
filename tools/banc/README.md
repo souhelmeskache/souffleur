@@ -113,6 +113,24 @@ distincts, et un seul est piégeux :
   `tests/verifier_liste_blanche_nuit_test.py` cas 5 (la garde, chemin `/c/…`
   simulé — reproduit le défaut #270 sans dépendre d'un vrai poste cassé).
 
+## Deux protections partagées avec `tools/lancer-lane.ps1` (#276, cadrage complémentaire 03/09)
+
+- **Refus nommé Haiku + mode `auto`** (`tools/refus-haiku-auto.ps1`,
+  fonction `Assure-ModeAutoCompatibleAvecModele`, partagée avec
+  `tools/lancer-lane.ps1`) : `--permission-mode auto` n'existe pas pour
+  Haiku — Claude Code y retombe EN SILENCE en mode manuel, et un agent de
+  nuit gèle à la première question posée à personne. Appelée avant chaque
+  `herdr agent start` des deux lanceurs ; sans effet ici puisque
+  `lancer-banc-fumee.ps1` démarre toujours les deux agents en
+  `acceptEdits`, jamais `auto` (voir « Liste blanche » ci-dessous) — gardée
+  pour la même discipline dans les deux lanceurs d'agents. Test :
+  `tests/refus_haiku_auto_test.py`.
+- **`deny` force-push versionné** (D-232) : `Bash(git push --force*)` et
+  `Bash(git push -f*)` sont désormais dans le bloc `deny` de
+  `.claude/settings.json` (suivi par Git), pas seulement dans
+  `settings.local.json` (propriété de l'opérateur, non versionné). Test :
+  `tests/settings_deny_force_push_test.py`.
+
 ## Liste blanche des agents du banc (#210, garantie #267)
 
 Les deux agents du banc (`banc-mj`, `banc-joueur`) tournent en
@@ -187,7 +205,8 @@ l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
 
 ```
 tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
-                    [-Save <slug>] [-TimeoutTour <minutes>] [-DryRun]
+                    [-Save <slug>] [-TimeoutTour <minutes>]
+                    [-FinA HH:MM] [-DryRun]
 ```
 
 - `-Parties N` (obligatoire) : nombre de parties à jouer ce lancement — le
@@ -245,6 +264,36 @@ tenter un lancement.
 - `-TimeoutTour <minutes>` (défaut 6) : au-delà, sans nouveau fichier de
   tour, la partie craque (`craquement-timeout-NN.md`) et se ferme ; la
   suivante démarre.
+- `-FinA HH:MM` (#276, heure locale du poste, défaut `06:00` dans
+  `nuit.cmd`, pas de défaut dans `nuit.sh` seul) : plus aucune partie ne
+  démarre après cette heure ; une partie en cours s'arrête proprement au
+  tour suivant, par le **même chemin que STOP** (fermeture et vérification
+  des agents, `resume-run.md`, `nuit.md`, sortie **130**), raison d'arrêt
+  « heure de fin atteinte (HH:MM) ».
+  **Résolution : deux règles distinctes, jamais une comparaison d'égalité à
+  l'horloge courante** (une comparaison d'égalité — « `-FinA` tombe
+  exactement sur la minute du lancement » — s'est révélée être une course :
+  selon l'instant précis où `nuit.sh` lit l'horloge face à l'instant capturé
+  par un test, la minute peut déjà avoir changé ; corrigé en 2ᵉ revue REFUS
+  du 03/09 par une comparaison d'INÉGALITÉ, robuste à n'importe quel écart) :
+  1. **Au lancement d'une nuit FRAÎCHE** (aucune partie encore jouée ce jour
+     dans le `-RunDir` visé) : HH:MM déjà passée pour le jour calendaire du
+     lancement bascule à **DEMAIN** plutôt que de refuser (résolue une seule
+     fois au lancement, jamais recalculée après minuit pendant le run).
+     C'est ce qui permet le cas d'usage nominal : `nuit.cmd` lancé en
+     soirée avec le défaut `-FinA 06:00` vise 06:00 le **lendemain matin**,
+     jamais un refus — une première version qui résolvait « aujourd'hui
+     seulement » refusait tout lancement fait entre 06:00 et minuit, ce qui
+     aurait tué le but de #276 (1ʳᵉ revue REFUS). Sous cette sémantique
+     « prochaine occurrence », aucune heure n'est jamais authentiquement
+     « passée » au lancement d'une nuit fraîche — seul le **format** de
+     `-FinA` reste refusable (exit 1, avant toute écriture).
+  2. **Pendant la nuit, sur un relancement en CONTINUATION** (`partie-01`
+     déjà présente dans le `-RunDir`) : **jamais** de bascule au lendemain —
+     HH:MM déjà atteinte pour aujourd'hui (par n'importe quelle marge) fait
+     s'arrêter la nuit **tout de suite** (exit 130) avant la partie
+     suivante, par le même chemin que STOP. Une continuation ne recule
+     jamais son heure de fin d'un jour entier.
 - `-DryRun` : crée toute l'arborescence (copies de save + fixture) et les
   `resume-run.md`/`nuit.md`, mais ne lance AUCUN agent — sert au test de
   forme (`tests/nuit_dryrun_test.py`) et à vérifier un montage sans
@@ -301,9 +350,53 @@ atteinte O/N, raison de l'arrêt, liste des craquements, durée) — l'analyse
 est N2, pas ce script.
 
 `bench/nuit-AAAAMMJJ/nuit.md` : table des parties (director, tours joués,
-fin atteinte, raison), budget consommé, raison de l'arrêt de la nuit, et les
+fin atteinte, raison), budget consommé, raison de l'arrêt de la nuit, les
 métriques §3 de #201 (`tools/banc/metriques_nuit.py`, calculées par le
-script, jamais un jugement).
+script, jamais un jugement), et le statut du dépôt de `rapport-nuit.md` sur
+l'Issue #201 (voir ci-dessous).
+
+### `rapport-nuit.md` — « lis la nuit » sans agent (#276)
+
+Écrit dans `bench/nuit-AAAAMMJJ/` à la **fin de la nuit, quelle que soit la
+raison d'arrêt** (budget `-Parties` atteint, STOP/PAUSE, `-FinA` atteinte,
+limite de session, échec de lancement répété, agent non fermé) — jamais
+d'exception à « rapport écrit ». Forme fixe (`tools/banc/metriques_nuit.py`,
+fonctions `calculer_rapport`/`formater_rapport_markdown`, appelées `<run_dir>
+rapport <raison_arret> <duree_totale_s> <limite_session:oui|non>` — étend
+`metriques_nuit.py`, ne duplique rien) :
+
+- parties finies / lancées, durée totale, raison d'arrêt ;
+- tours sans craquement par partie (médiane / min / max) ;
+- craquements par classe D-276 §4 (matériau / règle / Director / outillage)
+  — lue **mécaniquement** dans le nom `craquement-<classe>-NN.md` ; un
+  fichier dont le token de classe ne correspond à aucune des quatre compte
+  « non classé ». Les types mécaniques actuels de `nuit.sh`
+  (`fixture`/`lancement`/`nettoyage`/`timeout`/`prose-absente`) ne portent
+  aucun de ces noms de classe : ils comptent tous « non classé » aujourd'hui
+  — la classification D-276 réelle est l'analyste N2 (hors périmètre #276).
+- A/B Director (haiku ⊥ sonnet) : tours moyens et craquements de classe
+  `director` imputés à chaque modèle castée (relu dans `resume-run.md`) ;
+- limite de session touchée : oui / non ;
+- budget consommé : durée (jetons non mesurés — aucun compteur de jetons
+  n'existe côté banc aujourd'hui) ;
+- jusqu'à trois pointeurs (chemins) vers les `tour-NN.md` des craquements les
+  plus récents du run (le craquement lui-même si le `tour-NN.md`
+  correspondant n'existe pas).
+
+Si le calcul (`metriques_nuit.py … rapport …`) échoue, `rapport-nuit.md`
+n'est **jamais** silencieusement vide : `ecrire_rapport_nuit` (nuit.sh) y
+écrit alors un en-tête « ÉCHEC DE CALCUL » suivi de la sortie d'erreur —
+même discipline que le dépôt `gh` ci-dessous, jamais une erreur avalée.
+
+**Dépôt sur l'Issue #201** (`deposer_rapport_201` dans `nuit.sh`, via `gh`) :
+tenté à chaque fin de nuit, jamais en `-DryRun`. Statut toujours cité dans
+`nuit.md` (`dépôt Issue #201 : ...`) :
+- `posté sur #201` — `gh issue comment 201 --repo souhelmeskache/souffleur
+  --body-file rapport-nuit.md` a réussi ;
+- `non posté (gh indisponible)` / `non posté (gh non authentifié)` / `non
+  posté (échec gh issue comment)` / `non posté (-DryRun)` — le fichier
+  `rapport-nuit.md` seul reste la source, lisible sans ouvrir le poste dans
+  tous les cas puisqu'il est déjà dans `bench/nuit-AAAAMMJJ/`.
 
 ### Budget, arrêt propre, codes de sortie
 
@@ -340,6 +433,10 @@ script, jamais un jugement).
   parties, quel que soit le shell qui a lancé la nuit : nettoyage des agents
   en vol, `nuit.md` réécrit (`raison_arret: arrêt demandé (fichier
   STOP/PAUSE)`), sortie 130.
+- **Heure de fin `-FinA` atteinte (#276)** : même chemin que STOP/PAUSE
+  ci-dessus (testé à chaque poll et entre deux parties) — `nuit.md` reçoit
+  `raison_arret: heure de fin atteinte (HH:MM)`, sortie 130. Voir « `-FinA
+  HH:MM` » ci-dessus pour le refus au lancement sur une heure déjà passée.
 - **Fin de partie vérifiée (#271)** : après la fermeture des panes, `nuit.sh`
   attend (bornée 30 s) que `herdr agent list` ne porte plus ni `banc-mj` ni
   `banc-joueur` — nuit N0 02/09 : un `banc-joueur` survivant a fait échouer

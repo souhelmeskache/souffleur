@@ -101,7 +101,15 @@ def main():
         (stub_dir / "gh.cmd").write_text(GH_CMD, encoding="utf-8")
         (stub_dir / "herdr.cmd").write_text(HERDR_CMD, encoding="utf-8")
 
-        env = {**os.environ, "PATH": str(stub_dir) + os.pathsep + os.environ.get("PATH", "")}
+        # Env sans variables GIT_* héritées (même garde que
+        # tests/lancer_banc_fumee_test.py/garde_prepush_test.py) : quand ce
+        # test tourne DEPUIS un hook git (pre-commit), git pose GIT_DIR/
+        # GIT_INDEX_FILE dans l'environnement du process hook -- hérité tel
+        # quel par le PowerShell lancé ici sinon, ce qui fausse la résolution
+        # de $RepoRoot (`git -C $PSScriptRoot rev-parse --show-toplevel`) du
+        # script sous test.
+        env_sans_git = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env = {**env_sans_git, "PATH": str(stub_dir) + os.pathsep + env_sans_git.get("PATH", "")}
 
         p = subprocess.run(
             [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT),

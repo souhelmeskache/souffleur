@@ -12,7 +12,8 @@
 #
 # Usage :
 #   tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
-#                       [-Save <slug>] [-TimeoutTour <minutes>] [-DryRun]
+#                       [-Save <slug>] [-TimeoutTour <minutes>]
+#                       [-FinA HH:MM] [-DryRun]
 #
 # Voir tools/banc/README.md pour le détail des sorties, codes de sortie, et
 # « ce que la nuit ne fait pas ».
@@ -39,13 +40,14 @@ DIRECTOR="sonnet"
 TOURS=40
 SAVE="banc-depart-beyond-the-vale-of-madness"
 TIMEOUT_TOUR_MIN=6
+FIN_A=""
 DRYRUN=0
 RUN_DIR_OVERRIDE=""
 LANCEMENT_CMD_OVERRIDE=""
 
 usage() {
   cat >&2 <<EOF
-Usage : $0 -Parties N [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-DryRun] [-RunDir <chemin>]
+Usage : $0 -Parties N [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
 EOF
 }
 
@@ -56,6 +58,7 @@ while [ $# -gt 0 ]; do
     -Tours) TOURS="${2:-}"; shift 2 ;;
     -Save) SAVE="${2:-}"; shift 2 ;;
     -TimeoutTour) TIMEOUT_TOUR_MIN="${2:-}"; shift 2 ;;
+    -FinA) FIN_A="${2:-}"; shift 2 ;;
     -DryRun) DRYRUN=1; shift ;;
     # -RunDir : usage interne / tests (tests/nuit_dryrun_test.py) — écrit le
     # run ailleurs que bench/nuit-AAAAMMJJ/, pour ne jamais toucher au vrai
@@ -88,6 +91,10 @@ if ! [[ "$TIMEOUT_TOUR_MIN" =~ ^[0-9]+$ ]] || [ "$TIMEOUT_TOUR_MIN" -lt 1 ]; the
   echo "REFUS : -TimeoutTour doit être un entier de minutes >= 1 (reçu '$TIMEOUT_TOUR_MIN')." >&2; exit 1
 fi
 TIMEOUT_TOUR_SECS=$((TIMEOUT_TOUR_MIN * 60))
+if [ -n "$FIN_A" ] && ! [[ "$FIN_A" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+  echo "REFUS : -FinA doit être au format HH:MM, heure locale 00:00-23:59 (reçu '$FIN_A')." >&2
+  exit 1
+fi
 
 # --- 0bis. Environnement propre (#271, nuit N0 02/09 : SAVES_DIR posée par
 # `herdr pane split --env` sur un pane de partie précédente survivait dans ce
@@ -119,6 +126,12 @@ STOP_FILE="$RUN_DIR/STOP"
 PAUSE_FILE="$REPO_ROOT/tools/PAUSE"
 arret_demande() {
   [ -f "$STOP_FILE" ] || [ -f "$PAUSE_FILE" ]
+}
+
+# "1" (vrai) si -FinA est posée et l'heure locale l'a atteinte/dépassée
+# (#276) — FIN_A_EPOCH résolue une seule fois, voir § 1bis ci-dessus.
+fin_a_atteinte() {
+  [ -n "$FIN_A_EPOCH" ] && [ "$(date +%s)" -ge "$FIN_A_EPOCH" ]
 }
 
 # Résolution SAVES_DIR de production (coderain/config.py) — jamais un chemin
@@ -165,6 +178,52 @@ for d in "$RUN_DIR"/partie-*/; do
   START_INDEX=$((START_INDEX + 1))
 done
 
+# --- 1bis. Heure de fin -FinA (#276, revu deux fois en revue REFUS le 03/09) -
+#
+# FIN_A_EPOCH est résolue UNE FOIS ici et jamais recalculée pendant la nuit
+# (la comparaison en boucle, fin_a_atteinte, reste monotone même si l'horloge
+# franchit minuit).
+#
+# Deux règles, distinctes par construction (jamais une comparaison d'égalité
+# à l'horloge courante -- une 2e revue REFUS du 03/09 a constaté un CI rouge
+# sur une précédente version qui refusait/arrêtait sur « HH:MM == minute
+# EXACTE du lancement » : selon l'instant précis où `date` s'exécute dans ce
+# process face à l'instant où le TEST avait capturé « maintenant », la
+# minute pouvait déjà avoir changé -- comparaison d'INÉGALITÉ ci-dessous,
+# robuste à n'importe quel écart, jamais une course) :
+#
+# 1. AU LANCEMENT D'UNE NUIT FRAÎCHE ($START_INDEX == 1, aucune partie
+#    encore jouée dans ce $RUN_DIR aujourd'hui) : HH:MM déjà passée pour
+#    $DATE_JOUR bascule à DEMAIN plutôt que de refuser -- sinon le cas
+#    d'usage NOMINAL de l'Issue (lancer nuit.cmd en soirée, -FinA 06:00 par
+#    défaut = 06:00 le LENDEMAIN matin) refuserait tout lancement fait entre
+#    06:00 et minuit, ce qui aurait tué le but même de #276 (1re revue
+#    REFUS). Aucun refus nommé ne survit à cette bascule : sous une
+#    sémantique « prochaine occurrence », aucune heure n'est jamais
+#    authentiquement « passée » — seul le format -FinA reste refusable
+#    (ci-dessus, avant cette section).
+# 2. PENDANT LA NUIT (relancement en CONTINUATION, $START_INDEX > 1,
+#    partie-01 déjà là) : JAMAIS de bascule au lendemain -- HH:MM déjà
+#    atteinte pour $DATE_JOUR (par n'importe quelle marge, même minime) fait
+#    s'arrêter la nuit tout de suite (fin_a_atteinte vrai dès le prochain
+#    contrôle), par le chemin normal (même code que STOP). Une continuation
+#    ne recule jamais son heure de fin d'un jour entier.
+FIN_A_EPOCH=""
+if [ -n "$FIN_A" ]; then
+  FIN_A_EPOCH_JOUR="$(date -d "${DATE_JOUR:0:4}-${DATE_JOUR:4:2}-${DATE_JOUR:6:2} $FIN_A:00" +%s 2>/dev/null)"
+  if [ -z "$FIN_A_EPOCH_JOUR" ]; then
+    echo "REFUS : -FinA '$FIN_A' n'a pas pu être résolue en heure locale." >&2
+    exit 1
+  fi
+  if [ "$FIN_A_EPOCH_JOUR" -gt "$(date +%s)" ]; then
+    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"                       # encore à venir aujourd'hui
+  elif [ "$START_INDEX" -eq 1 ]; then
+    FIN_A_EPOCH=$((FIN_A_EPOCH_JOUR + 86400))             # nuit fraîche, déjà passée -> demain
+  else
+    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"                        # continuation, déjà atteinte -> arrêt
+  fi
+fi
+
 # --- état en vol (pour le trap INT/TERM — jamais un agent laissé en vol) ----
 
 PANE_MJ_COURANT=""
@@ -173,6 +232,8 @@ PARTIE_DIR_COURANTE=""
 DEBUT_NUIT=$(date +%s)
 TABLE_PARTIES=()   # lignes déjà écrites de la table nuit.md, dans l'ordre
 RAISON_ARRET_NUIT=""
+LIMITE_SESSION_TOUCHEE="non"   # #276 rapport-nuit.md — "oui" si sortie 5
+DEPOT_RAPPORT_STATUT=""        # #276 — statut du dépôt sur l'Issue #201
 
 # Échecs de LANCEMENT consécutifs (#263) — distinct des craquements de tour
 # (timeout, fixture) qui n'arrêtent que la partie courante. Un gabarit cassé
@@ -268,7 +329,7 @@ fermer_et_verifier_agents() {
   ecrire_craquement "$partie_dir" "$nn" "nettoyage" \
     "agent(s) non fermé(s) après pane close + /exit (#271) :$survivants"
   RAISON_ARRET_NUIT="agent non fermé (partie $nn :$survivants)"
-  ecrire_nuit_md
+  finaliser_nuit
   exit 7
 }
 
@@ -317,7 +378,7 @@ limite_session_detectee() {
 # Attend qu'un fichier existe et soit non vide. Rend 0 (produit), 3 (arrêt
 # demandé — sentinelle STOP/PAUSE, #271), 4 (timeout du tour, craquement
 # LOCAL à la partie), 5 (limite de session — arrêt de TOUTE la nuit, budget
-# #260).
+# #260), 8 (heure de fin -FinA atteinte — arrêt de TOUTE la nuit, #276).
 attendre_fichier() {
   local fichier="$1"
   local n=0 bloque_polls=0
@@ -327,6 +388,10 @@ attendre_fichier() {
     if arret_demande; then
       echo "ARRÊT DEMANDÉ (fichier STOP/PAUSE détecté, #271)"
       return 3
+    fi
+    if fin_a_atteinte; then
+      echo "HEURE DE FIN ATTEINTE ($FIN_A, #276)"
+      return 8
     fi
     if [ -n "$(limite_session_detectee)" ]; then
       echo "LIMITE DE SESSION (texte détecté dans un pane)"
@@ -406,7 +471,7 @@ nettoyage_interruption() {
   echo "=== nuit.sh interrompu ($sig) — fermeture des agents en vol ==="
   fermer_panes
   RAISON_ARRET_NUIT="interrompu ($sig)"
-  ecrire_nuit_md
+  finaliser_nuit
   exit 130
 }
 trap 'nettoyage_interruption INT' INT
@@ -415,14 +480,14 @@ trap 'nettoyage_interruption TERM' TERM
 # --- 4. nuit.md ---------------------------------------------------------------
 
 ecrire_nuit_md() {
-  local duree_s=$(( $(date +%s) - DEBUT_NUIT ))
+  local duree_s="${1:-$(( $(date +%s) - DEBUT_NUIT ))}"
   local metriques
   metriques="$(python "$METRIQUES_PY" "$RUN_DIR" 2>/dev/null)"
   {
     echo "# nuit — $DATE_JOUR"
     echo
     echo "Save : $SAVE — Director : $DIRECTOR — Tours max/partie : $TOURS — "\
-"Timeout tour : ${TIMEOUT_TOUR_MIN}min"
+"Timeout tour : ${TIMEOUT_TOUR_MIN}min${FIN_A:+ — Fin à : $FIN_A}"
     echo
     echo "Durée totale : ${duree_s}s"
     echo "Raison d'arrêt de la nuit : ${RAISON_ARRET_NUIT:-budget -Parties atteint}"
@@ -439,7 +504,71 @@ ecrire_nuit_md() {
     echo "## Métriques (§3 #201)"
     echo
     printf '%s' "$metriques"
+    echo
+    echo "Rapport de nuit : $RUN_DIR/rapport-nuit.md — dépôt Issue #201 : "\
+"${DEPOT_RAPPORT_STATUT:-non tenté}"
   } > "$NUIT_MD"
+}
+
+# --- 4bis. rapport-nuit.md (#276) --------------------------------------------
+#
+# Écrit à CHAQUE finalisation de la nuit (finaliser_nuit ci-dessous), quelle
+# que soit la raison d'arrêt (STOP, heure de fin, limite de session, échec de
+# lancement répété, agent non fermé, budget -Parties atteint) — l'étend
+# `tools/banc/metriques_nuit.py`, ne duplique rien (§ « Livrer » 2 de #276).
+ecrire_rapport_nuit() {
+  local duree_s="$1" err_path="$RUN_DIR/.rapport-nuit.err"
+  if ! python "$METRIQUES_PY" "$RUN_DIR" rapport \
+       "${RAISON_ARRET_NUIT:-budget -Parties atteint}" "$duree_s" "$LIMITE_SESSION_TOUCHEE" \
+       > "$RUN_DIR/rapport-nuit.md" 2>"$err_path"; then
+    # Jamais une erreur silencieuse (même discipline que deposer_rapport_201
+    # ci-dessous) : rapport-nuit.md nomme l'échec plutôt que d'être vide.
+    {
+      echo "# rapport-nuit — ÉCHEC DE CALCUL"
+      echo
+      echo "Le calcul de $METRIQUES_PY a échoué -- métriques indisponibles."
+      echo
+      echo '```'
+      cat "$err_path" 2>/dev/null
+      echo '```'
+    } > "$RUN_DIR/rapport-nuit.md"
+  fi
+  rm -f "$err_path"
+}
+
+# Poste rapport-nuit.md en commentaire sur l'Issue #201 (fiche du banc) via
+# `gh`, si disponible et authentifié -- sinon rend un statut nommé, jamais
+# une erreur silencieuse (§ « Livrer » 3 de #276 : « le fichier seul, et la
+# raison dans nuit.md »). Jamais tenté en -DryRun (aucun effet de bord
+# externe sur un montage de test).
+deposer_rapport_201() {
+  if [ "$DRYRUN" -eq 1 ]; then
+    echo "non posté (-DryRun)"; return
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "non posté (gh indisponible)"; return
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "non posté (gh non authentifié)"; return
+  fi
+  if gh issue comment 201 --repo souhelmeskache/souffleur \
+       --body-file "$RUN_DIR/rapport-nuit.md" >/dev/null 2>&1; then
+    echo "posté sur #201"
+  else
+    echo "non posté (échec gh issue comment)"
+  fi
+}
+
+# Point d'entrée UNIQUE de fin de nuit (#276) — appelé à la place de
+# `ecrire_nuit_md` seul sur CHAQUE chemin de sortie : rapport-nuit.md
+# d'abord (dépôt #201 tenté ensuite), puis nuit.md (qui cite le statut du
+# dépôt) -- jamais l'inverse, sinon nuit.md ne pourrait pas citer le statut
+# du dépôt qui n'aurait pas encore eu lieu.
+finaliser_nuit() {
+  local duree_s=$(( $(date +%s) - DEBUT_NUIT ))
+  ecrire_rapport_nuit "$duree_s"
+  DEPOT_RAPPORT_STATUT="$(deposer_rapport_201)"
+  ecrire_nuit_md "$duree_s"
 }
 
 # --- 5. Boucle d'une partie ---------------------------------------------------
@@ -506,7 +635,7 @@ jouer_partie() {
     TABLE_PARTIES+=("| $pnn | $modele | 0 | N | $raison |")
     if [ "$ECHECS_LANCEMENT_CONSECUTIFS" -ge 2 ]; then
       RAISON_ARRET_NUIT="lancement impossible (2 échecs de lancement consécutifs, partie $pnn)"
-      ecrire_nuit_md
+      finaliser_nuit
       exit 6
     fi
     return 0
@@ -530,8 +659,9 @@ jouer_partie() {
       echo "=== partie $pnn tour $nn — go joueur $(date '+%H:%M:%S')"
       herdr agent prompt banc-joueur "go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md" >/dev/null 2>&1
       attendre_fichier "$partie_dir/action-$nn.md"; r=$?
-      if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; ecrire_nuit_md; exit 130; fi
-      if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; fermer_panes; ecrire_nuit_md; exit 5; fi
+      if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
+      if [ "$r" -eq 8 ]; then RAISON_ARRET_NUIT="heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
+      if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; LIMITE_SESSION_TOUCHEE="oui"; fermer_panes; finaliser_nuit; exit 5; fi
       if [ "$r" -ne 0 ]; then
         raison="craquement-timeout"
         ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant action-$nn.md"
@@ -544,8 +674,9 @@ jouer_partie() {
     fi
 
     attendre_fichier "$partie_dir/tour-$nn.md"; r=$?
-    if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; ecrire_nuit_md; exit 130; fi
-    if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; fermer_panes; ecrire_nuit_md; exit 5; fi
+    if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
+    if [ "$r" -eq 8 ]; then RAISON_ARRET_NUIT="heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
+    if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; LIMITE_SESSION_TOUCHEE="oui"; fermer_panes; finaliser_nuit; exit 5; fi
     if [ "$r" -ne 0 ]; then
       raison="craquement-timeout"
       ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant tour-$nn.md"
@@ -594,13 +725,19 @@ while [ "$i" -le "$PARTIES" ]; do
   if arret_demande; then
     echo "=== ARRÊT DEMANDÉ (fichier STOP/PAUSE, #271) — nuit interrompue avant partie $i ==="
     RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE)"
-    ecrire_nuit_md
+    finaliser_nuit
+    exit 130
+  fi
+  if fin_a_atteinte; then
+    echo "=== HEURE DE FIN ATTEINTE ($FIN_A, #276) — nuit interrompue avant partie $i ==="
+    RAISON_ARRET_NUIT="heure de fin atteinte ($FIN_A)"
+    finaliser_nuit
     exit 130
   fi
   jouer_partie "$i"
   i=$((i + 1))
 done
 
-ecrire_nuit_md
+finaliser_nuit
 echo "=== nuit $DATE_JOUR terminée : $NUIT_MD ==="
 exit 0

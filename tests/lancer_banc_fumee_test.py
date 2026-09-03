@@ -42,6 +42,7 @@ SCRIPT_REEL = REPO_ROOT / "tools" / "lancer-banc-fumee.ps1"
 GABARIT_MJ_REEL = REPO_ROOT / "tools" / "prompts" / "banc-mj.md"
 GABARIT_JOUEUR_REEL = REPO_ROOT / "tools" / "prompts" / "banc-joueur.md"
 LISTE_BLANCHE_REEL = REPO_ROOT / "tools" / "banc" / "liste-blanche.ps1"
+REFUS_HAIKU_AUTO_REEL = REPO_ROOT / "tools" / "refus-haiku-auto.ps1"
 
 FAKE_HERDR_CMD = "@echo off\r\nexit /b 0\r\n"
 
@@ -78,6 +79,7 @@ def build_repo_jetable(tmp_root: Path, nom: str = "repo-jetable", gabarits_minim
 
     shutil.copy(SCRIPT_REEL, repo / "tools" / "lancer-banc-fumee.ps1")
     shutil.copy(LISTE_BLANCHE_REEL, repo / "tools" / "banc" / "liste-blanche.ps1")
+    shutil.copy(REFUS_HAIKU_AUTO_REEL, repo / "tools" / "refus-haiku-auto.ps1")
     if gabarits_minimaux:
         for nom_gabarit in ("banc-mj.md", "banc-joueur.md"):
             (repo / "tools" / "prompts" / nom_gabarit).write_text(
