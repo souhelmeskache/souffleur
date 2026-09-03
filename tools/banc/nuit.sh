@@ -178,30 +178,36 @@ for d in "$RUN_DIR"/partie-*/; do
   START_INDEX=$((START_INDEX + 1))
 done
 
-# --- 1bis. Heure de fin -FinA (#276, revu en revue REFUS du 03/09) ----------
+# --- 1bis. Heure de fin -FinA (#276, revu deux fois en revue REFUS le 03/09) -
 #
 # FIN_A_EPOCH est résolue UNE FOIS ici et jamais recalculée pendant la nuit
 # (la comparaison en boucle, fin_a_atteinte, reste monotone même si l'horloge
 # franchit minuit).
 #
-# PROCHAINE OCCURRENCE, pas « aujourd'hui seulement » : si HH:MM est déjà
-# passée pour $DATE_JOUR (jour calendaire du lancement), la cible se résout
-# à DEMAIN plutôt que de refuser -- sinon le cas d'usage NOMINAL de l'Issue
-# (lancer nuit.cmd en soirée, -FinA 06:00 par défaut = 06:00 le LENDEMAIN
-# matin) refuserait tout lancement fait entre 06:00 et minuit, ce qui aurait
-# tué le but même de #276 (constat de revue REFUS du 03/09 sur la première
-# version, qui refusait aujourd'hui-seulement).
+# Deux règles, distinctes par construction (jamais une comparaison d'égalité
+# à l'horloge courante -- une 2e revue REFUS du 03/09 a constaté un CI rouge
+# sur une précédente version qui refusait/arrêtait sur « HH:MM == minute
+# EXACTE du lancement » : selon l'instant précis où `date` s'exécute dans ce
+# process face à l'instant où le TEST avait capturé « maintenant », la
+# minute pouvait déjà avoir changé -- comparaison d'INÉGALITÉ ci-dessous,
+# robuste à n'importe quel écart, jamais une course) :
 #
-# Refus nommé (« pas une nuit vide ») réservé au seul cas qui reste
-# authentiquement dégénéré sous ce modèle « prochaine occurrence » (où,
-# sinon, aucune heure n'est jamais vraiment « passée » puisqu'elle bascule
-# toujours sur demain) : -FinA tombe EXACTEMENT sur la minute du lancement
-# ($NOW_HHMM == $FIN_A) -- fenêtre nulle, refusée SEULEMENT sur un run FRAIS
-# ($START_INDEX == 1, aucune partie encore jouée dans ce $RUN_DIR
-# aujourd'hui). Sur une continuation (partie-01 déjà là), ce même cas
-# n'est pas une nuit vide : la nuit s'arrête tout de suite par le chemin
-# normal (boucle des parties, même code que STOP) plutôt que d'être
-# refusée.
+# 1. AU LANCEMENT D'UNE NUIT FRAÎCHE ($START_INDEX == 1, aucune partie
+#    encore jouée dans ce $RUN_DIR aujourd'hui) : HH:MM déjà passée pour
+#    $DATE_JOUR bascule à DEMAIN plutôt que de refuser -- sinon le cas
+#    d'usage NOMINAL de l'Issue (lancer nuit.cmd en soirée, -FinA 06:00 par
+#    défaut = 06:00 le LENDEMAIN matin) refuserait tout lancement fait entre
+#    06:00 et minuit, ce qui aurait tué le but même de #276 (1re revue
+#    REFUS). Aucun refus nommé ne survit à cette bascule : sous une
+#    sémantique « prochaine occurrence », aucune heure n'est jamais
+#    authentiquement « passée » — seul le format -FinA reste refusable
+#    (ci-dessus, avant cette section).
+# 2. PENDANT LA NUIT (relancement en CONTINUATION, $START_INDEX > 1,
+#    partie-01 déjà là) : JAMAIS de bascule au lendemain -- HH:MM déjà
+#    atteinte pour $DATE_JOUR (par n'importe quelle marge, même minime) fait
+#    s'arrêter la nuit tout de suite (fin_a_atteinte vrai dès le prochain
+#    contrôle), par le chemin normal (même code que STOP). Une continuation
+#    ne recule jamais son heure de fin d'un jour entier.
 FIN_A_EPOCH=""
 if [ -n "$FIN_A" ]; then
   FIN_A_EPOCH_JOUR="$(date -d "${DATE_JOUR:0:4}-${DATE_JOUR:4:2}-${DATE_JOUR:6:2} $FIN_A:00" +%s 2>/dev/null)"
@@ -209,18 +215,12 @@ if [ -n "$FIN_A" ]; then
     echo "REFUS : -FinA '$FIN_A' n'a pas pu être résolue en heure locale." >&2
     exit 1
   fi
-  NOW_EPOCH="$(date +%s)"
-  NOW_HHMM="$(date '+%H:%M')"
-  if [ "$NOW_HHMM" = "$FIN_A" ]; then
-    if [ "$START_INDEX" -eq 1 ]; then
-      echo "REFUS : -FinA $FIN_A atteinte au lancement même (fenêtre nulle) -- pas de nuit vide." >&2
-      exit 1
-    fi
-    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"
-  elif [ "$NOW_EPOCH" -ge "$FIN_A_EPOCH_JOUR" ]; then
-    FIN_A_EPOCH=$((FIN_A_EPOCH_JOUR + 86400))
+  if [ "$FIN_A_EPOCH_JOUR" -gt "$(date +%s)" ]; then
+    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"                       # encore à venir aujourd'hui
+  elif [ "$START_INDEX" -eq 1 ]; then
+    FIN_A_EPOCH=$((FIN_A_EPOCH_JOUR + 86400))             # nuit fraîche, déjà passée -> demain
   else
-    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"
+    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"                        # continuation, déjà atteinte -> arrêt
   fi
 fi
 

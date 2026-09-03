@@ -270,24 +270,30 @@ tenter un lancement.
   tour suivant, par le **même chemin que STOP** (fermeture et vérification
   des agents, `resume-run.md`, `nuit.md`, sortie **130**), raison d'arrêt
   « heure de fin atteinte (HH:MM) ».
-  **Résolution : PROCHAINE occurrence de HH:MM, pas « aujourd'hui
-  seulement »** — si l'heure est déjà passée pour le jour calendaire du
-  lancement, la cible se résout à DEMAIN (résolue une seule fois au
-  lancement, jamais recalculée après minuit pendant le run). C'est ce qui
-  permet le cas d'usage nominal : `nuit.cmd` lancé en soirée avec le défaut
-  `-FinA 06:00` vise 06:00 le **lendemain matin**, pas un refus immédiat —
-  une première version qui résolvait « aujourd'hui seulement » refusait tout
-  lancement fait entre 06:00 et minuit, ce qui aurait tué le but de #276
-  (corrigé en revue REFUS du 03/09).
-  **Refus nommé** (exit 1, avant toute écriture) réservé au seul cas
-  authentiquement dégénéré sous ce modèle (où, sinon, aucune heure n'est
-  jamais « passée ») : `-FinA` tombe **exactement sur la minute du
-  lancement** (fenêtre nulle) sur un run FRAIS (aucune partie encore jouée
-  ce jour dans le `-RunDir` visé) — « pas une nuit vide ». Un second appel
-  du même jour qui CONTINUE un run déjà entamé (`partie-01` déjà présente)
-  n'est, lui, jamais refusé sur ce même cas : il s'arrête proprement
-  (exit 130) avant la partie suivante plutôt que d'être refusé, puisque le
-  run n'est pas vide.
+  **Résolution : deux règles distinctes, jamais une comparaison d'égalité à
+  l'horloge courante** (une comparaison d'égalité — « `-FinA` tombe
+  exactement sur la minute du lancement » — s'est révélée être une course :
+  selon l'instant précis où `nuit.sh` lit l'horloge face à l'instant capturé
+  par un test, la minute peut déjà avoir changé ; corrigé en 2ᵉ revue REFUS
+  du 03/09 par une comparaison d'INÉGALITÉ, robuste à n'importe quel écart) :
+  1. **Au lancement d'une nuit FRAÎCHE** (aucune partie encore jouée ce jour
+     dans le `-RunDir` visé) : HH:MM déjà passée pour le jour calendaire du
+     lancement bascule à **DEMAIN** plutôt que de refuser (résolue une seule
+     fois au lancement, jamais recalculée après minuit pendant le run).
+     C'est ce qui permet le cas d'usage nominal : `nuit.cmd` lancé en
+     soirée avec le défaut `-FinA 06:00` vise 06:00 le **lendemain matin**,
+     jamais un refus — une première version qui résolvait « aujourd'hui
+     seulement » refusait tout lancement fait entre 06:00 et minuit, ce qui
+     aurait tué le but de #276 (1ʳᵉ revue REFUS). Sous cette sémantique
+     « prochaine occurrence », aucune heure n'est jamais authentiquement
+     « passée » au lancement d'une nuit fraîche — seul le **format** de
+     `-FinA` reste refusable (exit 1, avant toute écriture).
+  2. **Pendant la nuit, sur un relancement en CONTINUATION** (`partie-01`
+     déjà présente dans le `-RunDir`) : **jamais** de bascule au lendemain —
+     HH:MM déjà atteinte pour aujourd'hui (par n'importe quelle marge) fait
+     s'arrêter la nuit **tout de suite** (exit 130) avant la partie
+     suivante, par le même chemin que STOP. Une continuation ne recule
+     jamais son heure de fin d'un jour entier.
 - `-DryRun` : crée toute l'arborescence (copies de save + fixture) et les
   `resume-run.md`/`nuit.md`, mais ne lance AUCUN agent — sert au test de
   forme (`tests/nuit_dryrun_test.py`) et à vérifier un montage sans
