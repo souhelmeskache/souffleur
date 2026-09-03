@@ -113,6 +113,24 @@ distincts, et un seul est piégeux :
   `tests/verifier_liste_blanche_nuit_test.py` cas 5 (la garde, chemin `/c/…`
   simulé — reproduit le défaut #270 sans dépendre d'un vrai poste cassé).
 
+## Deux protections partagées avec `tools/lancer-lane.ps1` (#276, cadrage complémentaire 03/09)
+
+- **Refus nommé Haiku + mode `auto`** (`tools/refus-haiku-auto.ps1`,
+  fonction `Assure-ModeAutoCompatibleAvecModele`, partagée avec
+  `tools/lancer-lane.ps1`) : `--permission-mode auto` n'existe pas pour
+  Haiku — Claude Code y retombe EN SILENCE en mode manuel, et un agent de
+  nuit gèle à la première question posée à personne. Appelée avant chaque
+  `herdr agent start` des deux lanceurs ; sans effet ici puisque
+  `lancer-banc-fumee.ps1` démarre toujours les deux agents en
+  `acceptEdits`, jamais `auto` (voir « Liste blanche » ci-dessous) — gardée
+  pour la même discipline dans les deux lanceurs d'agents. Test :
+  `tests/refus_haiku_auto_test.py`.
+- **`deny` force-push versionné** (D-232) : `Bash(git push --force*)` et
+  `Bash(git push -f*)` sont désormais dans le bloc `deny` de
+  `.claude/settings.json` (suivi par Git), pas seulement dans
+  `settings.local.json` (propriété de l'opérateur, non versionné). Test :
+  `tests/settings_deny_force_push_test.py`.
+
 ## Liste blanche des agents du banc (#210, garantie #267)
 
 Les deux agents du banc (`banc-mj`, `banc-joueur`) tournent en

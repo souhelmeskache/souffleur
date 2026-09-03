@@ -466,6 +466,11 @@ Write-Output "Pane joueur-banc: $paneJoueurId"
 # l'opérateur y a mis n'est retiré ; un JSON invalide REFUSE plutôt que
 # d'écraser.
 . (Join-Path $RepoRoot 'tools\banc\liste-blanche.ps1')
+# Assure-ModeAutoCompatibleAvecModele (#276) : refus nommé Haiku + auto,
+# partagée avec tools/lancer-lane.ps1 — sans effet ici (mode acceptEdits
+# hardcodé ci-dessous), gardée pour la même discipline dans les deux
+# lanceurs d'agents.
+. (Join-Path $RepoRoot 'tools\refus-haiku-auto.ps1')
 $claudeDir = Join-Path $RepoRoot '.claude'
 $settingsLocalPath = Join-Path $claudeDir 'settings.local.json'
 $resultatListeBlanche = Assure-ListeBlancheBanc -SettingsLocalPath $settingsLocalPath
@@ -474,6 +479,7 @@ if ($resultatListeBlanche.Status -eq 'refus') {
     exit 1
 }
 
+Assure-ModeAutoCompatibleAvecModele -Modele $ModeleMj -PermissionMode 'acceptEdits'
 Write-Output "Démarrage de l'agent MJ ($AgentMj, $ModeleMj, effort medium)..."
 & $HerdrExe agent start $AgentMj --kind claude --pane $paneMjId -- --model $ModeleMj --effort medium --permission-mode acceptEdits
 if ($LASTEXITCODE -ne 0) {
@@ -481,6 +487,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+Assure-ModeAutoCompatibleAvecModele -Modele $ModeleJoueur -PermissionMode 'acceptEdits'
 Write-Output "Démarrage de l'agent joueur-banc ($AgentJoueur, $ModeleJoueur, effort low)..."
 & $HerdrExe agent start $AgentJoueur --kind claude --pane $paneJoueurId -- --model $ModeleJoueur --effort low --permission-mode acceptEdits
 if ($LASTEXITCODE -ne 0) {

@@ -250,6 +250,10 @@ function Start-AgentClaude {
         [Parameter(Mandatory)] [string]$Effort
     )
 
+    # Refus nommé Haiku + auto (#276, cadrage complémentaire) — avant tout
+    # `herdr agent start` : ce mode retombe en silence en manuel pour Haiku.
+    Assure-ModeAutoCompatibleAvecModele -Modele $Modele -PermissionMode 'auto'
+
     & $HerdrExe agent start $AgentName --kind claude --pane $PaneId -- --model $Modele --effort $Effort --permission-mode auto
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Échec de 'herdr agent start' pour $AgentName sur le pane $PaneId (code $LASTEXITCODE)."
@@ -270,6 +274,10 @@ function Start-AgentClaude {
 $RepoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
 $RepoSlug = 'souhelmeskache/souffleur'
 $PauseFlag = Join-Path $RepoRoot 'tools/PAUSE'
+
+# Assure-ModeAutoCompatibleAvecModele (#276) : refus nommé Haiku + auto,
+# partagée avec tools/lancer-banc-fumee.ps1.
+. (Join-Path $RepoRoot 'tools\refus-haiku-auto.ps1')
 
 # --- 1. Garde-fou pause (garde la moins chère d'abord — avant tout appel réseau) --
 # S'applique aux deux modes : une lane de revue reste une lane.
