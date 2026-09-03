@@ -217,9 +217,50 @@ tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
   `resume-run.md`. Le joueur tourne toujours en haiku/low, le narrateur
   (sous-agent spawné par le Director) en haiku.
 - `-Tours 40` : plafond de tours par partie.
-- `-Save <slug>` (défaut `beyond-the-vale-of-madness`) : save source
-  (`saves/<slug>`, résolution `coderain/config.py::saves_dir`), copiée
-  fraîche pour chaque partie — jamais jouée directement.
+- `-Save <slug>` (défaut `banc-depart-beyond-the-vale-of-madness`) : save
+  source (`saves/<slug>`, résolution `coderain/config.py::saves_dir`),
+  copiée fraîche pour chaque partie — jamais jouée directement. **Doit être
+  une save de DÉPART au tour 0** (voir § ci-dessous) — `nuit.sh` REFUSE
+  nommément toute save dont `transcript.md` porte déjà un tour (« REFUS : la
+  save '<slug>' est au tour N, une nuit ne joue qu'une save de départ (tour
+  0). »).
+
+### Save de DÉPART gelée (#275, I-465)
+
+**Une nuit ne doit jamais pouvoir jouer une partie en cours.** Constat #274
+(nuit N0 du 02/09) : `nuit.sh` copiait jusque-là `beyond-the-vale-of-madness`
+telle qu'elle est dans `saves_dir()` — la partie JOUÉE jusqu'à la mort du
+personnage (tour 28) puis prolongée en post-mortem. Chaque partie de nuit
+démarrait donc APRÈS la fin du module, avec des dizaines de tours dans le
+contexte, et le module DKS source était spoilé par la seule lecture de la
+save.
+
+`tools/banc/save-depart.py` fabrique **une fois** une save FRAÎCHE (tour 0,
+`transcript.md` vierge, personnage installé — fixture #257, Mika Thorne, arme
++ armure équipées) depuis le scénario déjà enregistré (celui dont la save
+jouée a été instanciée, `coderain/converter/install.py`), au moyen de
+`coderain/templates.py::new_save` (jamais réécrit). Rangée hors dépôt sous
+`saves_dir()`, comme toute autre save (D-224) — jamais commitée, jamais
+écrasée sans `--force` :
+
+```
+python tools/banc/save-depart.py
+    [--slug banc-depart-beyond-the-vale-of-madness]
+    [--from-save beyond-the-vale-of-madness]   # source du scénario à reprendre
+    [--scenario <slug scénario, déduit de --from-save par défaut>]
+    [--profil guerrier] [--force]
+```
+
+`--from-save` ne sert qu'à retrouver, dans son `meta.json`, le slug du
+scénario dont repartir — la save de départ n'en copie ni l'état ni les
+tours. Le slug de départ et le profil de fixture sont des paramètres, pas
+des constantes : d'autres profils de personnage (hors périmètre #275)
+n'exigeront pas de réécrire ce script.
+
+`tools/banc/verifier-avant-nuit.sh` vérifie, en plus de ses gardes
+existantes, que la save `-Save` (ou son défaut) existe et est bien au tour
+0 — même contrat que la garde de `nuit.sh`, pour échouer avant même de
+tenter un lancement.
 - `-TimeoutTour <minutes>` (défaut 6) : au-delà, sans nouveau fichier de
   tour, la partie craque (`craquement-timeout-NN.md`) et se ferme ; la
   suivante démarre.

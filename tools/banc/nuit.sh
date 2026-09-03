@@ -38,7 +38,7 @@ LIMITE_SESSION_IDLE_SECS=600   # 10 min — agent bloqué + idle sans progrès
 PARTIES=""
 DIRECTOR="sonnet"
 TOURS=40
-SAVE="beyond-the-vale-of-madness"
+SAVE="banc-depart-beyond-the-vale-of-madness"
 TIMEOUT_TOUR_MIN=6
 FIN_A=""
 DRYRUN=0
@@ -144,6 +144,28 @@ print(saves_dir())
 " 2>/dev/null)/$SAVE"
 if [ ! -d "$SAVE_SRC_DIR" ]; then
   echo "REFUS : save source introuvable ($SAVE_SRC_DIR)." >&2
+  exit 1
+fi
+
+# Une nuit ne joue JAMAIS une partie en cours — seulement une save de DÉPART
+# gelée (tour 0, scène d'ouverture, personnage créé — Issue #275/I-465,
+# constat #274 : la save `beyond-the-vale-of-madness` copiée jusqu'ici était
+# la partie jouée jusqu'à la mort du personnage, prolongée en post-mortem).
+# `tools/banc/save-depart.py` fabrique cette save de départ une fois, hors
+# dépôt (D-224) ; ce garde refuse tout -Save qui ne serait pas à ce tour 0.
+SAVE_SRC_DIR_WIN="$(chemin_windows_depuis_bash "$SAVE_SRC_DIR")"
+NB_TOURS_SAVE="$(cd "$REPO_ROOT" && python -c "
+import sys
+sys.path.insert(0, '.')
+from coderain.memory import MemoryStore
+print(len(MemoryStore(r'$SAVE_SRC_DIR_WIN').turns()))
+" 2>/dev/null)"
+if ! [[ "$NB_TOURS_SAVE" =~ ^[0-9]+$ ]]; then
+  echo "REFUS : impossible de lire le nombre de tours de la save '$SAVE' ($SAVE_SRC_DIR)." >&2
+  exit 1
+fi
+if [ "$NB_TOURS_SAVE" -ne 0 ]; then
+  echo "REFUS : la save '$SAVE' est au tour $NB_TOURS_SAVE, une nuit ne joue qu'une save de départ (tour 0)." >&2
   exit 1
 fi
 

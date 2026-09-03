@@ -10,7 +10,9 @@ set -u
 
 REPO=souhelmeskache/souffleur
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SAVE="${1:-beyond-the-vale-of-madness}"
+SAVE="${1:-banc-depart-beyond-the-vale-of-madness}"
+
+source "$REPO_ROOT/tools/banc/chemin-windows.sh"
 
 refus() {
   echo "REFUS : $1" >&2
@@ -47,6 +49,22 @@ from coderain.config import saves_dir
 print(saves_dir())
 " 2>/dev/null)/$SAVE"
 [ -d "$SAVE_SRC" ] || refus "save '$SAVE' introuvable ($SAVE_SRC)."
+
+# --- save de DÉPART gelée, tour 0 (#275/I-465) ------------------------------
+#
+# Une nuit ne joue jamais une partie en cours : la save source doit être au
+# tour 0 (transcript.md vierge), fabriquée par tools/banc/save-depart.py.
+# Même garde que nuit.sh (Issue #275) — vérifiée ici AUSSI pour échouer tôt,
+# avant même de tenter un lancement.
+SAVE_SRC_WIN="$(chemin_windows_depuis_bash "$SAVE_SRC")"
+NB_TOURS_SAVE="$(cd "$REPO_ROOT" && python -c "
+import sys
+sys.path.insert(0, '.')
+from coderain.memory import MemoryStore
+print(len(MemoryStore(r'$SAVE_SRC_WIN').turns()))
+" 2>/dev/null)"
+[[ "$NB_TOURS_SAVE" =~ ^[0-9]+$ ]] || refus "impossible de lire le nombre de tours de la save '$SAVE' ($SAVE_SRC)."
+[ "$NB_TOURS_SAVE" -eq 0 ] || refus "la save '$SAVE' est au tour $NB_TOURS_SAVE, une nuit ne joue qu'une save de départ (tour 0)."
 
 # --- envoi à blanc des deux gabarits (#263) ---------------------------------
 #
