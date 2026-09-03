@@ -324,6 +324,37 @@ if ($Reprise) {
 $AgentMj = "banc-mj"
 $AgentJoueur = "banc-joueur"
 
+# --- 2bis. Refus nommé si un agent du banc est déjà en vol (#271) ----------
+#
+# nuit N0 (02/09) : un `banc-joueur` survivant d'une partie précédente a fait
+# échouer `herdr agent start` pour la partie suivante avec un « échec de
+# herdr agent start » muet -- aucune indication que la cause est une
+# collision de nom. Vérifié ici, AVANT tout `pane split`/`agent start` (y
+# compris en -DryRun, pour que le refus soit testable sans rien lancer).
+function Verifie-AgentsNonEnVol {
+    param(
+        [Parameter(Mandatory)] [string]$HerdrExe,
+        [Parameter(Mandatory)] [string[]]$Noms
+    )
+    $listeJson = & $HerdrExe agent list 2>$null
+    if (-not $listeJson) { return }
+    try {
+        $listeData = $listeJson | ConvertFrom-Json
+    } catch {
+        return
+    }
+    $agents = $listeData.result.agents
+    if (-not $agents) { return }
+    foreach ($nom in $Noms) {
+        $existant = $agents | Where-Object { $_.name -eq $nom } | Select-Object -First 1
+        if ($existant) {
+            Write-Error "REFUS : agent $nom déjà en vol sur le pane $($existant.pane_id) — ferme-le avant de relancer (#271)."
+            exit 1
+        }
+    }
+}
+Verifie-AgentsNonEnVol -HerdrExe $HerdrExe -Noms @($AgentMj, $AgentJoueur)
+
 # --- 3. Dry-run : affiche le montage complet sans rien lancer --------------
 
 if ($DryRun) {

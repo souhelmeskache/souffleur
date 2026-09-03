@@ -89,12 +89,37 @@ if ! [[ "$TIMEOUT_TOUR_MIN" =~ ^[0-9]+$ ]] || [ "$TIMEOUT_TOUR_MIN" -lt 1 ]; the
 fi
 TIMEOUT_TOUR_SECS=$((TIMEOUT_TOUR_MIN * 60))
 
+# --- 0bis. Environnement propre (#271, nuit N0 02/09 : SAVES_DIR posée par
+# `herdr pane split --env` sur un pane de partie précédente survivait dans ce
+# pane et contaminait un relancement manuel de nuit.sh depuis celui-ci —
+# « REFUS : save source introuvable » sur une save d'une AUTRE partie).
+# NUIT_CONSERVER_SAVES_DIR : interne / tests uniquement (même convention que
+# -RunDir/-LancementCmd) — un test qui pointe délibérément SAVES_DIR vers une
+# Library jetable le pose à 1 pour que ce garde-fou ne l'efface pas. Non
+# documenté comme paramètre de nuit opérationnelle : usage réel : rien.
+if [ -n "${SAVES_DIR:-}" ] && [ -z "${NUIT_CONSERVER_SAVES_DIR:-}" ]; then
+  echo "AVERTISSEMENT : SAVES_DIR hérité de l'environnement du pane ($SAVES_DIR) — ignoré (#271)." >&2
+  unset SAVES_DIR
+fi
+
 # --- 1. Arborescence du run ----------------------------------------------
 
 DATE_JOUR="$(date '+%Y%m%d')"
 RUN_DIR="${RUN_DIR_OVERRIDE:-$REPO_ROOT/bench/nuit-$DATE_JOUR}"
 mkdir -p "$RUN_DIR"
 NUIT_MD="$RUN_DIR/nuit.md"
+
+# Sentinelle d'arrêt (#271) — testée à chaque poll de attendre_fichier ET
+# entre deux parties : Ctrl+C n'est pas garanti sous Windows (trap INT/TERM
+# jamais exercé depuis un shell Windows, constat nuit N0 02/09) ; créer l'un
+# de ces deux fichiers ARRÊTE la nuit proprement (nettoyage + nuit.md + sortie
+# 130), quel que soit le shell qui l'a lancée. STOP_FILE est scopé à ce run ;
+# PAUSE_FILE est le fichier déjà lu par lancer-lane.ps1 (tools/PAUSE).
+STOP_FILE="$RUN_DIR/STOP"
+PAUSE_FILE="$REPO_ROOT/tools/PAUSE"
+arret_demande() {
+  [ -f "$STOP_FILE" ] || [ -f "$PAUSE_FILE" ]
+}
 
 # Résolution SAVES_DIR de production (coderain/config.py) — jamais un chemin
 # en dur : respecte un override déjà en place sur ce poste.
@@ -141,13 +166,88 @@ fermer_panes() {
   # Ferme au mieux les deux panes de la partie courante — jamais fatal (un
   # pane déjà fermé, ou jamais ouvert, ne bloque pas la fermeture de
   # l'autre). "L'équivalent banc" de circuit.sh nettoyer (#255/I-243).
-  local p
+  #
+  # #271 (nuit N0 02/09, cas 1) : herdr refuse de fermer le DERNIER pane d'un
+  # workspace (`confirmation_required`, "closing this pane would close a
+  # worktree group") si le pane principal a déjà été fermé par ailleurs — ce
+  # script ne dépend plus d'un pane "principal" pour réussir : sur ce refus,
+  # on journalise et on bascule sur `/exit` envoyé à l'agent (voir
+  # envoyer_exit_agent) plutôt que de laisser l'agent en vol sans recours.
+  local p sortie nom
   for p in "$PANE_MJ_COURANT" "$PANE_JOUEUR_COURANT"; do
     [ -n "$p" ] || continue
-    herdr pane close "$p" >/dev/null 2>&1
+    if [ "$p" = "$PANE_MJ_COURANT" ]; then nom="banc-mj"; else nom="banc-joueur"; fi
+    sortie="$(herdr pane close "$p" 2>&1)"
+    if [ $? -ne 0 ]; then
+      if printf '%s' "$sortie" | grep -q 'confirmation_required'; then
+        echo "AVERTISSEMENT : pane close $p ($nom) refusé (confirmation_required, dernier pane du workspace, #271) — envoi /exit à la place." >&2
+      else
+        echo "AVERTISSEMENT : pane close $p ($nom) a échoué : $sortie" >&2
+      fi
+      envoyer_exit_agent "$nom"
+    fi
   done
   PANE_MJ_COURANT=""
   PANE_JOUEUR_COURANT=""
+}
+
+# "1" si l'agent nommé $1 apparaît dans `herdr agent list`, vide sinon.
+agent_existe() {
+  herdr agent list 2>/dev/null | grep -q "\"name\":\"$1\"" && echo 1
+}
+
+# Envoie /exit à un agent via `send-keys` — JAMAIS `agent prompt` depuis bash
+# (#271, annexe : "/exit" y est réécrit "C:/Program Files/Git/exit" par la
+# conversion de chemin MSYS de Git Bash). Une touche à la fois (aucun
+# argument ne commence par "/") pour ne déclencher aucune conversion.
+envoyer_exit_agent() {
+  local nom="$1"
+  herdr agent send-keys "$nom" slash e x i t enter >/dev/null 2>&1
+}
+
+# Attend (bornée 30 s, #271) que ni banc-mj ni banc-joueur n'apparaissent plus
+# dans `herdr agent list`. Rend 0 si les deux sont partis, 1 sinon.
+attendre_agents_fermes() {
+  local n=0 max=15   # 15 * 2s = 30s
+  while [ "$n" -lt "$max" ]; do
+    if [ -z "$(agent_existe banc-mj)" ] && [ -z "$(agent_existe banc-joueur)" ]; then
+      return 0
+    fi
+    n=$((n + 1))
+    sleep 2
+  done
+  return 1
+}
+
+# Ferme les panes de la partie courante ET VÉRIFIE que les agents ne
+# survivent plus (#271, nuit N0 02/09 cas 1 : un agent banc-joueur survivant
+# a fait échouer TOUTE partie suivante par collision de nom sur `agent
+# start`). Un agent survivant après `pane close` reçoit `/exit` puis une
+# dernière vérification ; s'il survit encore, la nuit s'arrête plutôt que de
+# risquer une partie suivante sur un nom déjà pris.
+fermer_et_verifier_agents() {
+  local partie_dir="$1" nn="$2"
+  fermer_panes
+  if attendre_agents_fermes; then
+    return 0
+  fi
+  echo "AVERTISSEMENT : agent(s) survivant(s) après fermeture des panes (#271) — envoi /exit." >&2
+  local nom
+  for nom in banc-mj banc-joueur; do
+    [ -n "$(agent_existe "$nom")" ] && envoyer_exit_agent "$nom"
+  done
+  if attendre_agents_fermes; then
+    return 0
+  fi
+  local survivants=""
+  for nom in banc-mj banc-joueur; do
+    [ -n "$(agent_existe "$nom")" ] && survivants="$survivants $nom"
+  done
+  ecrire_craquement "$partie_dir" "$nn" "nettoyage" \
+    "agent(s) non fermé(s) après pane close + /exit (#271) :$survivants"
+  RAISON_ARRET_NUIT="agent non fermé (partie $nn :$survivants)"
+  ecrire_nuit_md
+  exit 7
 }
 
 ecrire_craquement() {
@@ -192,15 +292,20 @@ limite_session_detectee() {
   done
 }
 
-# Attend qu'un fichier existe et soit non vide. Rend 0 (produit), 2 (partie
-# non applicable ici — inutilisé), 4 (timeout du tour, craquement LOCAL à la
-# partie), 5 (limite de session — arrêt de TOUTE la nuit, budget #260).
+# Attend qu'un fichier existe et soit non vide. Rend 0 (produit), 3 (arrêt
+# demandé — sentinelle STOP/PAUSE, #271), 4 (timeout du tour, craquement
+# LOCAL à la partie), 5 (limite de session — arrêt de TOUTE la nuit, budget
+# #260).
 attendre_fichier() {
   local fichier="$1"
   local n=0 bloque_polls=0
   local max_polls=$(( (TIMEOUT_TOUR_SECS + POLL_SECS - 1) / POLL_SECS ))
   local max_polls_bloque=$(( (LIMITE_SESSION_IDLE_SECS + POLL_SECS - 1) / POLL_SECS ))
   while [ ! -s "$fichier" ]; do
+    if arret_demande; then
+      echo "ARRÊT DEMANDÉ (fichier STOP/PAUSE détecté, #271)"
+      return 3
+    fi
     if [ -n "$(limite_session_detectee)" ]; then
       echo "LIMITE DE SESSION (texte détecté dans un pane)"
       return 5
@@ -374,7 +479,7 @@ jouer_partie() {
     ECHECS_LANCEMENT_CONSECUTIFS=$((ECHECS_LANCEMENT_CONSECUTIFS + 1))
     ecrire_craquement "$partie_dir" "00" "lancement" "$(tail -30 "$partie_dir/lancement.log")"
     craquements+=("craquement-lancement-00.md")
-    fermer_panes
+    fermer_et_verifier_agents "$partie_dir" "00"
     ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "${craquements[@]}"
     TABLE_PARTIES+=("| $pnn | $modele | 0 | N | $raison |")
     if [ "$ECHECS_LANCEMENT_CONSECUTIFS" -ge 2 ]; then
@@ -403,6 +508,7 @@ jouer_partie() {
       echo "=== partie $pnn tour $nn — go joueur $(date '+%H:%M:%S')"
       herdr agent prompt banc-joueur "go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md" >/dev/null 2>&1
       attendre_fichier "$partie_dir/action-$nn.md"; r=$?
+      if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; ecrire_nuit_md; exit 130; fi
       if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; fermer_panes; ecrire_nuit_md; exit 5; fi
       if [ "$r" -ne 0 ]; then
         raison="craquement-timeout"
@@ -416,6 +522,7 @@ jouer_partie() {
     fi
 
     attendre_fichier "$partie_dir/tour-$nn.md"; r=$?
+    if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; ecrire_nuit_md; exit 130; fi
     if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; fermer_panes; ecrire_nuit_md; exit 5; fi
     if [ "$r" -ne 0 ]; then
       raison="craquement-timeout"
@@ -451,7 +558,7 @@ jouer_partie() {
   fi
 
   echo "=== partie $pnn : fermeture des agents ==="
-  fermer_panes
+  fermer_et_verifier_agents "$partie_dir" "$pnn"
 
   ecrire_resume_run "$partie_dir" "$pnn" "$modele" "$tours_joues" "$fin_atteinte" "$raison" \
     $(( $(date +%s) - t0 )) "${craquements[@]}"
@@ -462,6 +569,12 @@ jouer_partie() {
 
 i=1
 while [ "$i" -le "$PARTIES" ]; do
+  if arret_demande; then
+    echo "=== ARRÊT DEMANDÉ (fichier STOP/PAUSE, #271) — nuit interrompue avant partie $i ==="
+    RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE)"
+    ecrire_nuit_md
+    exit 130
+  fi
   jouer_partie "$i"
   i=$((i + 1))
 done

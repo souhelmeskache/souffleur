@@ -57,6 +57,7 @@ def main() -> int:
         env = {
             **os.environ,
             "SAVES_DIR": str(lib_root / "saves"),
+            "NUIT_CONSERVER_SAVES_DIR": "1",  # #271, voir nuit_dryrun_test.py
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
         }
