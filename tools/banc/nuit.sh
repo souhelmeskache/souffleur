@@ -178,30 +178,49 @@ for d in "$RUN_DIR"/partie-*/; do
   START_INDEX=$((START_INDEX + 1))
 done
 
-# --- 1bis. Heure de fin -FinA (#276) -----------------------------------------
+# --- 1bis. Heure de fin -FinA (#276, revu en revue REFUS du 03/09) ----------
 #
-# FIN_A_EPOCH est résolue UNE FOIS ici, pour la date calendaire du jour de
-# lancement ($DATE_JOUR — même convention que l'absence de recalcul de
-# DATE_JOUR après minuit ailleurs dans ce script) : jamais recalculée pendant
-# la nuit, la comparaison en boucle (fin_a_atteinte) reste monotone même si
-# l'horloge franchit minuit pendant le run.
+# FIN_A_EPOCH est résolue UNE FOIS ici et jamais recalculée pendant la nuit
+# (la comparaison en boucle, fin_a_atteinte, reste monotone même si l'horloge
+# franchit minuit).
 #
-# Refus au lancement (« pas une nuit vide ») réservé au démarrage d'un run
-# FRAIS ($START_INDEX == 1, aucune partie déjà jouée dans ce $RUN_DIR
-# aujourd'hui) : un second appel du même jour qui CONTINUE un run dont
-# partie-01 existe déjà n'est pas une nuit vide même si -FinA est déjà
-# dépassée — il s'arrête proprement par le chemin normal (boucle des
-# parties, même code que STOP) plutôt que d'être refusé.
+# PROCHAINE OCCURRENCE, pas « aujourd'hui seulement » : si HH:MM est déjà
+# passée pour $DATE_JOUR (jour calendaire du lancement), la cible se résout
+# à DEMAIN plutôt que de refuser -- sinon le cas d'usage NOMINAL de l'Issue
+# (lancer nuit.cmd en soirée, -FinA 06:00 par défaut = 06:00 le LENDEMAIN
+# matin) refuserait tout lancement fait entre 06:00 et minuit, ce qui aurait
+# tué le but même de #276 (constat de revue REFUS du 03/09 sur la première
+# version, qui refusait aujourd'hui-seulement).
+#
+# Refus nommé (« pas une nuit vide ») réservé au seul cas qui reste
+# authentiquement dégénéré sous ce modèle « prochaine occurrence » (où,
+# sinon, aucune heure n'est jamais vraiment « passée » puisqu'elle bascule
+# toujours sur demain) : -FinA tombe EXACTEMENT sur la minute du lancement
+# ($NOW_HHMM == $FIN_A) -- fenêtre nulle, refusée SEULEMENT sur un run FRAIS
+# ($START_INDEX == 1, aucune partie encore jouée dans ce $RUN_DIR
+# aujourd'hui). Sur une continuation (partie-01 déjà là), ce même cas
+# n'est pas une nuit vide : la nuit s'arrête tout de suite par le chemin
+# normal (boucle des parties, même code que STOP) plutôt que d'être
+# refusée.
 FIN_A_EPOCH=""
 if [ -n "$FIN_A" ]; then
-  FIN_A_EPOCH="$(date -d "${DATE_JOUR:0:4}-${DATE_JOUR:4:2}-${DATE_JOUR:6:2} $FIN_A:00" +%s 2>/dev/null)"
-  if [ -z "$FIN_A_EPOCH" ]; then
+  FIN_A_EPOCH_JOUR="$(date -d "${DATE_JOUR:0:4}-${DATE_JOUR:4:2}-${DATE_JOUR:6:2} $FIN_A:00" +%s 2>/dev/null)"
+  if [ -z "$FIN_A_EPOCH_JOUR" ]; then
     echo "REFUS : -FinA '$FIN_A' n'a pas pu être résolue en heure locale." >&2
     exit 1
   fi
-  if [ "$START_INDEX" -eq 1 ] && [ "$(date +%s)" -ge "$FIN_A_EPOCH" ]; then
-    echo "REFUS : -FinA $FIN_A déjà passée aujourd'hui ($(date '+%H:%M')) -- pas de nuit vide." >&2
-    exit 1
+  NOW_EPOCH="$(date +%s)"
+  NOW_HHMM="$(date '+%H:%M')"
+  if [ "$NOW_HHMM" = "$FIN_A" ]; then
+    if [ "$START_INDEX" -eq 1 ]; then
+      echo "REFUS : -FinA $FIN_A atteinte au lancement même (fenêtre nulle) -- pas de nuit vide." >&2
+      exit 1
+    fi
+    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"
+  elif [ "$NOW_EPOCH" -ge "$FIN_A_EPOCH_JOUR" ]; then
+    FIN_A_EPOCH=$((FIN_A_EPOCH_JOUR + 86400))
+  else
+    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"
   fi
 fi
 
@@ -498,10 +517,23 @@ ecrire_nuit_md() {
 # lancement répété, agent non fermé, budget -Parties atteint) — l'étend
 # `tools/banc/metriques_nuit.py`, ne duplique rien (§ « Livrer » 2 de #276).
 ecrire_rapport_nuit() {
-  local duree_s="$1"
-  python "$METRIQUES_PY" "$RUN_DIR" rapport \
-    "${RAISON_ARRET_NUIT:-budget -Parties atteint}" "$duree_s" "$LIMITE_SESSION_TOUCHEE" \
-    > "$RUN_DIR/rapport-nuit.md" 2>/dev/null
+  local duree_s="$1" err_path="$RUN_DIR/.rapport-nuit.err"
+  if ! python "$METRIQUES_PY" "$RUN_DIR" rapport \
+       "${RAISON_ARRET_NUIT:-budget -Parties atteint}" "$duree_s" "$LIMITE_SESSION_TOUCHEE" \
+       > "$RUN_DIR/rapport-nuit.md" 2>"$err_path"; then
+    # Jamais une erreur silencieuse (même discipline que deposer_rapport_201
+    # ci-dessous) : rapport-nuit.md nomme l'échec plutôt que d'être vide.
+    {
+      echo "# rapport-nuit — ÉCHEC DE CALCUL"
+      echo
+      echo "Le calcul de $METRIQUES_PY a échoué -- métriques indisponibles."
+      echo
+      echo '```'
+      cat "$err_path" 2>/dev/null
+      echo '```'
+    } > "$RUN_DIR/rapport-nuit.md"
+  fi
+  rm -f "$err_path"
 }
 
 # Poste rapport-nuit.md en commentaire sur l'Issue #201 (fiche du banc) via

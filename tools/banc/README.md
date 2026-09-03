@@ -269,16 +269,25 @@ tenter un lancement.
   démarre après cette heure ; une partie en cours s'arrête proprement au
   tour suivant, par le **même chemin que STOP** (fermeture et vérification
   des agents, `resume-run.md`, `nuit.md`, sortie **130**), raison d'arrêt
-  « heure de fin atteinte (HH:MM) ». `-FinA` vise l'heure indiquée du **jour
-  calendaire du lancement** (même convention que `DATE_JOUR`, résolue une
-  seule fois, jamais recalculée après minuit) — lancer une nuit avec `-FinA`
-  déjà passée aujourd'hui est un **REFUS** (exit 1, avant toute écriture)
-  sur un run FRAIS (aucune partie encore jouée ce jour dans le `-RunDir`
-  visé) : « pas une nuit vide ». Un second appel du même jour qui CONTINUE
-  un run déjà entamé (`partie-01` déjà présente) n'est, lui, jamais refusé
-  même si `-FinA` est déjà dépassée : il s'arrête proprement (exit 130)
-  avant la partie suivante plutôt que d'être refusé, puisque le run n'est
-  pas vide.
+  « heure de fin atteinte (HH:MM) ».
+  **Résolution : PROCHAINE occurrence de HH:MM, pas « aujourd'hui
+  seulement »** — si l'heure est déjà passée pour le jour calendaire du
+  lancement, la cible se résout à DEMAIN (résolue une seule fois au
+  lancement, jamais recalculée après minuit pendant le run). C'est ce qui
+  permet le cas d'usage nominal : `nuit.cmd` lancé en soirée avec le défaut
+  `-FinA 06:00` vise 06:00 le **lendemain matin**, pas un refus immédiat —
+  une première version qui résolvait « aujourd'hui seulement » refusait tout
+  lancement fait entre 06:00 et minuit, ce qui aurait tué le but de #276
+  (corrigé en revue REFUS du 03/09).
+  **Refus nommé** (exit 1, avant toute écriture) réservé au seul cas
+  authentiquement dégénéré sous ce modèle (où, sinon, aucune heure n'est
+  jamais « passée ») : `-FinA` tombe **exactement sur la minute du
+  lancement** (fenêtre nulle) sur un run FRAIS (aucune partie encore jouée
+  ce jour dans le `-RunDir` visé) — « pas une nuit vide ». Un second appel
+  du même jour qui CONTINUE un run déjà entamé (`partie-01` déjà présente)
+  n'est, lui, jamais refusé sur ce même cas : il s'arrête proprement
+  (exit 130) avant la partie suivante plutôt que d'être refusé, puisque le
+  run n'est pas vide.
 - `-DryRun` : crée toute l'arborescence (copies de save + fixture) et les
   `resume-run.md`/`nuit.md`, mais ne lance AUCUN agent — sert au test de
   forme (`tests/nuit_dryrun_test.py`) et à vérifier un montage sans
@@ -367,6 +376,11 @@ rapport <raison_arret> <duree_totale_s> <limite_session:oui|non>` — étend
 - jusqu'à trois pointeurs (chemins) vers les `tour-NN.md` des craquements les
   plus récents du run (le craquement lui-même si le `tour-NN.md`
   correspondant n'existe pas).
+
+Si le calcul (`metriques_nuit.py … rapport …`) échoue, `rapport-nuit.md`
+n'est **jamais** silencieusement vide : `ecrire_rapport_nuit` (nuit.sh) y
+écrit alors un en-tête « ÉCHEC DE CALCUL » suivi de la sortie d'erreur —
+même discipline que le dépôt `gh` ci-dessous, jamais une erreur avalée.
 
 **Dépôt sur l'Issue #201** (`deposer_rapport_201` dans `nuit.sh`, via `gh`) :
 tenté à chaque fin de nuit, jamais en `-DryRun`. Statut toujours cité dans

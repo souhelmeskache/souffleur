@@ -72,20 +72,25 @@ def main() -> int:
         assert not run_dir_fmt.exists(), "aucun dossier ne doit être créé sur un -FinA invalide"
         print("1) -FinA '6h00' (format invalide) : refus 1, aucun dossier créé")
 
-        # --- 2. heure déjà passée AU LANCEMENT (run frais) -> REFUS 1 ------
-        heure_passee = (datetime.now() - timedelta(minutes=5)).strftime("%H:%M")
+        # --- 2. -FinA == minute EXACTE du lancement (run frais) -> REFUS 1 --
+        # (#276, revu en revue REFUS 03/09) : -FinA se résout à la PROCHAINE
+        # occurrence de HH:MM (demain si déjà passée aujourd'hui, cf. cas 6
+        # ci-dessous) -- le seul cas encore refusable est la fenêtre nulle
+        # (minute exacte du lancement), pas "n'importe quelle heure passée".
+        heure_exacte = datetime.now().strftime("%H:%M")
         run_dir_passee = tmp / "run-passee"
         p = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug,
-             "-RunDir", str(run_dir_passee), "-DryRun", "-FinA", heure_passee],
+             "-RunDir", str(run_dir_passee), "-DryRun", "-FinA", heure_exacte],
             capture_output=True, text=True, timeout=60, env=env,
         )
         assert p.returncode == 1, (
-            f"-FinA {heure_passee} déjà passée : attendu 1, reçu {p.returncode}\n"
+            f"-FinA {heure_exacte} == minute du lancement : attendu 1, reçu {p.returncode}\n"
             f"stdout={p.stdout}\nstderr={p.stderr}"
         )
         assert not (run_dir_passee / "partie-01").exists(), "aucune partie ne doit être jouée"
-        print(f"2) -FinA {heure_passee} déjà passée (run frais) : refus 1, pas de nuit vide")
+        print(f"2) -FinA {heure_exacte} == minute exacte du lancement (run frais) : "
+              "refus 1, pas de nuit vide")
 
         # --- 3. heure future : -DryRun tourne normalement, rapport-nuit.md
         # écrit sur l'arrêt normal (budget -Parties atteint) -------------------
@@ -109,8 +114,9 @@ def main() -> int:
         print("3) -FinA future, arrêt normal : rapport-nuit.md écrit, statut dépôt cité dans nuit.md")
 
         # --- 4. arrêt ENTRE DEUX PARTIES : run déjà entamé (continuation),
-        # -FinA déjà passée au second appel -> exit 130, rapport-nuit.md écrit,
-        # PAS de partie-02 ---------------------------------------------------
+        # -FinA == minute exacte au second appel -> exit 130, rapport-nuit.md
+        # écrit, PAS de partie-02 (même cas dégénéré que le cas 2, mais sur
+        # une continuation : jamais un refus, arrêt propre) -----------------
         run_dir_cont = tmp / "run-continuation"
         p1 = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug,
@@ -120,23 +126,48 @@ def main() -> int:
         assert p1.returncode == 0, f"premier appel : {p1.returncode}\n{p1.stderr}"
         assert (run_dir_cont / "partie-01").is_dir()
 
-        heure_passee2 = (datetime.now() - timedelta(minutes=1)).strftime("%H:%M")
+        heure_exacte2 = datetime.now().strftime("%H:%M")
         p2 = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "3", "-Save", slug,
-             "-RunDir", str(run_dir_cont), "-DryRun", "-FinA", heure_passee2],
+             "-RunDir", str(run_dir_cont), "-DryRun", "-FinA", heure_exacte2],
             capture_output=True, text=True, timeout=60, env=env,
         )
         assert p2.returncode == 130, (
-            f"continuation, -FinA déjà passée : attendu 130, reçu {p2.returncode}\n"
+            f"continuation, -FinA == minute exacte : attendu 130, reçu {p2.returncode}\n"
             f"stdout={p2.stdout}\nstderr={p2.stderr}"
         )
         assert not (run_dir_cont / "partie-02").exists(), "aucune partie-02 -- arrêt avant"
         contenu = (run_dir_cont / "nuit.md").read_text(encoding="utf-8")
-        assert "heure de fin atteinte" in contenu and heure_passee2 in contenu, contenu
+        assert "heure de fin atteinte" in contenu and heure_exacte2 in contenu, contenu
         rapport_cont = (run_dir_cont / "rapport-nuit.md").read_text(encoding="utf-8")
         assert "heure de fin atteinte" in rapport_cont, rapport_cont
-        print("4) run déjà entamé + -FinA déjà passée au relancement : arrêt AVANT partie-02 "
-              "(exit 130), pas un refus -- rapport-nuit.md et nuit.md le citent")
+        print("4) run déjà entamé + -FinA == minute exacte au relancement : arrêt AVANT "
+              "partie-02 (exit 130), pas un refus -- rapport-nuit.md et nuit.md le citent")
+
+        # --- 4bis. LE POINT CORRIGÉ EN REVUE (03/09) : -FinA déjà passée de
+        # PLUSIEURS HEURES sur un run FRAIS ne doit JAMAIS refuser -- c'est
+        # exactement le cas d'usage nominal de #276 (nuit.cmd lancé en
+        # soirée, -FinA 06:00 par défaut déjà "passée" pour aujourd'hui) :
+        # la cible se résout à DEMAIN, la nuit tourne normalement -----------
+        heure_passee_loin = (datetime.now() - timedelta(hours=2)).strftime("%H:%M")
+        run_dir_soir = tmp / "run-soir"
+        p = subprocess.run(
+            [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug,
+             "-RunDir", str(run_dir_soir), "-DryRun", "-FinA", heure_passee_loin],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        assert p.returncode == 0, (
+            f"-FinA {heure_passee_loin} (passée de 2h, run frais) NE DOIT PAS être "
+            f"refusée -- se résout à demain (cas d'usage nominal #276) : reçu "
+            f"{p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}"
+        )
+        assert (run_dir_soir / "partie-01").is_dir(), "la partie doit être jouée normalement"
+        rapport_soir = (run_dir_soir / "rapport-nuit.md").read_text(encoding="utf-8")
+        assert "budget -Parties atteint" in rapport_soir, (
+            f"arrêt attendu sur budget -Parties, pas sur heure de fin : {rapport_soir}"
+        )
+        print(f"4bis) -FinA {heure_passee_loin} (passée de 2h, run frais) : PAS de refus -- "
+              "résolue à demain, nuit jouée normalement (correctif revue REFUS 03/09)")
 
         # --- 5. arrêt AU TOUR SUIVANT (partie en cours) : -LancementCmd
         # "true" (lancement réussi, aucun agent réel), -FinA atteinte pendant
