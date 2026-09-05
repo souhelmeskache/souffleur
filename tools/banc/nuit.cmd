@@ -41,11 +41,21 @@ if errorlevel 1 (
 
 echo.
 echo === garde : prerequis + rien en vol ===
-"%GITBASH%" tools/banc/verifier-avant-nuit.sh
-if errorlevel 1 (
+set "GARDE_LOG=%TEMP%\verifier-avant-nuit-%RANDOM%.log"
+"%GITBASH%" tools/banc/verifier-avant-nuit.sh > "%GARDE_LOG%" 2>&1
+set "GARDE_RC=%ERRORLEVEL%"
+type "%GARDE_LOG%"
+if %GARDE_RC% neq 0 (
   echo REFUS : la garde a echoue -- voir le message ci-dessus.
+  del "%GARDE_LOG%" >nul 2>&1
   goto fin_erreur
 )
+rem #292 -- une lane en vol n'est plus un REFUS mais un AVERTISSEMENT :
+rem transmis a nuit.sh (variable d'environnement heritee par le process
+rem Git Bash enfant) pour etre repris dans nuit.md.
+set "AVERTISSEMENT_PRE_NUIT="
+for /f "delims=" %%L in ('findstr /B "AVERTISSEMENT" "%GARDE_LOG%" 2^>nul') do set "AVERTISSEMENT_PRE_NUIT=%%L"
+del "%GARDE_LOG%" >nul 2>&1
 
 set "NUIT_ARGS=%*"
 if "%NUIT_ARGS%"=="" set "NUIT_ARGS=-Director sonnet -FinA 06:00"

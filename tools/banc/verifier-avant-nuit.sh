@@ -102,21 +102,26 @@ if [ "$GARDE_ENVOI_RC" -ne 0 ]; then
   refus "envoi à blanc des gabarits en échec — $GARDE_ENVOI_JSON"
 fi
 
-# --- rien en vol : agents lane-*/revue-* (circuit.sh), PR ouvertes ---------
-agents_en_vol="$(herdr agent list 2>/dev/null | tr '{' '\n' \
-  | grep -oE '"name":"(lane|revue)-[0-9]+"' | sort -u | tr '\n' ' ')"
-[ -z "$agents_en_vol" ] || refus "agent(s) de circuit en vol : $agents_en_vol — attends la fin ou nettoie (circuit.sh nettoyer)."
-
-# --- rien en vol : agent(s) du banc lui-même (#282) -------------------------
+# --- rien en vol : lane(s) en avertissement, agent(s) du banc en REFUS -----
 #
-# Un banc-mj/banc-joueur (ou leur forme suffixée par paire "banc-mj-NN",
-# nuit.sh -Paires > 1, #282) survivant d'une nuit précédente ferait échouer
-# `herdr agent start` de la nuit qui démarre par collision de nom (#271,
-# déjà constaté en séquentiel) — refusé ICI, avant tout lancement, plutôt
-# que de laisser chaque partie craquer une à une au lancement.
-agents_banc_en_vol="$(herdr agent list 2>/dev/null | tr '{' '\n' \
-  | grep -oE '"name":"banc-(mj|joueur)(-[0-9]+)?"' | sort -u | tr '\n' ' ')"
-[ -z "$agents_banc_en_vol" ] || refus "agent(s) du banc déjà en vol : $agents_banc_en_vol — ferme-les (herdr pane close / /exit) avant de relancer une nuit."
+# Direction Souhel du 05/09 (#292) : une lane `lane-*`/`revue-*` (circuit.sh)
+# en vol est l'état normal du poste, le jour comme la nuit — elle vit dans
+# son propre worktree et ses agents portent d'autres noms ; elle n'entre
+# plus en collision avec une nuit et n'est plus refusée, seulement signalée.
+# Seul un banc-mj/banc-joueur (ou leur forme suffixée par paire
+# "banc-mj-NN", nuit.sh -Paires > 1, #282) survivant d'une nuit précédente
+# entre réellement en collision : `herdr agent start` de la nuit qui démarre
+# échouerait par collision de nom (#271, déjà constaté en séquentiel) —
+# refusé ICI, avant tout lancement, plutôt que de laisser chaque partie
+# craquer une à une au lancement. Classification déléguée à
+# verifier-agents-en-vol.sh (extrait pour être testable indépendamment de
+# herdr — tests/verifier_agents_en_vol_test.py).
+SORTIE_AGENTS_EN_VOL="$(herdr agent list 2>/dev/null | "$REPO_ROOT/tools/banc/verifier-agents-en-vol.sh" 2>&1)"
+AGENTS_EN_VOL_RC=$?
+if [ "$AGENTS_EN_VOL_RC" -ne 0 ]; then
+  refus "${SORTIE_AGENTS_EN_VOL#REFUS : }"
+fi
+[ -z "$SORTIE_AGENTS_EN_VOL" ] || echo "$SORTIE_AGENTS_EN_VOL"
 
 prs_ouvertes="$(gh pr list -R "$REPO" --json number --jq 'length' 2>/dev/null || echo '')"
 if [ -n "$prs_ouvertes" ] && [ "$prs_ouvertes" != "0" ]; then

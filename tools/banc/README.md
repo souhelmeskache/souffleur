@@ -229,9 +229,14 @@ cmd.exe), **sans ouvrir Claude Code**. Résout Git Bash lui-même (pas de
 dépendance au PATH pour bash), reste ouverte le temps de la nuit, et
 enchaîne : `git pull --ff-only` → garde de prérequis + « rien en vol »
 (`verifier-avant-nuit.sh` : herdr joignable, `claude`/`gh` présents, save
-présente, aucun agent `lane-*`/`revue-*` de circuit.sh NI `banc-mj`/
-`banc-joueur` (forme nue ou suffixée par paire `banc-mj-N`, #282) déjà en
-vol, aucune PR ouverte, envoi à blanc des deux gabarits rendus vers un
+présente, agent(s) du banc `banc-mj`/`banc-joueur` (forme nue ou suffixée
+par paire `banc-mj-N`, #282) déjà en vol → REFUS (collision de nom réelle,
+#271/#282) ; lane(s) `lane-*`/`revue-*` de circuit.sh en vol →
+AVERTISSEMENT informatif seulement, repris dans la sortie et dans
+`nuit.md` (classification déléguée à `verifier-agents-en-vol.sh` — direction
+Souhel du 05/09, #292 : les parties tournent désormais en parallèle des
+lanes, une lane vit dans son propre worktree et ne collisionne plus avec la
+nuit) ; aucune PR ouverte ; envoi à blanc des deux gabarits rendus vers un
 agent inexistant — #263,
 `tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
 l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →

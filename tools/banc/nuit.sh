@@ -292,6 +292,11 @@ PANE_JOUEUR_COURANT=""
 PARTIE_DIR_COURANTE=""
 DEBUT_NUIT=$(date +%s)
 RAISON_ARRET_NUIT=""
+AVERTISSEMENT_PRE_NUIT="${AVERTISSEMENT_PRE_NUIT:-}"  # #292 -- avertissement
+                                                       # (ex. lane en vol) de
+                                                       # verifier-avant-nuit.sh,
+                                                       # transmis par nuit.cmd,
+                                                       # reporté dans nuit.md.
 LIMITE_SESSION_TOUCHEE="non"   # #276 rapport-nuit.md — "oui" si sortie 5
 DEPOT_RAPPORT_STATUT=""        # #276 — statut du dépôt sur l'Issue #201
 
@@ -640,6 +645,12 @@ ecrire_nuit_md() {
     echo
     echo "Durée totale : ${duree_s}s"
     echo "Raison d'arrêt de la nuit : ${RAISON_ARRET_NUIT:-budget -Parties atteint}"
+    if [ -n "$AVERTISSEMENT_PRE_NUIT" ]; then
+      echo
+      echo "## Avertissements"
+      echo
+      echo "$AVERTISSEMENT_PRE_NUIT"
+    fi
     echo
     echo "## Parties"
     echo
