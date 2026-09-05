@@ -1,9 +1,11 @@
 #!/bin/bash
 # tools/banc/verifier-avant-nuit.sh — garde avant de lancer une nuit (#260,
 # complément cadrage nuit.cmd) : prérequis (herdr joignable, claude/gh
-# présents, save présente) + « rien en vol » (aucun agent lane-*/revue-* de
-# circuit.sh, aucune PR ouverte sur le dépôt). Sortie non nulle et message
-# clair sur REFUS — jamais un lancement à l'aveugle.
+# présents, save présente) + « rien en vol » (un agent banc-mj/banc-joueur
+# survivant d'une nuit précédente REFUSE ; une lane-*/revue-* de circuit.sh
+# en vol ou une PR ouverte sur le dépôt sont l'état normal du poste et sont
+# seulement signalées en AVERTISSEMENT, #292/#297). Sortie non nulle et
+# message clair sur REFUS — jamais un lancement à l'aveugle.
 #
 # Usage : tools/banc/verifier-avant-nuit.sh [save-slug]
 set -u
@@ -123,10 +125,16 @@ if [ "$AGENTS_EN_VOL_RC" -ne 0 ]; then
 fi
 [ -z "$SORTIE_AGENTS_EN_VOL" ] || echo "$SORTIE_AGENTS_EN_VOL"
 
-prs_ouvertes="$(gh pr list -R "$REPO" --json number --jq 'length' 2>/dev/null || echo '')"
-if [ -n "$prs_ouvertes" ] && [ "$prs_ouvertes" != "0" ]; then
-  refus "$prs_ouvertes PR ouverte(s) sur $REPO — circuit pas au repos."
-fi
+# --- PR(s) ouverte(s) sur le dépôt : avertissement, pas un refus (#297) ----
+#
+# Direction Souhel du 05/09 (D-280, #292) : les parties tournent en
+# parallèle du circuit de code — une PR ouverte est l'état normal du dépôt
+# et n'entre pas en collision avec une nuit. #292/PR #293 n'avait converti
+# que le refus « lane en vol » ; celui-ci (PR ouverte) restait un refus,
+# d'où cette fiche autoportante (#297).
+SORTIE_PRS_OUVERTES="$(gh pr list -R "$REPO" --json number --jq 'length' 2>/dev/null \
+  | "$REPO_ROOT/tools/banc/verifier-prs-ouvertes.sh")"
+[ -z "$SORTIE_PRS_OUVERTES" ] || echo "$SORTIE_PRS_OUVERTES"
 
 echo "OK : prérequis satisfaits, rien en vol (save '$SAVE')."
 exit 0
