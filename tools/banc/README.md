@@ -129,6 +129,29 @@ distincts, et un seul est piégeux :
   `tests/verifier_liste_blanche_nuit_test.py` cas 5 (la garde, chemin `/c/…`
   simulé — reproduit le défaut #270 sans dépendre d'un vrai poste cassé).
 
+## UTF-8 garanti, quel que soit le terminal (#279)
+
+Sous Windows, `sys.stdout`/`sys.stderr` de Python sont en cp1252 hors
+terminal UTF-8 explicite (même défaut que la frontière bash ⊥ Windows
+ci-dessus). Nuit du 03/09 : `metriques_nuit.py` a levé `UnicodeEncodeError`
+sur le caractère « ⊥ » du rapport (position hors table cp1252), faisant
+tomber `rapport-nuit.md` en trace d'erreur au lieu du rapport — même famille
+que le mojibake déjà vu sous PowerShell 5.1 (H-753 §4).
+
+**Ceinture et bretelles**, les deux systématiques plutôt que l'une ou
+l'autre :
+- Chaque script du banc qui imprime (`metriques_nuit.py`,
+  `extraire_prose.py`, `save-depart.py`) force `sys.stdout`/`sys.stderr` en
+  UTF-8 en tête de fichier (`reconfigure(encoding="utf-8")`, protégé contre
+  un flux qui n'en dispose pas, ex. capturé par un test).
+- `nuit.sh` exporte `PYTHONIOENCODING=utf-8` en tête — protège aussi tout
+  script tiers/futur appelé depuis là sans ce garde.
+
+Test : `tests/metriques_nuit_test.py` cas 6, sous-processus avec
+`PYTHONIOENCODING` retiré de l'environnement, sur un rapport portant « ⊥ »
+et des accents — reproduit le défaut #279 sans le correctif (vérifié en
+local), sortie 0 et UTF-8 intact avec.
+
 ## Deux protections partagées avec `tools/lancer-lane.ps1` (#276, cadrage complémentaire 03/09)
 
 - **Refus nommé Haiku + mode `auto`** (`tools/refus-haiku-auto.ps1`,
@@ -212,9 +235,9 @@ vol, aucune PR ouverte, envoi à blanc des deux gabarits rendus vers un
 agent inexistant — #263,
 `tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
 l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
-`tools/banc/nuit.sh -Parties 4 -Director ab` (défauts — un argument passé au
-`.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd -Parties 8
--Director sonnet`) → affiche le chemin de `nuit.md` produit.
+`tools/banc/nuit.sh -Director sonnet -FinA 06:00` (défauts — un argument
+passé au `.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd
+-Parties 8 -Director ab`) → affiche le chemin de `nuit.md` produit.
 
 **Le matin** : ouvrir un fil et dire « lis la nuit » — Claude relit
 `bench/nuit-AAAAMMJJ/nuit.md` et les `resume-run.md` de chaque partie.
@@ -222,23 +245,33 @@ l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
 ### `nuit.sh` — paramètres
 
 ```
-tools/banc/nuit.sh -Parties N [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40]
+tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40]
                     [-Save <slug>] [-TimeoutTour <minutes>]
                     [-FinA HH:MM] [-DryRun]
 ```
 
-- `-Parties N` (obligatoire) : nombre de parties à jouer ce lancement — le
-  budget de la nuit. Plafond dur : aucune (N+1)-ème partie n'est lancée.
+- `-Parties N` : nombre de parties à jouer ce lancement — le budget de la
+  nuit. Plafond dur quand elle est donnée : aucune (N+1)-ème partie n'est
+  lancée. **Optionnelle depuis #279** (décision Souhel du 05/09, constat N1 :
+  `-Parties 4` a épuisé son budget à 01:30 sur les ~7h disponibles avant
+  `-FinA 06:00`, 4h30 perdues) : sans `-Parties`, la nuit boucle sans plafond
+  de parties, bornée par `-FinA` seule (en séquentiel comme en parallèle,
+  voir `-Paires` ci-dessous). `-Parties` et `-FinA` sont donc chacune
+  optionnelle, mais **au moins une des deux est requise** (REFUS nommé
+  sinon — sans borne, la nuit ne s'arrêterait jamais).
 - `-Paires N` (défaut 1, Issue #282) : N parties tournent SIMULTANÉMENT (N
   paires Director/joueur). Quand une paire finit sa partie, elle reprend la
-  suivante du budget `-Parties` — jusqu'à épuisement du budget ou `-FinA`.
-  Étanchéité par paire : agents suffixés (`banc-mj-1`/`banc-joueur-1`,
+  suivante du budget `-Parties` (ou continue sans plafond si `-Parties`
+  n'est pas donnée) — jusqu'à épuisement du budget ou `-FinA`. Étanchéité
+  par paire : agents suffixés (`banc-mj-1`/`banc-joueur-1`,
   `banc-mj-2`/`banc-joueur-2`, ... — jamais de collision de nom, #271), sa
-  propre copie de save et son propre dossier `partie-NN` (déjà vrai avant
-  #282). `-Paires 1` (défaut) est le chemin séquentiel historique, INCHANGÉ
-  bit à bit. Voir « Limite connue : `.turn/` partagé » ci-dessous avant
-  d'utiliser `-Paires > 1`.
-- `-Director haiku|sonnet|ab` (défaut `sonnet`) : modèle du Director
+  propre copie de save, son propre dossier `partie-NN` et son propre `.turn/`
+  (déjà vrai avant #282 pour la save/`partie-NN` ; `.turn/` étanche depuis
+  #287, voir « Étanchéité de `.turn/` entre paires » ci-dessous). `-Paires 1`
+  (défaut) est le chemin séquentiel historique, INCHANGÉ bit à bit.
+- `-Director haiku|sonnet|ab` (défaut `sonnet` — décision Souhel #279,
+  mesure N1 : Haiku 0/2 parties finies, Sonnet 2/2 ; `ab` reste disponible
+  en option) : modèle du Director
   (agent MJ). `ab` alterne haiku/sonnet en commençant par haiku (N0 = 4
   parties : 2 et 2) — le casting de chaque partie est écrit dans son
   `resume-run.md`. Le joueur tourne toujours en haiku/low, le narrateur
@@ -431,9 +464,11 @@ rapport <raison_arret> <duree_totale_s> <limite_session:oui|non>` — étend
 `metriques_nuit.py`, ne duplique rien) :
 
 - module joué en tête du rapport (`Module : <titre>, <n> lieux, <n> PNJ`,
-  #281) — lu dans `save/module.json` + `locations.md`/`characters.md` de la
-  première partie qui en porte un ; « aucun » si absent, jamais une ligne
-  fantôme — pour que le vide se voie dans le rapport lui-même ;
+  #281 — remplace le stopgap `meta.json`/« ABSENT » posé par la décision
+  Souhel #279 en attendant cette issue) — lu dans `save/module.json` +
+  `locations.md`/`characters.md` de la première partie qui en porte un ;
+  « aucun » si absent, jamais une ligne fantôme — pour que le vide se voie
+  dans le rapport lui-même ;
 - parties finies / lancées, durée totale, raison d'arrêt ;
 - tours sans craquement par partie (médiane / min / max) ;
 - craquements par classe D-276 §4 (matériau / règle / Director / outillage)
@@ -532,22 +567,20 @@ tenté à chaque fin de nuit, jamais en `-DryRun`. Statut toujours cité dans
   partie vérifiée » ci-dessus.
 - **`130`** : interrompu (Ctrl+C, ou fichier `STOP`/`tools/PAUSE`).
 
-### Limite connue : `.turn/` partagé entre paires (#282)
+### Étanchéité de `.turn/` entre paires (#287, ferme le point dur laissé par #282)
 
-`.turn/` (`mcp_server.ROOT / ".turn"`, `coderain/mcp/narrateur.py` +
-`coderain/mcp/position_etat.py`) est un scratch d'assemblage de contexte de
-tour — `mcp_server.ROOT` se résout au dossier du fichier `mcp_server.py`,
-c'est-à-dire CE worktree, jamais par process/cwd/partie. En séquentiel
-(`-Paires 1`, un seul Director actif à la fois) ça ne collisionne jamais.
-Avec `-Paires > 1`, **N Directors concurrents dans le même worktree
-partagent le même `.turn/paquet-narrateur.md`** — un Director peut lire un
-paquet destiné à une AUTRE partie au même instant. `nuit.sh` avertit sur
-stderr dès `-Paires > 1` ; ce point dur n'est PAS résolu par #282 (isoler
-`.turn/` par partie demanderait de faire dépendre `mcp_server.ROOT` du cwd
-de l'agent, hors périmètre : aucune modification du moteur). `.turn/`
-n'est jamais relu au-delà du tour courant (scratch, jamais une source de
-vérité de la save) — le risque réel touche la PROSE narrée à un instant T
-d'une partie parallèle, pas une corruption de save ni de `transcript.md`.
+`.turn/` (`mcp_server._turn_dir()`, `coderain/mcp/narrateur.py` +
+`coderain/mcp/position_etat.py`) est le scratch d'assemblage de contexte de
+tour (`context.md`, `paquet-narrateur.md`). Il dérive désormais de la save
+CHARGÉE (`store.dir / ".turn"`), jamais de `mcp_server.ROOT` (qui se
+résout au dossier de `mcp_server.py`, donc au worktree entier — le défaut
+constaté par #282 : N Directors concurrents partageaient le même fichier).
+Chaque partie de nuit copie déjà sa propre save sous `partie-NN/save/`
+(`-Paires > 1`, #282) : `.turn/` vit donc SOUS ce dossier, un par partie,
+sans aucun changement au lanceur. `.turn/` n'est jamais relu au-delà du
+tour courant (scratch, jamais une source de vérité de la save). Test :
+`tests/turn_dir_etancheite_test.py` (deux saves synthétiques, écriture en
+alternance, contenus distincts sur disque, aucun croisement).
 
 ### Ce que la nuit ne fait pas
 

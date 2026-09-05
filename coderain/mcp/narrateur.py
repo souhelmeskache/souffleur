@@ -61,8 +61,10 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     paquet, ni `rendu_md` même en booléen de contenu — seulement le chemin,
     la taille, et les NOMS des sections écrites.
 
-    Le fichier est écrasé à chaque tour et vit hors de tout dossier de save
-    (même sentinel que `assemble_context_to_file` : `.turn/`)."""
+    Le fichier est écrasé à chaque tour et vit sous `.turn/` de la save
+    CHARGÉE (`mcp_server._turn_dir()`, Issue #287 — même sentinel que
+    `assemble_context_to_file`), jamais dans un dossier partagé par tout le
+    worktree."""
     store = mcp_server._require_store()
     if mcp_server._last_applied_events is None and not sans_mecanique:
         raise ValueError(
@@ -122,7 +124,7 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
         sections.append("Directive du Director")
 
     full = "\n\n".join(parts)
-    out_dir = mcp_server.ROOT / ".turn"
+    out_dir = mcp_server._turn_dir()
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "paquet-narrateur.md"
     out.write_text(full, encoding="utf-8")

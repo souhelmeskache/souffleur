@@ -75,11 +75,17 @@ def main() -> int:
         assert len(rapport["pires_craquements"]) == 2, rapport
         assert any(str(p2 / "craquement-timeout-03.md") == c for c in rapport["pires_craquements"]), rapport
         assert any(str(p1 / "tour-05.md") == c for c in rapport["pires_craquements"]), rapport
+        # aucune save/module.json dans ces parties synthétiques -> "aucun"
+        # (#281 : « Module : <titre>, <n> lieux, <n> PNJ », ou "aucun" —
+        # remplace le stopgap `module_titre`/"ABSENT" de #279, qui attendait
+        # explicitement cette issue).
+        assert rapport["module"] is None, rapport
         print("2) calculer_rapport() sur arborescence synthétique : classes, A/B Director, "
-              "pointeurs pires craquements OK")
+              "pointeurs pires craquements, module OK")
 
         rendu = metriques_nuit.formater_rapport_markdown(rapport)
-        for attendu in ("Parties finies / lancées : 1 / 2", "Raison d'arrêt : budget -Parties atteint",
+        for attendu in ("Module : aucun", "Parties finies / lancées : 1 / 2",
+                         "Raison d'arrêt : budget -Parties atteint",
                          "director : 1", "non classé : 1", "haiku : tours moyens 4",
                          "Limite de session touchée : non"):
             assert attendu in rendu, f"'{attendu}' absent du rendu :\n{rendu}"

@@ -11,18 +11,29 @@
 # narrateur qu'ils spawnent — jamais dans ce script.
 #
 # Usage :
-#   tools/banc/nuit.sh -Parties N [-Paires N] [-Director haiku|sonnet|ab]
+#   tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab]
 #                       [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>]
 #                       [-FinA HH:MM] [-DryRun]
+#   -Parties ou -FinA requis (au moins un des deux) -- sans -Parties, la nuit
+#   boucle sans plafond de parties, bornée par -FinA seule (Souhel #279).
 #
 # -Paires N (défaut 1, Issue #282) : N parties tournent SIMULTANÉMENT (N
-# paires Director/joueur, N copies de save, N `.turn/` -- voir « limite
-# connue » ci-dessous) ; quand l'une finit, la suivante du budget -Parties
-# prend sa place, jusqu'à épuisement du budget ou -FinA.
+# paires Director/joueur, N copies de save, N `.turn/` étanches -- Issue
+# #287) ; quand l'une finit, la suivante du budget -Parties prend sa place,
+# jusqu'à épuisement du budget ou -FinA.
 #
 # Voir tools/banc/README.md pour le détail des sorties, codes de sortie, et
 # « ce que la nuit ne fait pas ».
 set -u
+
+# Ceinture et bretelles (Issue #279) : chaque script Python du banc force déjà
+# UTF-8 sur stdout/stderr lui-même (reconfigure), mais cet export protège
+# aussi tout script tiers/futur appelé depuis ici sans ce garde — sous
+# Windows, sys.stdout est en cp1252 hors terminal UTF-8 explicite, et un
+# caractère hors cp1252 (« », accents) dans une sortie faisait planter le
+# script avant même d'écrire quoi que ce soit (UnicodeEncodeError, nuit du
+# 03/09).
+export PYTHONIOENCODING=utf-8
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LANCEUR_PS1="$REPO_ROOT/tools/lancer-banc-fumee.ps1"
@@ -53,7 +64,8 @@ LANCEMENT_CMD_OVERRIDE=""
 
 usage() {
   cat >&2 <<EOF
-Usage : $0 -Parties N [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+Usage : $0 [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+       -Parties ou -FinA requis (au moins un des deux).
 EOF
 }
 
@@ -83,8 +95,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if ! [[ "$PARTIES" =~ ^[0-9]+$ ]] || [ "$PARTIES" -lt 1 ]; then
-  echo "REFUS : -Parties doit être un entier >= 1 (reçu '$PARTIES')." >&2
+# -Parties devient optionnel (Souhel #279, constat N1 : -Parties 4 a fini la
+# nuit à 01:30 pour un -FinA 06:00, 4h30 perdues) -- SI -FinA est donnée, la
+# nuit boucle sans plafond de parties, bornée par -FinA seule (§ 6 ci-dessous
+# et fin_a_atteinte()). Sans aucun des deux, la nuit n'aurait aucune borne
+# d'arrêt : refusé nommément.
+if [ -n "$PARTIES" ]; then
+  if ! [[ "$PARTIES" =~ ^[0-9]+$ ]] || [ "$PARTIES" -lt 1 ]; then
+    echo "REFUS : -Parties doit être un entier >= 1 (reçu '$PARTIES')." >&2
+    usage; exit 1
+  fi
+elif [ -z "$FIN_A" ]; then
+  echo "REFUS : -Parties ou -FinA requis (au moins un des deux) -- sans borne, la nuit ne s'arrêterait jamais." >&2
   usage; exit 1
 fi
 if ! [[ "$PAIRES" =~ ^[0-9]+$ ]] || [ "$PAIRES" -lt 1 ]; then
@@ -201,23 +223,12 @@ if [ "$MODULE_OK" != "1" ]; then
   exit 1
 fi
 
-# Limite connue (#282) : `.turn/` (mcp_server.ROOT / ".turn", coderain/mcp/
-# narrateur.py + position_etat.py) est un scratch d'assemblage de contexte
-# écrit par CHAQUE agent Director qui tourne dans CE worktree, quelle que
-# soit la partie qu'il joue -- mcp_server.ROOT se résout au dossier du
-# fichier mcp_server.py, PAS par process/cwd/partie. En séquentiel (-Paires
-# 1, un seul Director actif à la fois) ça ne collisionne jamais. Avec
-# -Paires > 1, N Directors concurrents peuvent s'écraser ce fichier entre
-# eux (paquet-narrateur.md) -- point dur nommé, non résolu par cette lane
-# (isoler `.turn/` par partie demanderait de faire dépendre mcp_server.ROOT
-# du cwd de l'agent, hors périmètre #282 : aucune modification du moteur).
-# Le contenu de `.turn/` n'est jamais relu au-delà du tour courant (scratch,
-# jamais une source de vérité de la save) -- le risque réel est qu'un
-# Director lise un paquet destiné à une AUTRE partie au même instant, pas
-# une corruption de save.
-if [ "$PAIRES" -gt 1 ]; then
-  echo "AVERTISSEMENT (#282) : -Paires $PAIRES — .turn/ (scratch narrateur, mcp_server.ROOT) est PARTAGÉ entre toutes les paires de ce worktree, voir tools/banc/README.md § « Limite connue »." >&2
-fi
+# `.turn/` (mcp_server._turn_dir(), coderain/mcp/narrateur.py +
+# position_etat.py) est le scratch d'assemblage de contexte de CHAQUE
+# Director -- Issue #287 : il dérive de la save CHARGÉE (store.dir), jamais
+# de mcp_server.ROOT. Chaque partie a déjà sa propre copie de save
+# (partie-NN/save/), donc son propre `.turn/` sous ce dossier -- N Directors
+# concurrents (-Paires > 1) sont étanches entre eux sans changement ici.
 
 # Prochain numéro de partie : reprend après les parties déjà jouées AUJOURD'HUI
 # dans ce même $RUN_DIR (idempotence — un second appel le même jour n'écrase
@@ -858,9 +869,11 @@ jouer_partie() {
 if [ "$PAIRES" -eq 1 ]; then
   # Chemin séquentiel historique (INCHANGÉ depuis #276) — une seule paire,
   # noms d'agent nus "banc-mj"/"banc-joueur", finaliser_nuit appelée
-  # directement dans ce process (jamais un subshell).
+  # directement dans ce process (jamais un subshell). -Parties optionnel
+  # (Souhel #279) : sans elle, boucle sans plafond de parties, bornée par
+  # -FinA seule (fin_a_atteinte ci-dessous).
   i=1
-  while [ "$i" -le "$PARTIES" ]; do
+  while [ -z "$PARTIES" ] || [ "$i" -le "$PARTIES" ]; do
     if arret_demande; then
       echo "=== ARRÊT DEMANDÉ (fichier STOP/PAUSE, #271) — nuit interrompue avant partie $i ==="
       RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE)"
@@ -887,8 +900,8 @@ fi
 # N paires (slots 1..PAIRES) tournent SIMULTANÉMENT, chacune dans son propre
 # subshell bash (`&`, un vrai process forké — pas une coroutine) : agents
 # "banc-mj-<slot>"/"banc-joueur-<slot>" (jamais de collision de nom, #271),
-# copie de save et .turn/ de la partie qu'elle joue (voir « limite connue »
-# plus haut pour .turn/). Chaque slot reprend la partie suivante du budget
+# copie de save et .turn/ étanche de la partie qu'elle joue (Issue #287,
+# `.turn/` dérive de la save chargée). Chaque slot reprend la partie suivante du budget
 # -Parties dès qu'il se libère — jusqu'à épuisement du budget ou -FinA.
 #
 # Le budget des rangs (1..PARTIES, comme la boucle séquentielle ci-dessus)
@@ -908,12 +921,17 @@ PAIRES_MODE=1
 rm -rf "$ARRET_DIR" "$RUN_DIR"/.claim-*   # jamais un résidu d'un appel précédent sur ce -RunDir
 
 prochain_rang() {
-  local n
-  for (( n = 1; n <= PARTIES; n++ )); do
+  # -Parties optionnel (Souhel #279) : quand elle n'est pas donnée, aucun
+  # plafond de rang ici -- le budget en parallèle reste alors borné par
+  # -FinA seule (contrôlée par slot_boucle avant chaque appel), jamais par
+  # ce compteur.
+  local n=1
+  while [ -z "$PARTIES" ] || [ "$n" -le "$PARTIES" ]; do
     if mkdir "$RUN_DIR/.claim-$n" 2>/dev/null; then
       echo "$n"
       return 0
     fi
+    n=$((n + 1))
   done
   return 1
 }
@@ -956,7 +974,11 @@ slot_boucle() {
 }
 
 N_SLOTS="$PAIRES"
-[ "$N_SLOTS" -gt "$PARTIES" ] && N_SLOTS="$PARTIES"
+# -Parties optionnel (Souhel #279) : sans elle, aucun plafond de rangs à
+# comparer -- tous les slots demandés tournent (bornés par -FinA seule).
+if [ -n "$PARTIES" ] && [ "$N_SLOTS" -gt "$PARTIES" ]; then
+  N_SLOTS="$PARTIES"
+fi
 
 PIDS=()
 for (( s = 1; s <= N_SLOTS; s++ )); do

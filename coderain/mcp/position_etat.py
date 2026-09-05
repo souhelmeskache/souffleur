@@ -320,7 +320,9 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
     that its value belongs to the author. It still selects which twists WOULD
     have been authorised, so it still governs what the guard lets through.
 
-    The file is overwritten every turn and lives outside any save folder.
+    The file is overwritten every turn and lives under the loaded save's own
+    `.turn/` (`mcp_server._turn_dir()`, Issue #287) — never a folder shared
+    by the whole worktree, so two saves played concurrently never collide.
 
     lore_include: the CAMERA'S TRANCHE — see assemble_context. The Director
     calls context_candidates first (the documentaliste's report), then names
@@ -355,7 +357,7 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
                                     lore_include=(set(lore_include)
                                                   if lore_include is not None
                                                   else None))
-    out_dir = mcp_server.ROOT / ".turn"
+    out_dir = mcp_server._turn_dir()
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "context.md"
     out.write_text(text, encoding="utf-8")

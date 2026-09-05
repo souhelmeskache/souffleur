@@ -6,10 +6,13 @@ rem (.\tools\banc\nuit.cmd), SANS ouvrir Claude Code. Enchaine, dans une
 rem fenetre qui reste ouverte :
 rem   git pull --ff-only
 rem   -> garde (herdr/claude/gh presents, save presente, rien en vol)
-rem   -> tools/banc/nuit.sh -Parties 4 -Director ab -FinA 06:00 (surchargeable
-rem      par les arguments passes a ce .cmd) -- s'arrete au plus tard a
-rem      l'heure -FinA (Issue #276), rapport-nuit.md ecrit et poste sur
-rem      l'Issue #201 a la fin de la nuit quelle que soit la raison d'arret
+rem   -> tools/banc/nuit.sh -Director sonnet -FinA 06:00 (surchargeable par
+rem      les arguments passes a ce .cmd) -- sans -Parties, boucle jusqu'a
+rem      l'heure -FinA (decision Souhel #279 : Director sonnet seul, mesure
+rem      N1 Haiku 0/2 vs Sonnet 2/2 ; nuit bornee par l'heure plutot qu'un
+rem      budget de parties fixe, N1 s'etant arretee a 01:30 pour 06:00) --
+rem      rapport-nuit.md ecrit et poste sur l'Issue #201 a la fin de la nuit
+rem      quelle que soit la raison d'arret
 rem   -> affiche le chemin de nuit.md
 rem Voir tools/banc/README.md.
 
@@ -45,7 +48,7 @@ if errorlevel 1 (
 )
 
 set "NUIT_ARGS=%*"
-if "%NUIT_ARGS%"=="" set "NUIT_ARGS=-Parties 4 -Director ab -FinA 06:00"
+if "%NUIT_ARGS%"=="" set "NUIT_ARGS=-Director sonnet -FinA 06:00"
 
 echo.
 echo === tools/banc/nuit.sh %NUIT_ARGS% ===
