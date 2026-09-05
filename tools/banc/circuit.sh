@@ -319,8 +319,9 @@ for w in d.get("result", {}).get("worktrees", []) or []:
 #
 # Codes de sortie : 0 succès (merge fait, ou issue déjà soldée — rejeu
 # idempotent) ; 1 CI rouge / verdict de revue absent ou en timeout / échec du
-# merge ; 2 agent lane-<issue> bloqué (2 relevés de suite) ; 3 90 min sans
-# changement de phase ; 4 REFUS persistant (3e cycle de refus).
+# merge / conflit de merge (#288) avec lane morte ; 2 agent lane-<issue>
+# bloqué (2 relevés de suite) ; 3 90 min sans changement de phase ; 4 REFUS
+# ou conflit de merge persistant (3e cycle).
 
 # Parseur de verdict de revue : lit le corps d'un commentaire "REVUE : ..."
 # sur stdin (première ligne), imprime APPROUVE, REFUS ou ABSENT.
@@ -482,13 +483,30 @@ lancer_revue() {
 }
 
 # Phase 4 (merge) : merge squash + teardown lane/revue (circuit.sh nettoyer,
-# I-243 — ce qui crée détruit) + pull --ff-only du checkout principal.
+# I-243 — ce qui crée détruit) + pull --ff-only du checkout principal. Return
+# 0 mergée, 1 échec de la commande de merge, 2 conflit détecté (#288) :
+# mergeable=CONFLICTING immédiat, ou mergeState=DIRTY stable sur 3 relevés de
+# suite (DIRTY seul peut être transitoire le temps que GitHub recalcule).
 merger_et_nettoyer() {
-  local pr="$1" i ms head_branch
+  local pr="$1" i ms mg head_branch dirty_count=0
   for i in $(seq 1 40); do
     ms=$(gh pr view "$pr" -R "$REPO" --json mergeStateStatus --jq '.mergeStateStatus')
+    mg=$(gh pr view "$pr" -R "$REPO" --json mergeable --jq '.mergeable')
     [ "$ms" = "CLEAN" ] && break
-    echo "mergeState=$ms (attente)"; sleep 30
+    if [ "$mg" = "CONFLICTING" ]; then
+      echo "mergeable=CONFLICTING — conflit de merge"
+      return 2
+    fi
+    if [ "$ms" = "DIRTY" ]; then
+      dirty_count=$((dirty_count+1))
+      if [ "$dirty_count" -ge 3 ]; then
+        echo "mergeState=DIRTY stable ($dirty_count relevés) — conflit de merge"
+        return 2
+      fi
+    else
+      dirty_count=0
+    fi
+    echo "mergeState=$ms mergeable=$mg (attente)"; sleep 30
   done
   head_branch=$(gh pr view "$pr" -R "$REPO" --json headRefName --jq '.headRefName')
   if gh pr merge "$pr" -R "$REPO" --squash --delete-branch; then
@@ -579,10 +597,39 @@ veiller() {
 
     if [ "$verdict" = "APPROUVE" ]; then
       echo "=== veiller #$issue : phase merge (PR $pr) ==="
-      if merger_et_nettoyer "$pr"; then
-        exit 0
-      fi
-      journal_sortie "$issue" 1 "échec du merge" "merge"
+      merger_et_nettoyer "$pr"
+      case $? in
+        0) exit 0 ;;
+        2)
+          # Conflit de merge (#288, même famille que #280 CI rouge/REFUS) :
+          # un état de PR que la lane peut corriger est un verdict à lui
+          # renvoyer, pas une sortie — sauf lane morte, alors sortie nommée.
+          if ! agent_lane_vivante "$issue"; then
+            journal_sortie "$issue" 1 "CONFLIT avec lane morte : relancer la lane" "merge"
+          fi
+          cycle=$((cycle+1))
+          if [ "$cycle" -gt 2 ]; then
+            journal_sortie "$issue" 4 "CONFLIT de merge persistant ($cycle cycles)" "merge"
+          fi
+          local t0_conflit
+          t0_conflit=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
+          gh issue comment "$issue" -R "$REPO" --body "PR #$pr en conflit avec main après un merge concurrent (T0=$t0_conflit) ; consigne de rebase envoyée à lane-$issue."
+          echo "=== veiller #$issue : CONFLIT de merge (cycle $cycle, T0=$t0_conflit) — renvoi automatique à lane-$issue ==="
+          herdr agent prompt "lane-$issue" "CONFLIT DE MERGE : rebase sur origin/main, résous en gardant les deux apports, tests verts, \`push --force-with-lease\`, nouveau TERMINÉ" >/dev/null 2>&1
+
+          echo "=== veiller #$issue : phase attente_termine (conflit, cycle $cycle) ==="
+          attendre_termine "$issue"
+          case $? in
+            2) gh issue comment "$issue" -R "$REPO" --body "BLOQUÉ (watcher) : $_BLOQUE_EXTRAIT"
+               journal_sortie "$issue" 2 "agent bloqué" "attente_termine" ;;
+            3) journal_sortie "$issue" 3 "90 min sans TERMINÉ après conflit" "attente_termine" ;;
+          esac
+          # Diff changé -> revue refaite (comme après un REFUS) : on
+          # reboucle, la phase CI redémarre puis la revue.
+          continue
+          ;;
+        *) journal_sortie "$issue" 1 "échec du merge" "merge" ;;
+      esac
     fi
 
     if [ "$verdict" != "REFUS" ]; then
