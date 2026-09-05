@@ -98,6 +98,78 @@ PROFILES: dict[str, dict] = {
             },
         },
     },
+    # Deux profils de plus (nuit 2026-09-06) : même forme, même total de
+    # stats (7) — pour que deux parties consécutives du banc ne rejouent pas
+    # le même personnage. Aucune règle nouvelle : agility/willpower sont des
+    # stats du socle (coderain/modules/rpg.py).
+    "eclaireur": {
+        "name": "Sorrel Vane",
+        "status": "en éveil, arc bandé, sur ses gardes",
+        "skills": "tir et discrétion (agility)",
+        "stats": {
+            "strength": 1, "agility": 3, "constitution": 1,
+            "intelligence": 1, "knowledge": 0, "willpower": 0, "charisma": 1,
+        },
+        "hp_max": 16,
+        "visual": "Longue silhouette sèche, cape de voyage râpée, arc court dans le dos.",
+        "mentality": "Prudente, curieuse, cupide : fouille tout, évite le combat frontal, négocie avant de frapper.",
+        "voice": "Ironique, à voix basse. « On regarde d'abord. On frappe si on doit. »",
+        "skills_prose": "Tir, discrétion, crochetage, lecture de terrain.",
+        "identity": "Éclaireuse et chasseuse de trésors — personnage "
+                    "de fixture (D-109), sans lien avec un module joué.",
+        "goals": "Ressortir riche et vivante ; ne jamais se faire piéger.",
+        "inventory_prose": "Arc court, dague, armure de cuir.",
+        "items": {
+            WEAPON_SLUG: {
+                "title": "Dague de banc",
+                "attrs": {"degats": "1d4+3", "stat": "agility",
+                          "status": "held by you"},
+                "body": "Objet synthétique de fixture de banc (Issue #257) — "
+                        "aucun lien avec un module joué.",
+            },
+            ARMOR_SLUG: {
+                "title": "Armure de cuir de banc",
+                "attrs": {"armure": "11", "dex_max": "5",
+                          "status": "held by you"},
+                "body": "Objet synthétique de fixture de banc (Issue #257) — "
+                        "aucun lien avec un module joué.",
+            },
+        },
+    },
+    "erudit": {
+        "name": "Aldous Merrow",
+        "status": "attentif, bâton en main, carnet ouvert",
+        "skills": "savoir et volonté (knowledge)",
+        "stats": {
+            "strength": 0, "agility": 1, "constitution": 1,
+            "intelligence": 2, "knowledge": 2, "willpower": 1, "charisma": 0,
+        },
+        "hp_max": 14,
+        "visual": "Homme mince aux doigts tachés d'encre, robe de voyage, bâton ferré.",
+        "mentality": "Méthodique, obsédé par les énigmes et les inscriptions ; téméraire dès qu'un secret est en jeu.",
+        "voice": "Phrases longues, vocabulaire précis. « Ceci mérite d'être compris avant d'être détruit. »",
+        "skills_prose": "Histoire, langues anciennes, examen d'objets, premiers soins.",
+        "identity": "Érudit itinérant en quête de vestiges — personnage "
+                    "de fixture (D-109), sans lien avec un module joué.",
+        "goals": "Comprendre ce que le lieu cache ; rapporter une preuve écrite.",
+        "inventory_prose": "Bâton ferré, robe matelassée, carnet.",
+        "items": {
+            WEAPON_SLUG: {
+                "title": "Bâton ferré de banc",
+                "attrs": {"degats": "1d6", "stat": "strength",
+                          "status": "held by you"},
+                "body": "Objet synthétique de fixture de banc (Issue #257) — "
+                        "aucun lien avec un module joué.",
+            },
+            ARMOR_SLUG: {
+                "title": "Robe matelassée de banc",
+                "attrs": {"armure": "10", "dex_max": "5",
+                          "status": "held by you"},
+                "body": "Objet synthétique de fixture de banc (Issue #257) — "
+                        "aucun lien avec un module joué.",
+            },
+        },
+    },
 }
 
 
