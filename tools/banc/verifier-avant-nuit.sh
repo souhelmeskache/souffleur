@@ -123,6 +123,17 @@ if [ "$AGENTS_EN_VOL_RC" -ne 0 ]; then
 fi
 [ -z "$SORTIE_AGENTS_EN_VOL" ] || echo "$SORTIE_AGENTS_EN_VOL"
 
+# --- workspace(s) banc non vide(s) : partie survivante (#298) ---------------
+#
+# Classification déléguée à verifier-workspace-banc-vide.sh (extrait pour
+# être testable indépendamment de herdr, même discipline que
+# verifier-agents-en-vol.sh, #292).
+SORTIE_WORKSPACE_BANC="$(herdr workspace list 2>/dev/null | "$REPO_ROOT/tools/banc/verifier-workspace-banc-vide.sh" 2>&1)"
+WORKSPACE_BANC_RC=$?
+if [ "$WORKSPACE_BANC_RC" -ne 0 ]; then
+  refus "${SORTIE_WORKSPACE_BANC#REFUS : }"
+fi
+
 prs_ouvertes="$(gh pr list -R "$REPO" --json number --jq 'length' 2>/dev/null || echo '')"
 if [ -n "$prs_ouvertes" ] && [ "$prs_ouvertes" != "0" ]; then
   refus "$prs_ouvertes PR ouverte(s) sur $REPO — circuit pas au repos."

@@ -150,6 +150,16 @@ RUN_DIR="${RUN_DIR_OVERRIDE:-$REPO_ROOT/bench/nuit-$DATE_JOUR}"
 mkdir -p "$RUN_DIR"
 NUIT_MD="$RUN_DIR/nuit.md"
 
+# Workspace herdr DÉDIÉ à cette nuit (#298) — passé à chaque appel de
+# lancer-banc-fumee.ps1 (-WorkspaceLabel) : les panes MJ/joueur de TOUTE
+# partie de cette nuit (séquentielle ou en paires parallèles, #282) vivent
+# dans ce workspace, jamais dans celui d'une lane ou de l'opérateur (jamais
+# `herdr pane current`, voir tools/banc/README.md § « Workspace dédié au
+# banc »). Un label par jour calendaire (pas juste "banc") : une nuit qui se
+# relance en continuation le même jour ($START_INDEX > 1 ci-dessous) réutilise
+# le même workspace, jamais un doublon.
+WORKSPACE_LABEL_BANC="banc-$DATE_JOUR"
+
 # Sentinelle d'arrêt (#271) — testée à chaque poll de attendre_fichier ET
 # entre deux parties : Ctrl+C n'est pas garanti sous Windows (trap INT/TERM
 # jamais exercé depuis un shell Windows, constat nuit N0 02/09) ; créer l'un
@@ -394,6 +404,21 @@ fermer_panes() {
   done
   PANE_MJ_COURANT=""
   PANE_JOUEUR_COURANT=""
+}
+
+# Ferme TOUS les panes encore ouverts dans le workspace dédié au banc de
+# cette nuit ($WORKSPACE_LABEL_BANC, #298) -- appelée une seule fois, à la
+# toute fin de la nuit (finaliser_nuit, tout chemin d'arrêt confondu), APRÈS
+# que chaque partie a déjà fermé ses propres panes MJ/joueur
+# (fermer_et_verifier_agents) : filet de sécurité pour tout pane résiduel
+# (ex. le pane ancre créé avec le workspace, jamais utilisé par une partie).
+# Déléguée à fermer-workspace-banc.sh (extrait pour être testable avec un
+# faux herdr, même discipline que verifier-agents-en-vol.sh) -- ce script ne
+# ferme JAMAIS le workspace lui-même (pas de `herdr workspace close`, garde
+# symétrique de circuit.sh nettoyer) : il ne disparaît que devenu vide, par
+# la fermeture normale de ses panes.
+fermer_panes_workspace_banc() {
+  "$REPO_ROOT/tools/banc/fermer-workspace-banc.sh" "$WORKSPACE_LABEL_BANC"
 }
 
 # "1" si l'agent nommé $1 apparaît dans `herdr agent list`, vide sinon.
@@ -752,6 +777,13 @@ deposer_rapport_201() {
 # du dépôt qui n'aurait pas encore eu lieu.
 finaliser_nuit() {
   local duree_s=$(( $(date +%s) - DEBUT_NUIT ))
+  # Fermeture des panes du workspace banc (#298) : jamais sous -RunDir (usage
+  # interne/tests uniquement, § -RunDir ci-dessus) -- un test tournant sur ce
+  # poste pendant qu'une VRAIE nuit joue dans le workspace "$WORKSPACE_LABEL_BANC"
+  # ne doit jamais fermer les panes de cette nuit réelle.
+  if [ -z "$RUN_DIR_OVERRIDE" ]; then
+    fermer_panes_workspace_banc
+  fi
   ecrire_rapport_nuit "$duree_s"
   DEPOT_RAPPORT_STATUT="$(deposer_rapport_201)"
   ecrire_nuit_md "$duree_s"
@@ -810,6 +842,7 @@ jouer_partie() {
       -ModeleMj "$modele" -ModeleJoueur haiku \
       -SavesDirOverride "$partie_dir" -JournalDirOverride "$partie_dir" \
       -AgentMj "$agent_mj" -AgentJoueur "$agent_joueur" \
+      -WorkspaceLabel "$WORKSPACE_LABEL_BANC" \
       > "$partie_dir/lancement.log" 2>&1
   fi
   local rc_lancement=$?
