@@ -18,10 +18,11 @@ Cas 1-3 : -DryRun sort avant tout appel externe, mais le script résout quand
 même le chemin de `herdr` en tête de fichier (Resolve-ExternalCommand) --
 un faux exécutable `herdr` est donc posé en tête de PATH pour ce process,
 comme le ferait un vrai binaire, sans jamais être réellement lancé.
-Cas 4 : le faux `herdr` DOIT répondre (JSON minimal) aux sous-commandes
-`pane current`/`pane split` pour que le script aille jusqu'à la pose du
-fichier d'automode ; `agent start`/`agent prompt` n'ont besoin que de
-réussir (code 0), leur contenu n'est pas vérifié ici.
+Cas 4 : le faux `herdr` DOIT répondre (JSON minimal) à `workspace list`
+(absent), `workspace create` (workspace + pane ancre, #298) et `pane split`
+pour que le script aille jusqu'à la pose du fichier d'automode ; `agent
+start`/`agent prompt` n'ont besoin que de réussir (code 0), leur contenu
+n'est pas vérifié ici.
 
 Le script est copié (avec les deux gabarits dont il dépend) dans un dépôt
 Git jetable, 100% synthétique, plutôt que d'écrire dans le vrai
@@ -103,14 +104,24 @@ def build_fake_herdr(tmp_root: Path) -> Path:
     return bin_dir
 
 
-# Faux `herdr` pour le cas 4 (exécution réelle, pas -DryRun) : répond aux
-# sous-commandes `pane current`/`pane split` par le JSON minimal attendu
-# (result.pane.pane_id) pour que le script avance jusqu'à la pose du
-# fichier d'automode ; toute autre sous-commande (`agent start`,
-# `agent prompt`) réussit simplement (code 0) -- son contenu n'est pas
-# vérifié par ce cas.
+# Faux `herdr` pour le cas 4 (exécution réelle, pas -DryRun) : répond au
+# workspace dédié au banc (#298) -- `workspace list` (aucun résultat, le
+# workspace n'existe pas encore), `workspace create` (result.workspace.
+# workspace_id + result.root_pane.pane_id) et aux sous-commandes `pane ...`
+# (current/split) par le JSON minimal attendu (result.pane.pane_id) pour que
+# le script avance jusqu'à la pose du fichier d'automode ; toute autre
+# sous-commande (`agent start`, `agent prompt`) réussit simplement (code 0)
+# -- son contenu n'est pas vérifié par ce cas.
 FAKE_HERDR_REEL_CMD = (
     "@echo off\r\n"
+    'if "%~1"=="workspace" if "%~2"=="list" (\r\n'
+    '  echo {"result":{"workspaces":[]}}\r\n'
+    "  exit /b 0\r\n"
+    ")\r\n"
+    'if "%~1"=="workspace" if "%~2"=="create" (\r\n'
+    '  echo {"result":{"workspace":{"workspace_id":"w-banc-test"},"root_pane":{"pane_id":"w-banc-test:p1"}}}\r\n'
+    "  exit /b 0\r\n"
+    ")\r\n"
     'if "%~1"=="pane" (\r\n'
     '  echo {"result":{"pane":{"pane_id":"pane-test"}}}\r\n'
     "  exit /b 0\r\n"

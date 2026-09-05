@@ -774,6 +774,17 @@ case "${1:-}" in
   nettoyer)
     case "${2:-}" in
       --orphelins) nettoyer_orphelins ;;
+      # Garde symétrique (#298) : le workspace herdr dédié au banc
+      # (label "banc" ou "banc-<date>", tools/lancer-banc-fumee.ps1) n'est
+      # JAMAIS une cible de `circuit.sh nettoyer` -- il ne vit pas dans
+      # $WORKTREES_DIR et ne se ferme que devenu vide, par nuit.sh lui-même
+      # (tools/banc/README.md § « Workspace dédié au banc »). Refus NOMMÉ
+      # avant le format strict lane-NNN/revue-NNN ci-dessous, qui l'aurait
+      # de toute façon rejeté au format mais avec un message générique.
+      banc*)
+        echo "REFUS : '$2' commence par 'banc' -- le workspace du banc ne se nettoie jamais via circuit.sh nettoyer (#298), seul nuit.sh en ferme les panes en fin de nuit." >&2
+        exit 1
+        ;;
       lane-[0-9]*|revue-[0-9]*) nettoyer_une "$2" ;;
       *)
         echo "Usage : $0 nettoyer <lane-NNN|revue-NNN>" >&2

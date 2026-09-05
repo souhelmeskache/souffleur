@@ -2,6 +2,9 @@
 
 - `nuit.sh` / `nuit.cmd` / `verifier-avant-nuit.sh` / `metriques_nuit.py` :
   **banc de nuit N1** (#201, D-276 ; #260) — voir section dédiée ci-dessous.
+- `fermer-workspace-banc.sh <label>` / `verifier-workspace-banc-vide.sh` :
+  workspace herdr dédié au banc (#298) — voir § « Workspace dédié au banc »
+  ci-dessous.
 - `veiller.sh` : veille sur l'apparition d'un fichier du journal, sans
   envoyer de go ; mêmes conditions de sortie que ci-dessus.
 - `circuit.sh` : **point d'entrée unique du circuit de lane** (I-243, « ce
@@ -406,19 +409,61 @@ réécrase jamais une partie déjà jouée — idempotence).
    installation de la fixture de personnage (`bench/fixtures/personnage-banc.py`,
    #257).
 2. Lancement des deux agents (`lancer-banc-fumee.ps1`, avec `-ModeleMj`,
-   `-ModeleJoueur`, `-SavesDirOverride` et `-JournalDirOverride` — trois
-   paramètres additifs #260, défauts inchangés pour le banc de fumée
-   historique) — le journal ET la save isolée de la partie vivent tous deux
-   sous `bench/nuit-AAAAMMJJ/partie-NN/`. `lancer-banc-fumee.ps1` REFUSE
-   nommément (« agent <nom> déjà en vol sur le pane <id> ») si `banc-mj` ou
-   `banc-joueur` est déjà en vol avant tout `pane split`/`agent start` (#271)
-   — au lieu d'un « échec de `herdr agent start` » muet.
+   `-ModeleJoueur`, `-SavesDirOverride`, `-JournalDirOverride` et
+   `-WorkspaceLabel "banc-AAAAMMJJ"` — quatre paramètres additifs #260/#298,
+   défauts inchangés pour le banc de fumée historique) — le journal ET la
+   save isolée de la partie vivent tous deux sous
+   `bench/nuit-AAAAMMJJ/partie-NN/`, et les deux panes MJ/joueur naissent
+   DANS le workspace herdr dédié `banc-AAAAMMJJ` (§ « Workspace dédié au
+   banc » ci-dessous), jamais depuis `herdr pane current`.
+   `lancer-banc-fumee.ps1` REFUSE nommément (« agent <nom> déjà en vol sur
+   le pane <id> ») si `banc-mj` ou `banc-joueur` est déjà en vol avant tout
+   `pane split`/`agent start` (#271) — au lieu d'un « échec de
+   `herdr agent start` » muet.
 3. Boucle de tours par lots (go joueur → `action-NN.md` → go MJ →
    `prose-NN.md`/`tour-NN.md`), jusqu'à fin de partie, craquement, ou
    `-Tours`.
 4. Fermeture des agents (`herdr pane close` des deux panes — l'équivalent
    banc de `circuit.sh nettoyer`, I-243 : ce qui crée détruit).
 5. Partie suivante.
+
+### Workspace dédié au banc, jamais `pane current` (#298)
+
+Craquement du 05/09 (`bench/nuit-20260905/partie-03`, 37s de vol) :
+`lancer-banc-fumee.ps1` ouvrait ses deux panes à côté du pane COURANT
+(`herdr pane current`) — celui de l'opérateur, ou d'une lane fraîchement
+créée et focalisée par `circuit.sh lancer`. Le pane focalisé au moment du
+lancement était celui d'une lane ; `circuit.sh nettoyer` de cette lane a
+ensuite fermé SON workspace, avec la partie du banc dedans (agent joueur
+expiré, MJ disparu).
+
+Le banc vit désormais dans un workspace herdr qui lui appartient EN PROPRE,
+identifié par label (`-WorkspaceLabel`, `banc-AAAAMMJJ` passé par `nuit.sh`,
+`banc` par défaut pour un smoke test manuel) :
+
+- **Créé s'il n'existe pas** (`herdr workspace create --cwd <repo> --label
+  <label> --no-focus`), **réutilisé sinon** (`herdr workspace list` +
+  filtrage par label) — un verrou `mkdir` atomique
+  (`bench/.verrou-workspace-banc/<label>`, transitoire, gitignoré) évite que
+  deux paires simultanées (`-Paires > 1`, #282) qui listent les workspaces
+  au même instant créent chacune leur propre workspace pour le même label.
+- Les deux panes MJ/joueur se splittent DEPUIS un pane de ce workspace,
+  **jamais** depuis `herdr pane current`.
+- **`--no-focus` partout** (création du workspace, les deux splits) : ce
+  lanceur ne change jamais le focus de l'opérateur — un `circuit.sh lancer`
+  ou `nettoyer` concurrent ne voit jamais son focus perturbé par le banc, et
+  réciproquement.
+- En fin de nuit (`nuit.sh` → `finaliser_nuit`, toutes raisons d'arrêt),
+  `tools/banc/fermer-workspace-banc.sh <label>` ferme tous les panes encore
+  ouverts dans ce workspace ; le workspace lui-même ne se ferme JAMAIS de
+  force (pas de `herdr workspace close` sur le workspace du banc) — il ne
+  disparaît que devenu vide, par la fermeture normale de ses panes.
+  `circuit.sh nettoyer` refuse nommément tout label commençant par `banc`
+  (garde symétrique) ; `verifier-avant-nuit.sh` délègue à
+  `tools/banc/verifier-workspace-banc-vide.sh` pour signaler un workspace
+  `banc*` encore non vide (pane_count > 1 — partie survivante d'une nuit
+  précédente) comme REFUS nommé, avant même de tenter un nouveau
+  lancement.
 
 ### Contrat de fichiers du tour (#269)
 
