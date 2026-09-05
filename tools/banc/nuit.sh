@@ -522,11 +522,14 @@ pane_pour_role() {
 # (« Resume this session with: claude --resume <id> »), relance `herdr agent
 # start` DANS LE MÊME PANE avec `--resume <id>` comme ARGUMENT AGENT (après
 # `--`, comme `--model`/`--effort`/`--permission-mode` — jamais une option de
-# `herdr` lui-même, qui n'en a pas), puis renvoie le go du tour en cours à
-# l'identique (`go_texte`) une fois l'agent redevenu joignable. Rend 0 si
-# toute la séquence a réussi, 1 sinon (id de session introuvable dans le
-# pane, ou `herdr agent start` a échoué) — variables GLOBALES en sortie
-# (même convention que RELANCE_ENVOYEE/TRANSCRIPTION_TIMEOUT, #299) :
+# `herdr` lui-même, qui n'en a pas), ATTEND l'interactive_ready (`agent
+# prompt ... --wait --until working --timeout 15000`, même idiome que le
+# lancement initial dans `lancer-banc-fumee.ps1`) puis renvoie le go du tour
+# en cours à l'identique (`go_texte`). Rend 0 SEULEMENT si toute la séquence
+# a réussi jusqu'à la réception effective du go, 1 sinon (id de session
+# introuvable dans le pane, `herdr agent start` a échoué, ou le go n'a
+# jamais été reçu sous 15s) — variables GLOBALES en sortie (même convention
+# que RELANCE_ENVOYEE/TRANSCRIPTION_TIMEOUT, #299) :
 # - ID_SESSION_PROCESSUS : id de session lu dans le pane (vide si
 #   introuvable).
 # - PANE_LOG_PROCESSUS : 30 dernières lignes du pane, capturées AVANT la
@@ -544,7 +547,17 @@ relancer_processus_sorti() {
        --permission-mode acceptEdits >/dev/null 2>&1; then
     return 1
   fi
-  herdr agent prompt "$agent" "$go_texte" >/dev/null 2>&1
+  # Attend l'`interactive_ready` avant d'envoyer le go (revue REFUS #305) :
+  # `agent start` a déjà attendu la détection interactive dans le pane (son
+  # propre --timeout, 30s par défaut) mais un `claude --resume` fraîchement
+  # redémarré peut rester quelques secondes de plus avant d'accepter
+  # vraiment un prompt — même idiome que `lancer-banc-fumee.ps1` au premier
+  # lancement (`agent prompt ... --wait --until working --timeout 15000`),
+  # ici l'échec d'envoi est PROPAGÉ dans le code de retour (jamais un OK qui
+  # ne certifierait que `agent start`, pas la réception réelle du go).
+  if ! herdr agent prompt "$agent" "$go_texte" --wait --until working --timeout 15000 >/dev/null 2>&1; then
+    return 1
+  fi
   return 0
 }
 

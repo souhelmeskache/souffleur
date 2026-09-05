@@ -397,9 +397,15 @@ n'exigeront pas de réécrire ce script.
   claude --resume <id> »), `herdr agent start <agent> --kind claude --pane
   <même pane> -- --resume <id> --model <même modèle> --effort <même effort>
   --permission-mode acceptEdits` (mêmes réglages que le lancement initial,
-  `lancer-banc-fumee.ps1`), puis renvoi du go du tour en cours à
-  l'identique. Une seconde sortie détectée dans le même tour (relance
-  déjà tentée, échouée ou re-sortie aussitôt) craque directement
+  `lancer-banc-fumee.ps1`), **attend l'interactive_ready** (`herdr agent
+  prompt ... --wait --until working --timeout 15000`, même idiome que le
+  lancement initial — un `claude --resume` fraîchement redémarré peut rester
+  quelques secondes avant d'accepter vraiment un prompt), puis renvoi du go
+  du tour en cours à l'identique — l'échec de cet envoi (agent jamais revenu
+  `working` sous 15s) est propagé : le journal ne dit « OK » que si le go a
+  vraiment été reçu, jamais seulement que `agent start` a réussi. Une
+  seconde sortie détectée dans le même tour (relance déjà tentée, échouée ou
+  re-sortie aussitôt) craque directement
   (`craquement-processus-sorti-NN.md` : agent, fichier attendu, id de
   session, si la relance a été tentée, et l'écran du pane — voir sonde
   ci-dessous) — la partie se ferme, la suivante démarre, **n'arrête pas la
