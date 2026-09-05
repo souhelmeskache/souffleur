@@ -11,9 +11,14 @@
 # narrateur qu'ils spawnent — jamais dans ce script.
 #
 # Usage :
-#   tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
-#                       [-Save <slug>] [-TimeoutTour <minutes>]
+#   tools/banc/nuit.sh -Parties N [-Paires N] [-Director haiku|sonnet|ab]
+#                       [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>]
 #                       [-FinA HH:MM] [-DryRun]
+#
+# -Paires N (défaut 1, Issue #282) : N parties tournent SIMULTANÉMENT (N
+# paires Director/joueur, N copies de save, N `.turn/` -- voir « limite
+# connue » ci-dessous) ; quand l'une finit, la suivante du budget -Parties
+# prend sa place, jusqu'à épuisement du budget ou -FinA.
 #
 # Voir tools/banc/README.md pour le détail des sorties, codes de sortie, et
 # « ce que la nuit ne fait pas ».
@@ -36,6 +41,7 @@ LIMITE_SESSION_IDLE_SECS=600   # 10 min — agent bloqué + idle sans progrès
 # --- 0. Arguments ------------------------------------------------------------
 
 PARTIES=""
+PAIRES=1
 DIRECTOR="sonnet"
 TOURS=40
 SAVE="banc-depart-beyond-the-vale-of-madness"
@@ -47,13 +53,14 @@ LANCEMENT_CMD_OVERRIDE=""
 
 usage() {
   cat >&2 <<EOF
-Usage : $0 -Parties N [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+Usage : $0 -Parties N [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
 EOF
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -Parties) PARTIES="${2:-}"; shift 2 ;;
+    -Paires) PAIRES="${2:-}"; shift 2 ;;
     -Director) DIRECTOR="${2:-}"; shift 2 ;;
     -Tours) TOURS="${2:-}"; shift 2 ;;
     -Save) SAVE="${2:-}"; shift 2 ;;
@@ -78,6 +85,10 @@ done
 
 if ! [[ "$PARTIES" =~ ^[0-9]+$ ]] || [ "$PARTIES" -lt 1 ]; then
   echo "REFUS : -Parties doit être un entier >= 1 (reçu '$PARTIES')." >&2
+  usage; exit 1
+fi
+if ! [[ "$PAIRES" =~ ^[0-9]+$ ]] || [ "$PAIRES" -lt 1 ]; then
+  echo "REFUS : -Paires doit être un entier >= 1 (reçu '$PAIRES')." >&2
   usage; exit 1
 fi
 case "$DIRECTOR" in
@@ -169,6 +180,24 @@ if [ "$NB_TOURS_SAVE" -ne 0 ]; then
   exit 1
 fi
 
+# Limite connue (#282) : `.turn/` (mcp_server.ROOT / ".turn", coderain/mcp/
+# narrateur.py + position_etat.py) est un scratch d'assemblage de contexte
+# écrit par CHAQUE agent Director qui tourne dans CE worktree, quelle que
+# soit la partie qu'il joue -- mcp_server.ROOT se résout au dossier du
+# fichier mcp_server.py, PAS par process/cwd/partie. En séquentiel (-Paires
+# 1, un seul Director actif à la fois) ça ne collisionne jamais. Avec
+# -Paires > 1, N Directors concurrents peuvent s'écraser ce fichier entre
+# eux (paquet-narrateur.md) -- point dur nommé, non résolu par cette lane
+# (isoler `.turn/` par partie demanderait de faire dépendre mcp_server.ROOT
+# du cwd de l'agent, hors périmètre #282 : aucune modification du moteur).
+# Le contenu de `.turn/` n'est jamais relu au-delà du tour courant (scratch,
+# jamais une source de vérité de la save) -- le risque réel est qu'un
+# Director lise un paquet destiné à une AUTRE partie au même instant, pas
+# une corruption de save.
+if [ "$PAIRES" -gt 1 ]; then
+  echo "AVERTISSEMENT (#282) : -Paires $PAIRES — .turn/ (scratch narrateur, mcp_server.ROOT) est PARTAGÉ entre toutes les paires de ce worktree, voir tools/banc/README.md § « Limite connue »." >&2
+fi
+
 # Prochain numéro de partie : reprend après les parties déjà jouées AUJOURD'HUI
 # dans ce même $RUN_DIR (idempotence — un second appel le même jour n'écrase
 # jamais une partie déjà jouée).
@@ -230,10 +259,25 @@ PANE_MJ_COURANT=""
 PANE_JOUEUR_COURANT=""
 PARTIE_DIR_COURANTE=""
 DEBUT_NUIT=$(date +%s)
-TABLE_PARTIES=()   # lignes déjà écrites de la table nuit.md, dans l'ordre
 RAISON_ARRET_NUIT=""
 LIMITE_SESSION_TOUCHEE="non"   # #276 rapport-nuit.md — "oui" si sortie 5
 DEPOT_RAPPORT_STATUT=""        # #276 — statut du dépôt sur l'Issue #201
+
+# --- N paires simultanées (#282) --------------------------------------------
+#
+# PAIRES_MODE distingue le chemin séquentiel historique (-Paires 1, INCHANGÉ
+# — TABLE_PARTIES/RAISON_ARRET_NUIT en globales, finaliser_nuit appelée
+# directement depuis jouer_partie) du chemin parallèle (-Paires > 1, § 6bis
+# ci-dessous) : chaque paire tourne dans un SUBSHELL bash (`&`) — un
+# subshell hérite les globales au fork mais n'écrit jamais dans celles du
+# parent, donc RAISON_ARRET_NUIT ne peut plus être une simple globale
+# partagée entre paires. ARRET_DIR (mkdir atomique — seul le premier
+# `mkdir` réussit, même entre process concurrents sur un même système de
+# fichiers) porte l'arrêt de toute la nuit décrété par N'IMPORTE QUELLE
+# paire ; PAIRES_MODE=0 en séquentiel (arreter_toute_la_nuit garde alors le
+# comportement EXACT d'avant #282).
+PAIRES_MODE=0
+ARRET_DIR="$RUN_DIR/.arret-nuit"
 
 # Échecs de LANCEMENT consécutifs (#263) — distinct des craquements de tour
 # (timeout, fixture) qui n'arrêtent que la partie courante. Un gabarit cassé
@@ -244,6 +288,41 @@ DEPOT_RAPPORT_STATUT=""        # #276 — statut du dépôt sur l'Issue #201
 ECHECS_LANCEMENT_CONSECUTIFS=0
 
 # --- 2. Aides ---------------------------------------------------------------
+
+# Déclare un arrêt de TOUTE la nuit (#282) — ARRET_DIR (mkdir, atomique)
+# n'est écrit que par le PREMIER appelant : entre paires concurrentes qui
+# détecteraient la même condition (ex. -FinA atteinte pendant que N paires
+# tournent), une seule gagne la course, les autres continuent (silencieuses)
+# — le contenu d'ARRET_DIR fait foi, jamais un jugement sur qui a "raison".
+declarer_arret_nuit() {
+  local code="$1" raison="$2" limite="${3:-non}"
+  if mkdir "$ARRET_DIR" 2>/dev/null; then
+    printf '%s' "$code" > "$ARRET_DIR/code"
+    printf '%s' "$raison" > "$ARRET_DIR/raison"
+    printf '%s' "$limite" > "$ARRET_DIR/limite_session"
+  fi
+}
+
+# Point de sortie UNIQUE des chemins « toute la nuit s'arrête » (STOP/PAUSE,
+# -FinA, limite de session, agent non fermé, lancement impossible). En
+# séquentiel (PAIRES_MODE=0) : comportement EXACT d'avant #282 —
+# finaliser_nuit tourne ICI, dans le process principal. En parallèle
+# (PAIRES_MODE=1, appelé depuis le SUBSHELL d'une paire) : finaliser_nuit ne
+# doit tourner QU'UNE FOIS, après que TOUTES les paires ont rendu la main
+# (§ 6bis) — cette fonction se contente de déclarer l'arrêt et de sortir du
+# subshell de la paire courante ; la boucle parallèle appelle finaliser_nuit
+# elle-même une fois tous les `wait` revenus.
+arreter_toute_la_nuit() {
+  local code="$1" raison="$2" limite="${3:-non}"
+  if [ "$PAIRES_MODE" = "1" ]; then
+    declarer_arret_nuit "$code" "$raison" "$limite"
+  else
+    RAISON_ARRET_NUIT="$raison"
+    [ "$limite" = "oui" ] && LIMITE_SESSION_TOUCHEE="oui"
+    finaliser_nuit
+  fi
+  exit "$code"
+}
 
 fermer_panes() {
   # Ferme au mieux les deux panes de la partie courante — jamais fatal (un
@@ -256,10 +335,15 @@ fermer_panes() {
   # script ne dépend plus d'un pane "principal" pour réussir : sur ce refus,
   # on journalise et on bascule sur `/exit` envoyé à l'agent (voir
   # envoyer_exit_agent) plutôt que de laisser l'agent en vol sans recours.
+  #
+  # $1/$2 (#282, défauts "banc-mj"/"banc-joueur") : noms d'agent réels de
+  # CETTE paire — suffixés par paire en parallèle (-Paires > 1) pour que le
+  # message d'avertissement nomme le bon agent.
+  local agent_mj="${1:-banc-mj}" agent_joueur="${2:-banc-joueur}"
   local p sortie nom
   for p in "$PANE_MJ_COURANT" "$PANE_JOUEUR_COURANT"; do
     [ -n "$p" ] || continue
-    if [ "$p" = "$PANE_MJ_COURANT" ]; then nom="banc-mj"; else nom="banc-joueur"; fi
+    if [ "$p" = "$PANE_MJ_COURANT" ]; then nom="$agent_mj"; else nom="$agent_joueur"; fi
     sortie="$(herdr pane close "$p" 2>&1)"
     if [ $? -ne 0 ]; then
       if printf '%s' "$sortie" | grep -q 'confirmation_required'; then
@@ -288,12 +372,15 @@ envoyer_exit_agent() {
   herdr agent send-keys "$nom" slash e x i t enter >/dev/null 2>&1
 }
 
-# Attend (bornée 30 s, #271) que ni banc-mj ni banc-joueur n'apparaissent plus
-# dans `herdr agent list`. Rend 0 si les deux sont partis, 1 sinon.
+# Attend (bornée 30 s, #271) que ni $1 (agent MJ) ni $2 (agent joueur) —
+# défauts "banc-mj"/"banc-joueur", suffixés par paire en parallèle (#282) —
+# n'apparaissent plus dans `herdr agent list`. Rend 0 si les deux sont
+# partis, 1 sinon.
 attendre_agents_fermes() {
+  local agent_mj="${1:-banc-mj}" agent_joueur="${2:-banc-joueur}"
   local n=0 max=15   # 15 * 2s = 30s
   while [ "$n" -lt "$max" ]; do
-    if [ -z "$(agent_existe banc-mj)" ] && [ -z "$(agent_existe banc-joueur)" ]; then
+    if [ -z "$(agent_existe "$agent_mj")" ] && [ -z "$(agent_existe "$agent_joueur")" ]; then
       return 0
     fi
     n=$((n + 1))
@@ -309,28 +396,26 @@ attendre_agents_fermes() {
 # dernière vérification ; s'il survit encore, la nuit s'arrête plutôt que de
 # risquer une partie suivante sur un nom déjà pris.
 fermer_et_verifier_agents() {
-  local partie_dir="$1" nn="$2"
-  fermer_panes
-  if attendre_agents_fermes; then
+  local partie_dir="$1" nn="$2" agent_mj="${3:-banc-mj}" agent_joueur="${4:-banc-joueur}"
+  fermer_panes "$agent_mj" "$agent_joueur"
+  if attendre_agents_fermes "$agent_mj" "$agent_joueur"; then
     return 0
   fi
   echo "AVERTISSEMENT : agent(s) survivant(s) après fermeture des panes (#271) — envoi /exit." >&2
   local nom
-  for nom in banc-mj banc-joueur; do
+  for nom in "$agent_mj" "$agent_joueur"; do
     [ -n "$(agent_existe "$nom")" ] && envoyer_exit_agent "$nom"
   done
-  if attendre_agents_fermes; then
+  if attendre_agents_fermes "$agent_mj" "$agent_joueur"; then
     return 0
   fi
   local survivants=""
-  for nom in banc-mj banc-joueur; do
+  for nom in "$agent_mj" "$agent_joueur"; do
     [ -n "$(agent_existe "$nom")" ] && survivants="$survivants $nom"
   done
   ecrire_craquement "$partie_dir" "$nn" "nettoyage" \
     "agent(s) non fermé(s) après pane close + /exit (#271) :$survivants"
-  RAISON_ARRET_NUIT="agent non fermé (partie $nn :$survivants)"
-  finaliser_nuit
-  exit 7
+  arreter_toute_la_nuit 7 "agent non fermé (partie $nn :$survivants)"
 }
 
 ecrire_craquement() {
@@ -380,7 +465,7 @@ limite_session_detectee() {
 # LOCAL à la partie), 5 (limite de session — arrêt de TOUTE la nuit, budget
 # #260), 8 (heure de fin -FinA atteinte — arrêt de TOUTE la nuit, #276).
 attendre_fichier() {
-  local fichier="$1"
+  local fichier="$1" agent_mj="${2:-banc-mj}" agent_joueur="${3:-banc-joueur}"
   local n=0 bloque_polls=0
   local max_polls=$(( (TIMEOUT_TOUR_SECS + POLL_SECS - 1) / POLL_SECS ))
   local max_polls_bloque=$(( (LIMITE_SESSION_IDLE_SECS + POLL_SECS - 1) / POLL_SECS ))
@@ -397,7 +482,7 @@ attendre_fichier() {
       echo "LIMITE DE SESSION (texte détecté dans un pane)"
       return 5
     fi
-    if [ -n "$(agent_est_bloque banc-mj)" ] || [ -n "$(agent_est_bloque banc-joueur)" ]; then
+    if [ -n "$(agent_est_bloque "$agent_mj")" ] || [ -n "$(agent_est_bloque "$agent_joueur")" ]; then
       bloque_polls=$((bloque_polls + 1))
       if [ "$bloque_polls" -ge "$max_polls_bloque" ]; then
         echo "LIMITE DE SESSION (agent bloqué, idle > $((LIMITE_SESSION_IDLE_SECS / 60)) min sans progrès)"
@@ -442,13 +527,18 @@ sys.exit(0 if 'dead' in conds else 1)
 
 ecrire_resume_run() {
   local partie_dir="$1" pnn="$2" modele="$3" tours_joues="$4" fin_atteinte="$5" \
-        raison="$6" duree_s="$7"
-  shift 7
+        raison="$6" duree_s="$7" paire="$8"
+  shift 8
   local craquements=("$@")
   {
     echo "# resume-run — partie $pnn"
     echo
     echo "casting: joueur=haiku(low) director=$modele(medium) narrateur=haiku"
+    # paire (#282) : numéro de la paire Director/joueur qui a joué cette
+    # partie — "01" en séquentiel (une seule paire) ; suffixe réel du
+    # dossier bench/nuit-AAAAMMJJ/partie-NN/ le cas échéant en parallèle.
+    # Relu par tools/banc/metriques_nuit.py::calculer (« Paires simultanées »).
+    echo "paire: $paire"
     echo "tours_joues: $tours_joues"
     echo "fin_atteinte: $fin_atteinte"
     echo "raison_arret: $raison"
@@ -479,6 +569,32 @@ trap 'nettoyage_interruption TERM' TERM
 
 # --- 4. nuit.md ---------------------------------------------------------------
 
+# Table des parties (#282) : reconstruite MÉCANIQUEMENT en relisant chaque
+# resume-run.md déjà écrit sous $RUN_DIR, plutôt qu'accumulée dans une
+# globale au fil de la nuit (TABLE_PARTIES avant #282) — une globale ne
+# survit pas au fork d'un subshell de paire (§ 6bis), et cette lecture
+# fonctionne identiquement en séquentiel et en parallèle. Une partie sans
+# resume-run.md (interrompue en cours de tour par STOP/-FinA/limite de
+# session, avant l'écriture normale de fin de jouer_partie) rend une ligne
+# "en cours / interrompue" plutôt que d'être absente de la table.
+construire_table_parties() {
+  local d pnn resume modele tours fin raison
+  for d in "$RUN_DIR"/partie-*/; do
+    [ -d "$d" ] || continue
+    pnn="$(basename "$d" | sed 's/^partie-//')"
+    resume="$d/resume-run.md"
+    if [ -f "$resume" ]; then
+      modele="$(grep -o 'director=[a-zA-Z0-9_-]*' "$resume" | head -1 | sed 's/director=//')"
+      tours="$(grep '^tours_joues:' "$resume" | head -1 | sed 's/^tours_joues: *//')"
+      fin="$(grep '^fin_atteinte:' "$resume" | head -1 | sed 's/^fin_atteinte: *//')"
+      raison="$(grep '^raison_arret:' "$resume" | head -1 | sed 's/^raison_arret: *//')"
+      echo "| $pnn | ${modele:-?} | ${tours:-0} | ${fin:-N} | ${raison:-?} |"
+    else
+      echo "| $pnn | ? | 0 | N | en cours / interrompue |"
+    fi
+  done
+}
+
 ecrire_nuit_md() {
   local duree_s="${1:-$(( $(date +%s) - DEBUT_NUIT ))}"
   local metriques
@@ -486,8 +602,9 @@ ecrire_nuit_md() {
   {
     echo "# nuit — $DATE_JOUR"
     echo
-    echo "Save : $SAVE — Director : $DIRECTOR — Tours max/partie : $TOURS — "\
-"Timeout tour : ${TIMEOUT_TOUR_MIN}min${FIN_A:+ — Fin à : $FIN_A}"
+    echo "Save : $SAVE — Director : $DIRECTOR — Paires simultanées : $PAIRES — "\
+"Tours max/partie : $TOURS — Timeout tour : ${TIMEOUT_TOUR_MIN}min"\
+"${FIN_A:+ — Fin à : $FIN_A}"
     echo
     echo "Durée totale : ${duree_s}s"
     echo "Raison d'arrêt de la nuit : ${RAISON_ARRET_NUIT:-budget -Parties atteint}"
@@ -496,10 +613,7 @@ ecrire_nuit_md() {
     echo
     echo "| partie | director | tours joués | fin atteinte | raison |"
     echo "|---|---|---|---|---|"
-    local ligne
-    for ligne in "${TABLE_PARTIES[@]}"; do
-      echo "$ligne"
-    done
+    construire_table_parties
     echo
     echo "## Métriques (§3 #201)"
     echo
@@ -573,8 +687,13 @@ finaliser_nuit() {
 
 # --- 5. Boucle d'une partie ---------------------------------------------------
 
+# $2/$3/$4 (#282, défauts "banc-mj"/"banc-joueur"/"01") : noms d'agent réels
+# et numéro de paire de CETTE partie — suffixés par paire en parallèle
+# (-Paires > 1, § 6bis) pour qu'aucune paire concurrente ne collisionne sur
+# un nom d'agent (#271) ni un pane, chacune sa propre copie de save (déjà
+# vrai avant #282, $partie_dir isole toujours chaque partie).
 jouer_partie() {
-  local rang="$1"
+  local rang="$1" agent_mj="${2:-banc-mj}" agent_joueur="${3:-banc-joueur}" paire="${4:-01}"
   local partie_num=$((START_INDEX + rang - 1))
   local pnn; pnn=$(printf '%02d' "$partie_num")
   local partie_dir="$RUN_DIR/partie-$pnn"
@@ -586,7 +705,7 @@ jouer_partie() {
   PARTIE_DIR_COURANTE="$partie_dir"
   mkdir -p "$partie_dir"
 
-  echo "=== partie $pnn : copie fraîche de la save '$SAVE' ==="
+  echo "=== partie $pnn (paire $paire) : copie fraîche de la save '$SAVE' ==="
   local save_dest="$partie_dir/save"
   rm -rf "$save_dest"
   cp -r "$SAVE_SRC_DIR" "$save_dest"
@@ -596,19 +715,17 @@ jouer_partie() {
     raison="fixture"
     ecrire_craquement "$partie_dir" "00" "fixture" "$(cat "$partie_dir/fixture.log")"
     craquements+=("craquement-fixture-00.md")
-    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "${craquements[@]}"
-    TABLE_PARTIES+=("| $pnn | $modele | 0 | N | $raison |")
+    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "$paire" "${craquements[@]}"
     return 0
   fi
 
   if [ "$DRYRUN" -eq 1 ]; then
     echo "=== partie $pnn : -DryRun — aucun agent lancé ==="
-    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "dry-run" $(( $(date +%s) - t0 ))
-    TABLE_PARTIES+=("| $pnn | $modele | 0 | N | dry-run |")
+    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "dry-run" $(( $(date +%s) - t0 )) "$paire"
     return 0
   fi
 
-  echo "=== partie $pnn : lancement (director=$modele) ==="
+  echo "=== partie $pnn : lancement (director=$modele, agents=$agent_mj/$agent_joueur) ==="
   local session_tour="nuit-$DATE_JOUR-p$pnn"
   if [ -n "$LANCEMENT_CMD_OVERRIDE" ]; then
     # Test uniquement (#263) — voir -LancementCmd ci-dessus. Sous-shell
@@ -620,6 +737,7 @@ jouer_partie() {
       -SessionTour "$session_tour" -Save save -Tours "$TOURS" \
       -ModeleMj "$modele" -ModeleJoueur haiku \
       -SavesDirOverride "$partie_dir" -JournalDirOverride "$partie_dir" \
+      -AgentMj "$agent_mj" -AgentJoueur "$agent_joueur" \
       > "$partie_dir/lancement.log" 2>&1
   fi
   local rc_lancement=$?
@@ -630,13 +748,10 @@ jouer_partie() {
     ECHECS_LANCEMENT_CONSECUTIFS=$((ECHECS_LANCEMENT_CONSECUTIFS + 1))
     ecrire_craquement "$partie_dir" "00" "lancement" "$(tail -30 "$partie_dir/lancement.log")"
     craquements+=("craquement-lancement-00.md")
-    fermer_et_verifier_agents "$partie_dir" "00"
-    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "${craquements[@]}"
-    TABLE_PARTIES+=("| $pnn | $modele | 0 | N | $raison |")
+    fermer_et_verifier_agents "$partie_dir" "00" "$agent_mj" "$agent_joueur"
+    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "$paire" "${craquements[@]}"
     if [ "$ECHECS_LANCEMENT_CONSECUTIFS" -ge 2 ]; then
-      RAISON_ARRET_NUIT="lancement impossible (2 échecs de lancement consécutifs, partie $pnn)"
-      finaliser_nuit
-      exit 6
+      arreter_toute_la_nuit 6 "lancement impossible (2 échecs de lancement consécutifs, partie $pnn)"
     fi
     return 0
   fi
@@ -654,14 +769,14 @@ jouer_partie() {
       # fait pas ») : le gabarit banc-mj.md (gelé D-276 §4) ne décrit pas de
       # protocole de tour 1 froid — le MJ ouvre lui-même la scène
       # (opening_scene) plutôt que d'attendre une action joueur inexistante.
-      herdr agent prompt banc-mj "go — tour $nn : ouverture, pas d'action joueur — établis la scène d'ouverture (opening_scene) puis écris tour-$nn.md en conséquence" >/dev/null 2>&1
+      herdr agent prompt "$agent_mj" "go — tour $nn : ouverture, pas d'action joueur — établis la scène d'ouverture (opening_scene) puis écris tour-$nn.md en conséquence" >/dev/null 2>&1
     else
       echo "=== partie $pnn tour $nn — go joueur $(date '+%H:%M:%S')"
-      herdr agent prompt banc-joueur "go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md" >/dev/null 2>&1
-      attendre_fichier "$partie_dir/action-$nn.md"; r=$?
-      if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
-      if [ "$r" -eq 8 ]; then RAISON_ARRET_NUIT="heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
-      if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; LIMITE_SESSION_TOUCHEE="oui"; fermer_panes; finaliser_nuit; exit 5; fi
+      herdr agent prompt "$agent_joueur" "go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md" >/dev/null 2>&1
+      attendre_fichier "$partie_dir/action-$nn.md" "$agent_mj" "$agent_joueur"; r=$?
+      if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
+      if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
+      if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
       if [ "$r" -ne 0 ]; then
         raison="craquement-timeout"
         ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant action-$nn.md"
@@ -670,13 +785,13 @@ jouer_partie() {
       fi
       local action; action="$(cat "$partie_dir/action-$nn.md")"
       echo "=== partie $pnn tour $nn — go MJ $(date '+%H:%M:%S')"
-      herdr agent prompt banc-mj "go — tour $nn. Action du joueur (verbatim) : $action" >/dev/null 2>&1
+      herdr agent prompt "$agent_mj" "go — tour $nn. Action du joueur (verbatim) : $action" >/dev/null 2>&1
     fi
 
-    attendre_fichier "$partie_dir/tour-$nn.md"; r=$?
-    if [ "$r" -eq 3 ]; then RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
-    if [ "$r" -eq 8 ]; then RAISON_ARRET_NUIT="heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fermer_et_verifier_agents "$partie_dir" "$nn"; finaliser_nuit; exit 130; fi
-    if [ "$r" -eq 5 ]; then RAISON_ARRET_NUIT="limite de session (partie $pnn, tour $nn)"; LIMITE_SESSION_TOUCHEE="oui"; fermer_panes; finaliser_nuit; exit 5; fi
+    attendre_fichier "$partie_dir/tour-$nn.md" "$agent_mj" "$agent_joueur"; r=$?
+    if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
+    if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
+    if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
     if [ "$r" -ne 0 ]; then
       raison="craquement-timeout"
       ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant tour-$nn.md"
@@ -711,33 +826,139 @@ jouer_partie() {
   fi
 
   echo "=== partie $pnn : fermeture des agents ==="
-  fermer_et_verifier_agents "$partie_dir" "$pnn"
+  fermer_et_verifier_agents "$partie_dir" "$pnn" "$agent_mj" "$agent_joueur"
 
   ecrire_resume_run "$partie_dir" "$pnn" "$modele" "$tours_joues" "$fin_atteinte" "$raison" \
-    $(( $(date +%s) - t0 )) "${craquements[@]}"
-  TABLE_PARTIES+=("| $pnn | $modele | $tours_joues | $fin_atteinte | $raison |")
+    $(( $(date +%s) - t0 )) "$paire" "${craquements[@]}"
 }
 
 # --- 6. Boucle des parties ----------------------------------------------------
 
-i=1
-while [ "$i" -le "$PARTIES" ]; do
-  if arret_demande; then
-    echo "=== ARRÊT DEMANDÉ (fichier STOP/PAUSE, #271) — nuit interrompue avant partie $i ==="
-    RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE)"
-    finaliser_nuit
-    exit 130
-  fi
-  if fin_a_atteinte; then
-    echo "=== HEURE DE FIN ATTEINTE ($FIN_A, #276) — nuit interrompue avant partie $i ==="
-    RAISON_ARRET_NUIT="heure de fin atteinte ($FIN_A)"
-    finaliser_nuit
-    exit 130
-  fi
-  jouer_partie "$i"
-  i=$((i + 1))
+if [ "$PAIRES" -eq 1 ]; then
+  # Chemin séquentiel historique (INCHANGÉ depuis #276) — une seule paire,
+  # noms d'agent nus "banc-mj"/"banc-joueur", finaliser_nuit appelée
+  # directement dans ce process (jamais un subshell).
+  i=1
+  while [ "$i" -le "$PARTIES" ]; do
+    if arret_demande; then
+      echo "=== ARRÊT DEMANDÉ (fichier STOP/PAUSE, #271) — nuit interrompue avant partie $i ==="
+      RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE)"
+      finaliser_nuit
+      exit 130
+    fi
+    if fin_a_atteinte; then
+      echo "=== HEURE DE FIN ATTEINTE ($FIN_A, #276) — nuit interrompue avant partie $i ==="
+      RAISON_ARRET_NUIT="heure de fin atteinte ($FIN_A)"
+      finaliser_nuit
+      exit 130
+    fi
+    jouer_partie "$i" "banc-mj" "banc-joueur" "01"
+    i=$((i + 1))
+  done
+
+  finaliser_nuit
+  echo "=== nuit $DATE_JOUR terminée : $NUIT_MD ==="
+  exit 0
+fi
+
+# --- 6bis. Boucle des parties en PARALLÈLE (#282) ----------------------------
+#
+# N paires (slots 1..PAIRES) tournent SIMULTANÉMENT, chacune dans son propre
+# subshell bash (`&`, un vrai process forké — pas une coroutine) : agents
+# "banc-mj-<slot>"/"banc-joueur-<slot>" (jamais de collision de nom, #271),
+# copie de save et .turn/ de la partie qu'elle joue (voir « limite connue »
+# plus haut pour .turn/). Chaque slot reprend la partie suivante du budget
+# -Parties dès qu'il se libère — jusqu'à épuisement du budget ou -FinA.
+#
+# Le budget des rangs (1..PARTIES, comme la boucle séquentielle ci-dessus)
+# est distribué par `mkdir` atomique (prochain_rang) : un `mkdir` ne réussit
+# qu'à UN SEUL appelant même entre process concurrents sur le même système
+# de fichiers — aucun verrou externe (flock) n'est nécessaire ni disponible
+# de façon portable sous Git Bash/Windows.
+#
+# Nettoyage : STOP/PAUSE/-FinA/limite de session sont déclarés une seule
+# fois dans $ARRET_DIR (déclarer_arret_nuit) par la première paire qui les
+# détecte ; finaliser_nuit ne tourne qu'ICI, une fois TOUS les `wait`
+# revenus (jamais dans un subshell de paire — voir arreter_toute_la_nuit).
+# fermer_toutes_paires_en_vol est un FILET après coup (agent qu'une paire
+# n'aurait pas réussi à fermer elle-même) — la fermeture normale reste
+# fermer_et_verifier_agents, appelée par CHAQUE paire pour ELLE-MÊME.
+PAIRES_MODE=1
+rm -rf "$ARRET_DIR" "$RUN_DIR"/.claim-*   # jamais un résidu d'un appel précédent sur ce -RunDir
+
+prochain_rang() {
+  local n
+  for (( n = 1; n <= PARTIES; n++ )); do
+    if mkdir "$RUN_DIR/.claim-$n" 2>/dev/null; then
+      echo "$n"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Ferme au mieux tout agent banc-mj*/banc-joueur* encore listé par herdr en
+# fin de nuit parallèle (#282) — filet de sécurité, jamais le chemin normal
+# (fermer_et_verifier_agents, appelé par chaque paire pour elle-même avant
+# de rendre la main).
+fermer_toutes_paires_en_vol() {
+  local json noms nom pane
+  json="$(herdr agent list 2>/dev/null)"
+  [ -n "$json" ] || return 0
+  noms="$(printf '%s' "$json" | tr '{' '\n' \
+    | grep -oE '"name":"banc-(mj|joueur)(-[0-9]+)?"' \
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort -u)"
+  [ -n "$noms" ] || return 0
+  echo "AVERTISSEMENT : agent(s) du banc encore en vol en fin de nuit parallèle (#282) — fermeture :$(printf ' %s' $noms)" >&2
+  while IFS= read -r nom; do
+    [ -n "$nom" ] || continue
+    pane="$(printf '%s' "$json" | tr '{' '\n' | grep "\"name\":\"$nom\"" \
+      | grep -oE '"pane_id":"[^"]+"' | head -1 | sed -E 's/.*:"([^"]+)"/\1/')"
+    [ -n "$pane" ] && herdr pane close "$pane" >/dev/null 2>&1
+    [ -n "$(agent_existe "$nom")" ] && envoyer_exit_agent "$nom"
+  done <<< "$noms"
+}
+
+# Un slot joue, en boucle, la partie suivante du budget jusqu'à épuisement
+# ou arrêt de toute la nuit déclaré par une AUTRE paire.
+slot_boucle() {
+  local slot="$1" rang
+  local agent_mj="banc-mj-$slot" agent_joueur="banc-joueur-$slot"
+  local paire; paire=$(printf '%02d' "$slot")
+  while true; do
+    if [ -d "$ARRET_DIR" ] || arret_demande || fin_a_atteinte; then
+      return 0
+    fi
+    rang="$(prochain_rang)" || return 0   # budget -Parties épuisé
+    jouer_partie "$rang" "$agent_mj" "$agent_joueur" "$paire"
+  done
+}
+
+N_SLOTS="$PAIRES"
+[ "$N_SLOTS" -gt "$PARTIES" ] && N_SLOTS="$PARTIES"
+
+PIDS=()
+for (( s = 1; s <= N_SLOTS; s++ )); do
+  ( slot_boucle "$s" ) &
+  PIDS+=("$!")
 done
 
+for pid in "${PIDS[@]}"; do
+  wait "$pid"
+done
+
+fermer_toutes_paires_en_vol
+
+if [ -d "$ARRET_DIR" ]; then
+  RAISON_ARRET_NUIT="$(cat "$ARRET_DIR/raison" 2>/dev/null)"
+  LIMITE_SESSION_TOUCHEE="$(cat "$ARRET_DIR/limite_session" 2>/dev/null)"
+  [ -n "$LIMITE_SESSION_TOUCHEE" ] || LIMITE_SESSION_TOUCHEE="non"
+  CODE_SORTIE="$(cat "$ARRET_DIR/code" 2>/dev/null)"
+  [ -n "$CODE_SORTIE" ] || CODE_SORTIE=1
+else
+  CODE_SORTIE=0
+fi
+
 finaliser_nuit
-echo "=== nuit $DATE_JOUR terminée : $NUIT_MD ==="
-exit 0
+echo "=== nuit $DATE_JOUR terminée ($PAIRES paires) : $NUIT_MD ==="
+exit "$CODE_SORTIE"
