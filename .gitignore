@@ -30,6 +30,10 @@ bench/banc-fumee/
 # par partie peuvent citer le module sacrificiel joué, rien ne se versionne ---
 bench/nuit-*/
 
+# --- verrou de création du workspace herdr dédié au banc (#298) : mkdir
+# atomique, transitoire (retiré en fin d'appel), jamais du matériau ---
+bench/.verrou-workspace-banc/
+
 # --- garde core.bare (I-231/#255) : journal machine (horodatage, origine,
 # commande en cours), pas du matériau à versionner ---
 tools/banc/core-bare.log

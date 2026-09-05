@@ -66,6 +66,16 @@
     Nom de l'agent joueur-banc (défaut : "banc-joueur"). Même usage
     qu'-AgentMj (#282).
 
+.PARAMETER WorkspaceLabel
+    Label du workspace herdr DÉDIÉ au banc (défaut : "banc"), créé s'il
+    n'existe pas encore, réutilisé sinon (Issue #298). Les deux panes
+    MJ/joueur se splittent DANS ce workspace, jamais depuis `herdr pane
+    current` — un banc ne doit plus jamais dépendre du pane focalisé par
+    l'opérateur ou par une lane (`circuit.sh lancer`/`nettoyer`), qui change
+    à chaque lancement/nettoyage de lane. nuit.sh passe "banc-<date du
+    jour>" pour qu'une nuit vive dans son propre workspace, distinct d'un
+    smoke test manuel (label "banc" par défaut).
+
 .PARAMETER DryRun
     Affiche le montage complet (panes, gabarits remplis, chemin du journal)
     sans rien créer ni lancer.
@@ -119,6 +129,13 @@ param(
     # (limite herdr, correctif scratchpad #196).
     [string]$AgentMj = 'banc-mj',
     [string]$AgentJoueur = 'banc-joueur',
+
+    # Label du workspace herdr dédié au banc (Issue #298) : créé s'il
+    # n'existe pas, réutilisé sinon — jamais `herdr pane current`, qui
+    # dépend du focus de l'opérateur/des lanes (#298, craquement 05/09 :
+    # panes du banc ouverts dans le workspace d'une lane, fermé par
+    # `circuit.sh nettoyer` en cours de partie).
+    [string]$WorkspaceLabel = 'banc',
 
     [switch]$DryRun
 )
@@ -375,6 +392,109 @@ function Verifie-AgentsNonEnVol {
 }
 Verifie-AgentsNonEnVol -HerdrExe $HerdrExe -Noms @($AgentMj, $AgentJoueur)
 
+# --- 2ter. Workspace herdr DÉDIÉ au banc (#298) -----------------------------
+#
+# Le banc ne doit plus jamais dépendre de `herdr pane current` : le pane
+# focalisé appartient à l'opérateur et aux lanes (`circuit.sh lancer` crée et
+# focalise un nouveau workspace à chaque lancement, `nettoyer` en ferme un) —
+# craquement du 05/09 (#298) : les panes MJ/joueur d'une partie ont été
+# ouverts dans le workspace d'une lane focalisée juste avant, puis fermés
+# avec elle par `circuit.sh nettoyer`, en pleine partie. Les deux panes de ce
+# script vivent désormais dans un workspace herdr identifié par SON PROPRE
+# label ($WorkspaceLabel), créé s'il n'existe pas encore, réutilisé sinon —
+# et `--no-focus` partout (création + splits) : ce script ne change JAMAIS
+# le focus de l'opérateur.
+
+# workspace_id du label passé en $Label, $null si absent.
+function Get-WorkspaceIdParLabel {
+    param(
+        [Parameter(Mandatory)] [string]$HerdrExe,
+        [Parameter(Mandatory)] [string]$Label
+    )
+    $json = & $HerdrExe workspace list 2>$null
+    if (-not $json) { return $null }
+    try { $data = $json | ConvertFrom-Json } catch { return $null }
+    $ws = $data.result.workspaces | Where-Object { $_.label -eq $Label } | Select-Object -First 1
+    if ($ws) { return $ws.workspace_id }
+    return $null
+}
+
+# pane_id du premier pane trouvé dans le workspace $WorkspaceId (pane
+# "pivot" depuis lequel splitter) — $null si le workspace n'a aucun pane
+# (état incohérent, ne devrait jamais arriver : un workspace herdr en a
+# toujours au moins un).
+function Get-PanePivotWorkspace {
+    param(
+        [Parameter(Mandatory)] [string]$HerdrExe,
+        [Parameter(Mandatory)] [string]$WorkspaceId
+    )
+    $json = & $HerdrExe pane list --workspace $WorkspaceId 2>$null
+    if (-not $json) { return $null }
+    try { $data = $json | ConvertFrom-Json } catch { return $null }
+    $pane = $data.result.panes | Select-Object -First 1
+    if ($pane) { return $pane.pane_id }
+    return $null
+}
+
+# Trouve (par label) ou crée le workspace dédié au banc, jamais en changeant
+# le focus de l'opérateur. Rend un objet {WorkspaceId, PaneAncre, Cree}.
+#
+# Verrou (bench\.verrou-workspace-banc\<label>, mkdir atomique, #298, même
+# discipline que ARRET_DIR dans nuit.sh) : le banc de nuit EN PARALLÈLE
+# (-Paires > 1, #282) lance PLUSIEURS instances de ce script en même temps,
+# toutes visant le MÊME label — sans ce verrou, deux instances qui listent
+# les workspaces au même instant verraient toutes les deux "absent" et
+# créeraient CHACUNE un workspace, doublon qui casse la réutilisation ET le
+# nettoyage de fin de nuit (un seul label attendu).
+function Assure-WorkspaceBanc {
+    param(
+        [Parameter(Mandatory)] [string]$HerdrExe,
+        [Parameter(Mandatory)] [string]$Label,
+        [Parameter(Mandatory)] [string]$RepoRoot
+    )
+    $verrouDir = Join-Path $RepoRoot "bench\.verrou-workspace-banc\$Label"
+    $acquis = $false
+    for ($i = 0; $i -lt 150; $i++) {
+        try {
+            New-Item -ItemType Directory -Path $verrouDir -ErrorAction Stop | Out-Null
+            $acquis = $true
+            break
+        } catch {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    if (-not $acquis) {
+        Write-Error "REFUS : verrou de création du workspace banc ($verrouDir) non acquis après 30s -- une autre instance le tient trop longtemps."
+        exit 1
+    }
+    try {
+        $wsId = Get-WorkspaceIdParLabel -HerdrExe $HerdrExe -Label $Label
+        if ($wsId) {
+            $paneAncre = Get-PanePivotWorkspace -HerdrExe $HerdrExe -WorkspaceId $wsId
+            if (-not $paneAncre) {
+                Write-Error "workspace banc '$Label' ($wsId) trouvé mais sans aucun pane -- état incohérent."
+                exit 1
+            }
+            return [PSCustomObject]@{ WorkspaceId = $wsId; PaneAncre = $paneAncre; Cree = $false }
+        }
+        $json = & $HerdrExe workspace create --cwd $RepoRoot --label $Label --no-focus
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Échec de 'herdr workspace create' pour le workspace banc '$Label'."
+            exit 1
+        }
+        $data = $json | ConvertFrom-Json
+        $wsIdCree = $data.result.workspace.workspace_id
+        $paneAncreCree = $data.result.root_pane.pane_id
+        if (-not $wsIdCree -or -not $paneAncreCree) {
+            Write-Error "workspace banc créé mais illisible (label '$Label')."
+            exit 1
+        }
+        return [PSCustomObject]@{ WorkspaceId = $wsIdCree; PaneAncre = $paneAncreCree; Cree = $true }
+    } finally {
+        Remove-Item -Path $verrouDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # --- 3. Dry-run : affiche le montage complet sans rien lancer --------------
 
 if ($DryRun) {
@@ -387,6 +507,7 @@ if ($DryRun) {
         Write-Output "Prochain tour  : $ProchainTourStr"
     }
     Write-Output "Journal        : $JournalDir"
+    Write-Output "Workspace banc : label '$WorkspaceLabel' (créé si absent, réutilisé sinon, #298 -- jamais 'pane current')"
     Write-Output "Pane MJ        : agent $AgentMj (claude, $ModeleMj, effort medium)"
     Write-Output "Pane joueur    : agent $AgentJoueur (claude, $ModeleJoueur, effort low)"
     if ($SavesDirOverride) {
@@ -400,10 +521,10 @@ if ($DryRun) {
     } else {
         Write-Output "  New-Item -ItemType Directory -Force -Path `"$JournalDir`""
     }
-    Write-Output "  `$paneCur = $HerdrExe pane current"
+    Write-Output "  `$workspaceBanc = trouve (herdr workspace list) ou crée (herdr workspace create --cwd `"$RepoRoot`" --label '$WorkspaceLabel' --no-focus) -- focus opérateur inchangé"
     $envArgAffiche = if ($SavesDirOverride) { " --env `"SAVES_DIR=$SavesDirOverride`"" } else { "" }
-    Write-Output "  `$paneMj = $HerdrExe pane split <paneCur> --direction right --cwd `"$RepoRoot`"$envArgAffiche"
-    Write-Output "  `$paneJoueur = $HerdrExe pane split <paneMj> --direction down --cwd `"$RepoRoot`"$envArgAffiche"
+    Write-Output "  `$paneMj = $HerdrExe pane split <pane-ancre-workspace-banc> --direction right --cwd `"$RepoRoot`" --no-focus$envArgAffiche"
+    Write-Output "  `$paneJoueur = $HerdrExe pane split <paneMj> --direction down --cwd `"$RepoRoot`" --no-focus$envArgAffiche"
     Write-Output "  (automode : pose ou complète .claude\settings.local.json dans $RepoRoot — Issue #210, garanti #267)"
     Write-Output "  $HerdrExe agent start $AgentMj --kind claude --pane <paneMj> -- --model $ModeleMj --effort medium --permission-mode acceptEdits"
     Write-Output "  $HerdrExe agent start $AgentJoueur --kind claude --pane <paneJoueur> -- --model $ModeleJoueur --effort low --permission-mode acceptEdits"
@@ -427,16 +548,15 @@ if ($Reprise) {
     New-Item -ItemType Directory -Force -Path $JournalDir | Out-Null
 }
 
-Write-Output "Ouverture des deux panes (MJ + joueur-banc)..."
-$paneCurJson = & $HerdrExe pane current
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Échec de 'herdr pane current' — impossible de localiser le pane courant."
-    exit 1
+Write-Output "Résolution du workspace banc (label '$WorkspaceLabel', #298)..."
+$workspaceBanc = Assure-WorkspaceBanc -HerdrExe $HerdrExe -Label $WorkspaceLabel -RepoRoot $RepoRoot
+if ($workspaceBanc.Cree) {
+    Write-Output "Workspace banc  : $($workspaceBanc.WorkspaceId) (créé, label '$WorkspaceLabel')"
+} else {
+    Write-Output "Workspace banc  : $($workspaceBanc.WorkspaceId) (réutilisé, label '$WorkspaceLabel')"
 }
-$paneCurData = $paneCurJson | ConvertFrom-Json
-$paneCurId = $paneCurData.result.pane.pane_id
-if (-not $paneCurId) { $paneCurId = $paneCurData.result.pane_id }
-if (-not $paneCurId) { Write-Error "pane courant illisible"; exit 1 }
+
+Write-Output "Ouverture des deux panes (MJ + joueur-banc) dans ce workspace -- focus opérateur inchangé..."
 
 # Correctif scratchpad (issue #196) : le MJ prend un pane NEUF (split), jamais
 # le pane courant — et le chemin JSON est result.pane.pane_id.
@@ -445,12 +565,15 @@ if (-not $paneCurId) { Write-Error "pane courant illisible"; exit 1 }
 # seulement au niveau du process courant — la résolution SAVES_DIR
 # (coderain/config.py::_resolve_dir) est dynamique par process, chaque agent
 # lit son propre environnement de pane.
+#
+# --no-focus (#298) : ni la création du workspace ni ces deux splits ne
+# doivent jamais changer le focus de l'opérateur.
 $envSplitArgs = @()
 if ($SavesDirOverride) { $envSplitArgs = @('--env', "SAVES_DIR=$SavesDirOverride") }
 
-$paneMjJson = & $HerdrExe pane split $paneCurId --direction right --cwd $RepoRoot @envSplitArgs
+$paneMjJson = & $HerdrExe pane split $workspaceBanc.PaneAncre --direction right --cwd $RepoRoot --no-focus @envSplitArgs
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Échec de 'herdr pane split' pour ouvrir le pane MJ."
+    Write-Error "Échec de 'herdr pane split' pour ouvrir le pane MJ (workspace banc $($workspaceBanc.WorkspaceId))."
     exit 1
 }
 $paneMjData = $paneMjJson | ConvertFrom-Json
@@ -458,9 +581,9 @@ $paneMjId = $paneMjData.result.pane.pane_id
 if (-not $paneMjId) { $paneMjId = $paneMjData.result.pane_id }
 if (-not $paneMjId) { Write-Error "pane MJ illisible"; exit 1 }
 
-$paneJoueurJson = & $HerdrExe pane split $paneMjId --direction down --cwd $RepoRoot @envSplitArgs
+$paneJoueurJson = & $HerdrExe pane split $paneMjId --direction down --cwd $RepoRoot --no-focus @envSplitArgs
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Échec de 'herdr pane split' pour ouvrir le pane joueur-banc."
+    Write-Error "Échec de 'herdr pane split' pour ouvrir le pane joueur-banc (workspace banc $($workspaceBanc.WorkspaceId))."
     exit 1
 }
 $paneJoueurData = $paneJoueurJson | ConvertFrom-Json
@@ -538,5 +661,5 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Output "Banc de fumée lancé (save $Save, $Tours tours max, session tour $SessionTour) — le script rend la main, le tempo go/pause est tenu par la session tour dans les panes $paneMjId (MJ) et $paneJoueurId (joueur-banc)."
+Write-Output "Banc de fumée lancé (save $Save, $Tours tours max, session tour $SessionTour) — le script rend la main, le tempo go/pause est tenu par la session tour dans les panes $paneMjId (MJ) et $paneJoueurId (joueur-banc), workspace banc $($workspaceBanc.WorkspaceId) (label '$WorkspaceLabel', #298)."
 Write-Output "Journal : $JournalDir"
