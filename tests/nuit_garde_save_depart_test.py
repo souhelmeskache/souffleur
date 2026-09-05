@@ -82,6 +82,17 @@ def main() -> int:
             "Nuit Garde Save Depart Test Fraiche", mode="rpg",
             premise="Save fraîche — même Issue.",
         )
+        # #281 : nuit.sh REFUSE désormais une save sans module installé
+        # (garde monde vide, à côté de la garde tour 0 exercée ici) —
+        # module.json + locations.md non vide, 100% synthétique (D-109).
+        (lib.saves.dir(slug_frais) / "module.json").write_text(
+            '{"partition": "/dev/null/partition-factice", '
+            '"titre": "Module factice de test"}', encoding="utf-8")
+        (lib.saves.dir(slug_frais) / "locations.md").write_text(
+            (lib.saves.dir(slug_frais) / "locations.md").read_text(encoding="utf-8")
+            + "\n## Lieu factice  {#lieu-factice}\nimportance: 3\n\n"
+              "Un lieu 100% synthétique.\n",
+            encoding="utf-8")
         run_dir2 = tmp / "run2"
         p2 = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug_frais,
@@ -93,6 +104,28 @@ def main() -> int:
             f"stdout={p2.stdout}\nstderr={p2.stderr}"
         )
         print("2) nuit.sh accepte une save au tour 0 : sortie 0")
+
+        # --- une save au tour 0 mais SANS module (monde vide, #281) est
+        # refusée par cette même garde, à côté de celle du tour ------------
+        slug_sans_module = lib.saves.create(
+            "Nuit Garde Save Depart Test Sans Module", mode="rpg",
+            premise="Save fraîche sans module — Issue #281.",
+        )
+        assert not (lib.saves.dir(slug_sans_module) / "module.json").exists()
+        run_dir3 = tmp / "run3"
+        p3 = subprocess.run(
+            [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug_sans_module,
+             "-RunDir", str(run_dir3), "-DryRun"],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+        assert p3.returncode == 1, (
+            f"attendu code 1 (REFUS, monde vide), reçu {p3.returncode}\n"
+            f"stdout={p3.stdout}\nstderr={p3.stderr}"
+        )
+        assert "REFUS" in p3.stderr and "module" in p3.stderr, p3.stderr
+        assert not (run_dir3 / "partie-01").exists(), \
+            "aucune partie ne doit être jouée sur REFUS"
+        print("3) nuit.sh refuse une save au tour 0 SANS module (monde vide, #281) : REFUS explicite, sortie 1")
 
         print("\nALL NUIT_GARDE_SAVE_DEPART TESTS PASSED")
         return 0

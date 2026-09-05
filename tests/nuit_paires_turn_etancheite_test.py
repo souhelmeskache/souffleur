@@ -83,6 +83,17 @@ def main() -> int:
             premise="Save 100% synthétique — Issue #287, jamais de matériau réel.",
         )
         assert slug, "création de la save synthétique a échoué"
+        # #281 : nuit.sh REFUSE désormais une save sans module installé
+        # (garde monde vide, à côté de la garde tour 0) — module.json +
+        # locations.md non vide, 100% synthétique (D-109).
+        (lib.saves.dir(slug) / "module.json").write_text(
+            '{"partition": "/dev/null/partition-factice", '
+            '"titre": "Module factice de test"}', encoding="utf-8")
+        (lib.saves.dir(slug) / "locations.md").write_text(
+            (lib.saves.dir(slug) / "locations.md").read_text(encoding="utf-8")
+            + "\n## Lieu factice  {#lieu-factice}\nimportance: 3\n\n"
+              "Un lieu 100% synthétique.\n",
+            encoding="utf-8")
 
         run_dir = tmp / "run"
 

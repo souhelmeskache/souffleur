@@ -202,6 +202,27 @@ if [ "$NB_TOURS_SAVE" -ne 0 ]; then
   exit 1
 fi
 
+# Une nuit ne doit jamais pouvoir jouer un monde VIDE (#281, à côté de la
+# garde tour 0 ci-dessus) : `save-depart.py` installe désormais la partition
+# (module.json + lieux/PNJ projetés) — ce garde refuse toute save qui ne
+# porterait pas ce module (fabriquée avant #281, ou par un autre chemin).
+MODULE_OK="$(cd "$REPO_ROOT" && python -c "
+import sys, json
+sys.path.insert(0, '.')
+from coderain.memory import MemoryStore
+save_dir = r'$SAVE_SRC_DIR_WIN'
+try:
+    json.load(open(save_dir + '/module.json', encoding='utf-8'))
+    nb_lieux = len(MemoryStore(save_dir).entries('locations.md'))
+    print(1 if nb_lieux > 0 else 0)
+except Exception:
+    print(0)
+" 2>/dev/null)"
+if [ "$MODULE_OK" != "1" ]; then
+  echo "REFUS : la save '$SAVE' n'a pas de module installé, une nuit ne joue pas un monde vide." >&2
+  exit 1
+fi
+
 # `.turn/` (mcp_server._turn_dir(), coderain/mcp/narrateur.py +
 # position_etat.py) est le scratch d'assemblage de contexte de CHAQUE
 # Director -- Issue #287 : il dérive de la save CHARGÉE (store.dir), jamais
