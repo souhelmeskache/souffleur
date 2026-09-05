@@ -361,7 +361,17 @@ constantes : d'autres profils de personnage (hors périmètre #275)
 n'exigeront pas de réécrire ce script.
 - `-TimeoutTour <minutes>` (défaut 6) : au-delà, sans nouveau fichier de
   tour, la partie craque (`craquement-timeout-NN.md`) et se ferme ; la
-  suivante démarre.
+  suivante démarre. **Relance à mi-timeout (#299)** : à la moitié du délai
+  sans fichier, `attendre_fichier` renvoie UNE FOIS `herdr agent prompt` à
+  l'agent attendu (« relance — tour NN : le fichier ... n'est pas écrit,
+  reprends là où tu en es et écris-le ») — constat N1/partie 03 et
+  `bench/nuit-20260905/partie-04` : un agent (joueur Haiku, puis Director
+  Haiku) se tait après un appel d'outil, sans erreur, jusqu'au craquement.
+  Le craquement `timeout` nomme désormais l'agent qui s'est tu (rôle
+  `joueur`/`mj`), le fichier attendu, si la relance a été envoyée, et joint
+  les 30 dernières lignes de `herdr agent read <agent>` — capturées AVANT la
+  fermeture des panes (avant #299, l'écran était perdu avec le pane, seule
+  la transcription de session Claude Code restait lisible après coup).
 - `-FinA HH:MM` (#276, heure locale du poste, défaut `06:00` dans
   `nuit.cmd`, pas de défaut dans `nuit.sh` seul) : plus aucune partie ne
   démarre après cette heure ; une partie en cours s'arrête proprement au
@@ -533,7 +543,9 @@ tenté à chaque fin de nuit, jamais en `-DryRun`. Statut toujours cité dans
 
 - **Timeout par tour** (`-TimeoutTour`, défaut 6 min, en attente de
   `action-NN.md` ou `tour-NN.md`) : craquement `timeout` journalisé, partie
-  fermée, suivante lancée — n'arrête PAS la nuit.
+  fermée, suivante lancée — n'arrête PAS la nuit. Relance à mi-timeout et
+  identité de l'agent qui s'est tu (rôle, fichier attendu, transcription) :
+  voir `-TimeoutTour` ci-dessus (#299).
 - **Prose absente des deux voies** (#269, #295) : `tour-NN.md` apparaît mais
   ni `prose-NN.md` (voie fichier) ni sa section « Prose du Narrateur »
   (voie extraction) ne sont exploitables — craquement `prose-absente`
