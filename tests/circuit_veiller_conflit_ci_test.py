@@ -17,6 +17,12 @@ bash après le source, comme circuit_veiller_conflit_merge_test.py.
 `lancer_revue` et `nettoyer_une` sont également redéfinies pour éviter tout
 appel réel (PowerShell / herdr workspace / git worktree).
 
+Le scénario 1 traverse le chemin de succès de `merger_et_nettoyer` (merge au
+2e cycle), qui se termine par `gh pr merge` puis `git -C "$MAIN_REPO" pull
+--ff-only` -- un vrai appel réseau sur le checkout principal si on ne le
+feinte pas (100% hors-ligne, CLAUDE.md). `git` y est donc également
+redéfinie en fonction journalisée, comme `gh`/`herdr`.
+
 Deux scénarios, chacun un appel bash indépendant :
   1) phase ci : checks SUCCESS + mergeState=DIRTY stable + lane vivante ->
      consigne de rebase envoyée, pas de timeout, retour en attente TERMINÉ
@@ -102,6 +108,10 @@ herdr() {
   return 0
 }
 lancer_revue() { _VERDICT_BODY="REVUE : APPROUVE -- rien a redire"; return 0; }
+# merger_et_nettoyer se termine par `git -C "$MAIN_REPO" pull --ff-only` --
+# feinte, sinon vrai appel réseau sur le checkout principal (100%
+# hors-ligne, CLAUDE.md).
+git() { echo "GIT-CALL: $*" >> "$CALLS_FILE"; return 0; }
 '''
 
 p = run(gh_dirty_ci_vivante)
@@ -113,6 +123,8 @@ assert p.stdout.count("HERDR-CALL: agent prompt lane-999 CONFLIT DE MERGE") == 1
 assert "rebase sur origin/main" in p.stdout
 assert "push --force-with-lease" in p.stdout
 assert "en conflit avec main" in p.stdout
+assert "GIT-CALL:" in p.stdout and "pull --ff-only" in p.stdout, \
+    f"attendu le pull --ff-only du checkout principal, feint (jamais réel) : {p.stdout!r}"
 print("1) DIRTY stable en phase ci + lane vivante -> consigne de rebase, pas de timeout, merge au 2e cycle")
 
 # ---- 2) DIRTY stable en phase ci + lane morte -> sortie 1 nommée -----------
