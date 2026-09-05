@@ -234,10 +234,10 @@ tools/banc/nuit.sh -Parties N [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40
   suivante du budget `-Parties` — jusqu'à épuisement du budget ou `-FinA`.
   Étanchéité par paire : agents suffixés (`banc-mj-1`/`banc-joueur-1`,
   `banc-mj-2`/`banc-joueur-2`, ... — jamais de collision de nom, #271), sa
-  propre copie de save et son propre dossier `partie-NN` (déjà vrai avant
-  #282). `-Paires 1` (défaut) est le chemin séquentiel historique, INCHANGÉ
-  bit à bit. Voir « Limite connue : `.turn/` partagé » ci-dessous avant
-  d'utiliser `-Paires > 1`.
+  propre copie de save, son propre dossier `partie-NN` et son propre `.turn/`
+  (déjà vrai avant #282 pour la save/`partie-NN` ; `.turn/` étanche depuis
+  #287, voir « Étanchéité de `.turn/` entre paires » ci-dessous). `-Paires 1`
+  (défaut) est le chemin séquentiel historique, INCHANGÉ bit à bit.
 - `-Director haiku|sonnet|ab` (défaut `sonnet`) : modèle du Director
   (agent MJ). `ab` alterne haiku/sonnet en commençant par haiku (N0 = 4
   parties : 2 et 2) — le casting de chaque partie est écrit dans son
@@ -495,22 +495,20 @@ tenté à chaque fin de nuit, jamais en `-DryRun`. Statut toujours cité dans
   partie vérifiée » ci-dessus.
 - **`130`** : interrompu (Ctrl+C, ou fichier `STOP`/`tools/PAUSE`).
 
-### Limite connue : `.turn/` partagé entre paires (#282)
+### Étanchéité de `.turn/` entre paires (#287, ferme le point dur laissé par #282)
 
-`.turn/` (`mcp_server.ROOT / ".turn"`, `coderain/mcp/narrateur.py` +
-`coderain/mcp/position_etat.py`) est un scratch d'assemblage de contexte de
-tour — `mcp_server.ROOT` se résout au dossier du fichier `mcp_server.py`,
-c'est-à-dire CE worktree, jamais par process/cwd/partie. En séquentiel
-(`-Paires 1`, un seul Director actif à la fois) ça ne collisionne jamais.
-Avec `-Paires > 1`, **N Directors concurrents dans le même worktree
-partagent le même `.turn/paquet-narrateur.md`** — un Director peut lire un
-paquet destiné à une AUTRE partie au même instant. `nuit.sh` avertit sur
-stderr dès `-Paires > 1` ; ce point dur n'est PAS résolu par #282 (isoler
-`.turn/` par partie demanderait de faire dépendre `mcp_server.ROOT` du cwd
-de l'agent, hors périmètre : aucune modification du moteur). `.turn/`
-n'est jamais relu au-delà du tour courant (scratch, jamais une source de
-vérité de la save) — le risque réel touche la PROSE narrée à un instant T
-d'une partie parallèle, pas une corruption de save ni de `transcript.md`.
+`.turn/` (`mcp_server._turn_dir()`, `coderain/mcp/narrateur.py` +
+`coderain/mcp/position_etat.py`) est le scratch d'assemblage de contexte de
+tour (`context.md`, `paquet-narrateur.md`). Il dérive désormais de la save
+CHARGÉE (`store.dir / ".turn"`), jamais de `mcp_server.ROOT` (qui se
+résout au dossier de `mcp_server.py`, donc au worktree entier — le défaut
+constaté par #282 : N Directors concurrents partageaient le même fichier).
+Chaque partie de nuit copie déjà sa propre save sous `partie-NN/save/`
+(`-Paires > 1`, #282) : `.turn/` vit donc SOUS ce dossier, un par partie,
+sans aucun changement au lanceur. `.turn/` n'est jamais relu au-delà du
+tour courant (scratch, jamais une source de vérité de la save). Test :
+`tests/turn_dir_etancheite_test.py` (deux saves synthétiques, écriture en
+alternance, contenus distincts sur disque, aucun croisement).
 
 ### Ce que la nuit ne fait pas
 
