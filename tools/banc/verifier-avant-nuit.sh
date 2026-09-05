@@ -88,6 +88,17 @@ agents_en_vol="$(herdr agent list 2>/dev/null | tr '{' '\n' \
   | grep -oE '"name":"(lane|revue)-[0-9]+"' | sort -u | tr '\n' ' ')"
 [ -z "$agents_en_vol" ] || refus "agent(s) de circuit en vol : $agents_en_vol — attends la fin ou nettoie (circuit.sh nettoyer)."
 
+# --- rien en vol : agent(s) du banc lui-même (#282) -------------------------
+#
+# Un banc-mj/banc-joueur (ou leur forme suffixée par paire "banc-mj-NN",
+# nuit.sh -Paires > 1, #282) survivant d'une nuit précédente ferait échouer
+# `herdr agent start` de la nuit qui démarre par collision de nom (#271,
+# déjà constaté en séquentiel) — refusé ICI, avant tout lancement, plutôt
+# que de laisser chaque partie craquer une à une au lancement.
+agents_banc_en_vol="$(herdr agent list 2>/dev/null | tr '{' '\n' \
+  | grep -oE '"name":"banc-(mj|joueur)(-[0-9]+)?"' | sort -u | tr '\n' ' ')"
+[ -z "$agents_banc_en_vol" ] || refus "agent(s) du banc déjà en vol : $agents_banc_en_vol — ferme-les (herdr pane close / /exit) avant de relancer une nuit."
+
 prs_ouvertes="$(gh pr list -R "$REPO" --json number --jq 'length' 2>/dev/null || echo '')"
 if [ -n "$prs_ouvertes" ] && [ "$prs_ouvertes" != "0" ]; then
   refus "$prs_ouvertes PR ouverte(s) sur $REPO — circuit pas au repos."
