@@ -206,8 +206,10 @@ cmd.exe), **sans ouvrir Claude Code**. Résout Git Bash lui-même (pas de
 dépendance au PATH pour bash), reste ouverte le temps de la nuit, et
 enchaîne : `git pull --ff-only` → garde de prérequis + « rien en vol »
 (`verifier-avant-nuit.sh` : herdr joignable, `claude`/`gh` présents, save
-présente, aucun agent `lane-*`/`revue-*` de circuit.sh, aucune PR ouverte,
-envoi à blanc des deux gabarits rendus vers un agent inexistant — #263,
+présente, aucun agent `lane-*`/`revue-*` de circuit.sh NI `banc-mj`/
+`banc-joueur` (forme nue ou suffixée par paire `banc-mj-N`, #282) déjà en
+vol, aucune PR ouverte, envoi à blanc des deux gabarits rendus vers un
+agent inexistant — #263,
 `tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
 l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
 `tools/banc/nuit.sh -Parties 4 -Director ab` (défauts — un argument passé au
@@ -220,13 +222,22 @@ l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
 ### `nuit.sh` — paramètres
 
 ```
-tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
+tools/banc/nuit.sh -Parties N [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40]
                     [-Save <slug>] [-TimeoutTour <minutes>]
                     [-FinA HH:MM] [-DryRun]
 ```
 
 - `-Parties N` (obligatoire) : nombre de parties à jouer ce lancement — le
   budget de la nuit. Plafond dur : aucune (N+1)-ème partie n'est lancée.
+- `-Paires N` (défaut 1, Issue #282) : N parties tournent SIMULTANÉMENT (N
+  paires Director/joueur). Quand une paire finit sa partie, elle reprend la
+  suivante du budget `-Parties` — jusqu'à épuisement du budget ou `-FinA`.
+  Étanchéité par paire : agents suffixés (`banc-mj-1`/`banc-joueur-1`,
+  `banc-mj-2`/`banc-joueur-2`, ... — jamais de collision de nom, #271), sa
+  propre copie de save et son propre dossier `partie-NN` (déjà vrai avant
+  #282). `-Paires 1` (défaut) est le chemin séquentiel historique, INCHANGÉ
+  bit à bit. Voir « Limite connue : `.turn/` partagé » ci-dessous avant
+  d'utiliser `-Paires > 1`.
 - `-Director haiku|sonnet|ab` (défaut `sonnet`) : modèle du Director
   (agent MJ). `ab` alterne haiku/sonnet en commençant par haiku (N0 = 4
   parties : 2 et 2) — le casting de chaque partie est écrit dans son
@@ -394,15 +405,20 @@ comme un timeout de tour, ça n'arrête pas la nuit.
 
 `bench/nuit-AAAAMMJJ/partie-NN/` reçoit `tour-NN.md`, `prose-NN.md`,
 `action-NN.md`, `craquement-*.md` (comme le banc de fumée) + un
-`resume-run.md` MINIMAL écrit par le script (casting, tours joués, fin
-atteinte O/N, raison de l'arrêt, liste des craquements, durée) — l'analyse
-est N2, pas ce script.
+`resume-run.md` MINIMAL écrit par le script (casting, **paire** — #282,
+numéro de la paire Director/joueur qui a joué cette partie, "01" en
+séquentiel —, tours joués, fin atteinte O/N, raison de l'arrêt, liste des
+craquements, durée) — l'analyse est N2, pas ce script.
 
 `bench/nuit-AAAAMMJJ/nuit.md` : table des parties (director, tours joués,
-fin atteinte, raison), budget consommé, raison de l'arrêt de la nuit, les
-métriques §3 de #201 (`tools/banc/metriques_nuit.py`, calculées par le
-script, jamais un jugement), et le statut du dépôt de `rapport-nuit.md` sur
-l'Issue #201 (voir ci-dessous).
+fin atteinte, raison), budget consommé, nombre de paires (`-Paires`, #282),
+raison de l'arrêt de la nuit, les métriques §3 de #201
+(`tools/banc/metriques_nuit.py`, calculées par le script, jamais un
+jugement — inclut désormais « Paires simultanées », #282), et le statut du
+dépôt de `rapport-nuit.md` sur l'Issue #201 (voir ci-dessous). La table est
+reconstruite mécaniquement à partir des `resume-run.md` déjà écrits (jamais
+accumulée en mémoire pendant la nuit) — fonctionne identiquement en
+séquentiel et en parallèle.
 
 ### `rapport-nuit.md` — « lis la nuit » sans agent (#276)
 
@@ -515,6 +531,23 @@ tenté à chaque fin de nuit, jamais en `-DryRun`. Statut toujours cité dans
 - **`7`** : agent non fermé après `pane close` + `/exit` — voir « Fin de
   partie vérifiée » ci-dessus.
 - **`130`** : interrompu (Ctrl+C, ou fichier `STOP`/`tools/PAUSE`).
+
+### Limite connue : `.turn/` partagé entre paires (#282)
+
+`.turn/` (`mcp_server.ROOT / ".turn"`, `coderain/mcp/narrateur.py` +
+`coderain/mcp/position_etat.py`) est un scratch d'assemblage de contexte de
+tour — `mcp_server.ROOT` se résout au dossier du fichier `mcp_server.py`,
+c'est-à-dire CE worktree, jamais par process/cwd/partie. En séquentiel
+(`-Paires 1`, un seul Director actif à la fois) ça ne collisionne jamais.
+Avec `-Paires > 1`, **N Directors concurrents dans le même worktree
+partagent le même `.turn/paquet-narrateur.md`** — un Director peut lire un
+paquet destiné à une AUTRE partie au même instant. `nuit.sh` avertit sur
+stderr dès `-Paires > 1` ; ce point dur n'est PAS résolu par #282 (isoler
+`.turn/` par partie demanderait de faire dépendre `mcp_server.ROOT` du cwd
+de l'agent, hors périmètre : aucune modification du moteur). `.turn/`
+n'est jamais relu au-delà du tour courant (scratch, jamais une source de
+vérité de la save) — le risque réel touche la PROSE narrée à un instant T
+d'une partie parallèle, pas une corruption de save ni de `transcript.md`.
 
 ### Ce que la nuit ne fait pas
 

@@ -26,6 +26,12 @@ Métriques rendues (fonction `calculer`) :
   (`env.deltas.enemies`) porte un delta d'ennemi — la seule trace qu'un
   échange de coups hors dnd5e-engine (apply_envelope, ex. `attack`) laisse
   aujourd'hui dans le journal.
+- `paires` : nombre de paires Director/joueur DISTINCTES ayant joué dans ce
+  run (#282, banc de nuit en parallèle) — relu dans la ligne `paire: NN`
+  que `nuit.sh::ecrire_resume_run` écrit dans chaque `resume-run.md` ("01"
+  en séquentiel, une paire par slot en parallèle). Une partie sans
+  `resume-run.md` (interrompue avant sa fin) ne compte pour aucune paire ;
+  1 par défaut si aucune partie n'a encore de `resume-run.md`.
 
 Étendu pour #281 (garde monde vide) : `lire_module_info` lit `module.json` +
 compte lieux/PNJ dans la save de la première partie qui en porte un — la
@@ -126,6 +132,16 @@ def lire_resume_run(partie_dir: Path) -> dict:
     return out
 
 
+def compter_paires(parties_dirs: list[Path]) -> int:
+    """Nombre de paires Director/joueur distinctes ayant joué dans ce run
+    (#282) — lu dans la ligne `paire: NN` de chaque `resume-run.md`. 1 par
+    défaut si aucune partie n'a encore de `resume-run.md` (run tout juste
+    démarré, ou entièrement craqué avant la première écriture)."""
+    paires_vues = {lire_resume_run(p).get("paire") for p in parties_dirs}
+    paires_vues.discard(None)
+    return len(paires_vues) if paires_vues else 1
+
+
 def calculer(run_dir: Path) -> dict:
     """Calcule toutes les métriques §3 de #201 pour un run `bench/nuit-*/`."""
     parties_dirs = sorted(p for p in run_dir.glob("partie-*") if p.is_dir())
@@ -141,6 +157,7 @@ def calculer(run_dir: Path) -> dict:
     return {
         "parties_lancees": len(parties_dirs),
         "parties_finies": finies,
+        "paires": compter_paires(parties_dirs),
         "tours_median": statistics.median(tours_par_partie) if tours_par_partie else 0,
         "refus_outil": compter_refus_outil(events_tous),
         "bouchages": compter_bouchages(events_tous),
@@ -153,6 +170,7 @@ def formater_markdown(m: dict) -> str:
     """Rend les métriques en lignes Markdown prêtes à coller dans `nuit.md`."""
     return (
         f"- Parties finies / lancées : {m['parties_finies']} / {m['parties_lancees']}\n"
+        f"- Paires simultanées : {m['paires']}\n"
         f"- Tours sans craquement par partie (médiane) : {m['tours_median']}\n"
         f"- Refus d'outil (`attack`/`roll_check`, events.jsonl) : {m['refus_outil']}\n"
         f"- Bouchages enregistrés (D-275) : {m['bouchages']}\n"
@@ -287,6 +305,7 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "module": lire_module_info(run_dir),
         "parties_finies": m["parties_finies"],
         "parties_lancees": m["parties_lancees"],
+        "paires": m["paires"],
         "duree_totale_s": duree_totale_s,
         "raison_arret": raison_arret,
         "tours_median": m["tours_median"],
@@ -311,6 +330,7 @@ def formater_rapport_markdown(r: dict) -> str:
         "",
         module_ligne,
         f"- Parties finies / lancées : {r['parties_finies']} / {r['parties_lancees']}",
+        f"- Paires simultanées : {r['paires']}",
         f"- Durée totale : {r['duree_totale_s']}s",
         f"- Raison d'arrêt : {r['raison_arret']}",
         "- Tours sans craquement par partie (médiane / min / max) : "
