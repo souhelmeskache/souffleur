@@ -38,6 +38,16 @@ import json
 import sys
 from pathlib import Path
 
+# Force UTF-8 sur stdout/stderr quel que soit le terminal (Issue #279) : sous
+# Windows, sys.stdout/stderr sont en cp1252 hors terminal UTF-8 explicite.
+# `reconfigure` peut lever si le flux n'en dispose pas (ex. capturé par un
+# test) — sans conséquence, le flux garde alors son encodage d'origine.
+for _flux in (sys.stdout, sys.stderr):
+    try:
+        _flux.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -177,10 +187,9 @@ def main(argv: list[str] | None = None) -> int:
 
     result = fabriquer(args.slug, args.from_save, args.scenario, args.profil,
                        args.force)
-    try:
-        print(result["message"])
-    except UnicodeEncodeError:  # console non-UTF8 (cmd.exe par défaut)
-        print(result["message"].encode("ascii", "replace").decode("ascii"))
+    # stdout forcé en UTF-8 en tête de fichier (#279) : plus besoin de repli
+    # ASCII, le message passe quel que soit le terminal.
+    print(result["message"])
     return 0 if result["status"] == "created" else 2
 
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import sys
 import tempfile
@@ -74,15 +75,29 @@ def main() -> int:
         assert len(rapport["pires_craquements"]) == 2, rapport
         assert any(str(p2 / "craquement-timeout-03.md") == c for c in rapport["pires_craquements"]), rapport
         assert any(str(p1 / "tour-05.md") == c for c in rapport["pires_craquements"]), rapport
+        # aucune save/meta.json dans ces parties synthétiques -> ABSENT
+        # (Souhel #279 : « module : <titre ou ABSENT> »).
+        assert rapport["module_titre"] is None, rapport
         print("2) calculer_rapport() sur arborescence synthétique : classes, A/B Director, "
-              "pointeurs pires craquements OK")
+              "pointeurs pires craquements, module OK")
 
         rendu = metriques_nuit.formater_rapport_markdown(rapport)
-        for attendu in ("Parties finies / lancées : 1 / 2", "Raison d'arrêt : budget -Parties atteint",
+        for attendu in ("Module : ABSENT", "Parties finies / lancées : 1 / 2",
+                         "Raison d'arrêt : budget -Parties atteint",
                          "director : 1", "non classé : 1", "haiku : tours moyens 4",
                          "Limite de session touchée : non"):
             assert attendu in rendu, f"'{attendu}' absent du rendu :\n{rendu}"
         print("3) formater_rapport_markdown() : rendu cohérent avec calculer_rapport()")
+
+        # --- 2bis. module_titre lu depuis save/meta.json (Souhel #279) -------
+        (p1 / "save").mkdir()
+        (p1 / "save" / "meta.json").write_text(
+            json.dumps({"title": "Beyond the Vale of Madness"}), encoding="utf-8")
+        rapport_module = metriques_nuit.calculer_rapport(run_dir, "STOP", 10, "non")
+        assert rapport_module["module_titre"] == "Beyond the Vale of Madness", rapport_module
+        assert "Module : Beyond the Vale of Madness" in \
+            metriques_nuit.formater_rapport_markdown(rapport_module)
+        print("2ter) module_titre lu dans save/meta.json (première partie du run)")
 
         # --- 4. cas « aucune partie » -- jamais fatal -------------------------
         run_dir_vide = tmp / "nuit-vide"

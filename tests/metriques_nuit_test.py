@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -90,6 +92,39 @@ def main() -> int:
         print("5) formater_markdown() : rendu Markdown cohérent avec calculer()")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- 6. UTF-8 forcé sur stdout, sans dépendre de l'environnement ---------
+    # (Issue #279) : `metriques_nuit.py` en sous-processus, PYTHONIOENCODING
+    # retiré de l'environnement — sous Windows, sans cet override,
+    # sys.stdout du sous-processus tombe en cp1252 (encodage console par
+    # défaut) plutôt qu'en UTF-8. Le rapport porte « ⊥ » (A/B Director) et
+    # des accents (« arrêté ») : avant le correctif, ceci levait
+    # UnicodeEncodeError (nuit du 03/09, cf. #279) au lieu de sortir 0.
+    tmp2 = Path(tempfile.mkdtemp(prefix="metriques-nuit-utf8-test-"))
+    try:
+        run_dir2 = tmp2 / "nuit-utf8"
+        partie_dir = run_dir2 / "partie-01"
+        (partie_dir / "save" / "memory").mkdir(parents=True)
+        (partie_dir / "prose-01.md").write_text("x", encoding="utf-8")
+        (partie_dir / "resume-run.md").write_text(
+            "tours_joues: 1\nfin_atteinte: O\n", encoding="utf-8")
+
+        env = dict(os.environ)
+        env.pop("PYTHONIOENCODING", None)
+        script = REPO_ROOT / "tools" / "banc" / "metriques_nuit.py"
+        proc = subprocess.run(
+            [sys.executable, str(script), str(run_dir2), "rapport",
+             "arrêté à heure fixe", "42", "non"],
+            env=env, capture_output=True,
+        )
+        assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+        rapport = proc.stdout.decode("utf-8")
+        assert "⊥" in rapport, rapport
+        assert "arrêté" in rapport, rapport
+        print("6) sous-processus PYTHONIOENCODING retiré : sortie 0, "
+              "« ⊥ » et accents intacts en UTF-8")
+    finally:
+        shutil.rmtree(tmp2, ignore_errors=True)
 
     print("\nALL METRIQUES_NUIT TESTS PASSED")
     return 0
