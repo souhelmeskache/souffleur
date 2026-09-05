@@ -150,6 +150,16 @@ RUN_DIR="${RUN_DIR_OVERRIDE:-$REPO_ROOT/bench/nuit-$DATE_JOUR}"
 mkdir -p "$RUN_DIR"
 NUIT_MD="$RUN_DIR/nuit.md"
 
+# Workspace herdr DÉDIÉ à cette nuit (#298) — passé à chaque appel de
+# lancer-banc-fumee.ps1 (-WorkspaceLabel) : les panes MJ/joueur de TOUTE
+# partie de cette nuit (séquentielle ou en paires parallèles, #282) vivent
+# dans ce workspace, jamais dans celui d'une lane ou de l'opérateur (jamais
+# `herdr pane current`, voir tools/banc/README.md § « Workspace dédié au
+# banc »). Un label par jour calendaire (pas juste "banc") : une nuit qui se
+# relance en continuation le même jour ($START_INDEX > 1 ci-dessous) réutilise
+# le même workspace, jamais un doublon.
+WORKSPACE_LABEL_BANC="banc-$DATE_JOUR"
+
 # Sentinelle d'arrêt (#271) — testée à chaque poll de attendre_fichier ET
 # entre deux parties : Ctrl+C n'est pas garanti sous Windows (trap INT/TERM
 # jamais exercé depuis un shell Windows, constat nuit N0 02/09) ; créer l'un
@@ -396,6 +406,21 @@ fermer_panes() {
   PANE_JOUEUR_COURANT=""
 }
 
+# Ferme TOUS les panes encore ouverts dans le workspace dédié au banc de
+# cette nuit ($WORKSPACE_LABEL_BANC, #298) -- appelée une seule fois, à la
+# toute fin de la nuit (finaliser_nuit, tout chemin d'arrêt confondu), APRÈS
+# que chaque partie a déjà fermé ses propres panes MJ/joueur
+# (fermer_et_verifier_agents) : filet de sécurité pour tout pane résiduel
+# (ex. le pane ancre créé avec le workspace, jamais utilisé par une partie).
+# Déléguée à fermer-workspace-banc.sh (extrait pour être testable avec un
+# faux herdr, même discipline que verifier-agents-en-vol.sh) -- ce script ne
+# ferme JAMAIS le workspace lui-même (pas de `herdr workspace close`, garde
+# symétrique de circuit.sh nettoyer) : il ne disparaît que devenu vide, par
+# la fermeture normale de ses panes.
+fermer_panes_workspace_banc() {
+  "$REPO_ROOT/tools/banc/fermer-workspace-banc.sh" "$WORKSPACE_LABEL_BANC"
+}
+
 # "1" si l'agent nommé $1 apparaît dans `herdr agent list`, vide sinon.
 agent_existe() {
   herdr agent list 2>/dev/null | grep -q "\"name\":\"$1\"" && echo 1
@@ -502,11 +527,29 @@ limite_session_detectee() {
 # demandé — sentinelle STOP/PAUSE, #271), 4 (timeout du tour, craquement
 # LOCAL à la partie), 5 (limite de session — arrêt de TOUTE la nuit, budget
 # #260), 8 (heure de fin -FinA atteinte — arrêt de TOUTE la nuit, #276).
+#
+# $4 (agent_attendu) / $5 (role_attendu, "joueur"|"mj") / $6 (nn, numéro de
+# tour) — Issue #299 : à mi-timeout sans fichier, relance UNE FOIS l'agent
+# attendu (`herdr agent prompt`) plutôt que d'attendre en silence jusqu'au
+# craquement — constat N1/partie 03 et bench/nuit-20260905/partie-04 : un
+# agent (joueur Haiku, puis Director Haiku) se tait après un appel d'outil,
+# sans erreur ni relance, jusqu'au craquement `timeout` (6 min perdus).
+# Variables GLOBALES en sortie (relues par l'appelant pour le craquement,
+# une fonction bash ne peut pas rendre une chaîne) :
+# - RELANCE_ENVOYEE : "oui"/"non" — une relance a-t-elle été envoyée.
+# - TRANSCRIPTION_TIMEOUT : 30 dernières lignes de `herdr agent read
+#   $agent_attendu`, capturées AVANT toute fermeture de pane (#299 point 2 —
+#   aujourd'hui l'écran est perdu avec le pane, seule la transcription de
+#   session Claude Code restait lisible après coup).
 attendre_fichier() {
   local fichier="$1" agent_mj="${2:-banc-mj}" agent_joueur="${3:-banc-joueur}"
+  local agent_attendu="${4:-}" role_attendu="${5:-}" nn="${6:-}"
   local n=0 bloque_polls=0
   local max_polls=$(( (TIMEOUT_TOUR_SECS + POLL_SECS - 1) / POLL_SECS ))
   local max_polls_bloque=$(( (LIMITE_SESSION_IDLE_SECS + POLL_SECS - 1) / POLL_SECS ))
+  local mi_polls=$(( max_polls / 2 )); [ "$mi_polls" -ge 1 ] || mi_polls=1
+  RELANCE_ENVOYEE="non"
+  TRANSCRIPTION_TIMEOUT=""
   while [ ! -s "$fichier" ]; do
     if arret_demande; then
       echo "ARRÊT DEMANDÉ (fichier STOP/PAUSE détecté, #271)"
@@ -530,8 +573,18 @@ attendre_fichier() {
       bloque_polls=0
     fi
     n=$((n + 1))
+    if [ "$RELANCE_ENVOYEE" = "non" ] && [ "$n" -ge "$mi_polls" ] && [ -n "$agent_attendu" ]; then
+      echo "RELANCE (mi-timeout, tour $nn) : $role_attendu=$agent_attendu n'a pas écrit $(basename "$fichier") — renvoi"
+      herdr agent prompt "$agent_attendu" \
+        "relance — tour $nn : le fichier $fichier n'est pas écrit, reprends là où tu en es et écris-le" \
+        >/dev/null 2>&1
+      RELANCE_ENVOYEE="oui"
+    fi
     if [ "$n" -gt "$max_polls" ]; then
       echo "TIMEOUT tour (> ${TIMEOUT_TOUR_MIN}min) en attendant $(basename "$fichier")"
+      if [ -n "$agent_attendu" ]; then
+        TRANSCRIPTION_TIMEOUT="$(herdr agent read "$agent_attendu" 2>/dev/null | tail -30)"
+      fi
       return 4
     fi
     sleep "$POLL_SECS"
@@ -724,6 +777,13 @@ deposer_rapport_201() {
 # du dépôt qui n'aurait pas encore eu lieu.
 finaliser_nuit() {
   local duree_s=$(( $(date +%s) - DEBUT_NUIT ))
+  # Fermeture des panes du workspace banc (#298) : jamais sous -RunDir (usage
+  # interne/tests uniquement, § -RunDir ci-dessus) -- un test tournant sur ce
+  # poste pendant qu'une VRAIE nuit joue dans le workspace "$WORKSPACE_LABEL_BANC"
+  # ne doit jamais fermer les panes de cette nuit réelle.
+  if [ -z "$RUN_DIR_OVERRIDE" ]; then
+    fermer_panes_workspace_banc
+  fi
   ecrire_rapport_nuit "$duree_s"
   DEPOT_RAPPORT_STATUT="$(deposer_rapport_201)"
   ecrire_nuit_md "$duree_s"
@@ -782,6 +842,7 @@ jouer_partie() {
       -ModeleMj "$modele" -ModeleJoueur haiku \
       -SavesDirOverride "$partie_dir" -JournalDirOverride "$partie_dir" \
       -AgentMj "$agent_mj" -AgentJoueur "$agent_joueur" \
+      -WorkspaceLabel "$WORKSPACE_LABEL_BANC" \
       > "$partie_dir/lancement.log" 2>&1
   fi
   local rc_lancement=$?
@@ -818,13 +879,15 @@ jouer_partie() {
     else
       echo "=== partie $pnn tour $nn — go joueur $(date '+%H:%M:%S')"
       herdr agent prompt "$agent_joueur" "go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md" >/dev/null 2>&1
-      attendre_fichier "$partie_dir/action-$nn.md" "$agent_mj" "$agent_joueur"; r=$?
+      attendre_fichier "$partie_dir/action-$nn.md" "$agent_mj" "$agent_joueur" "$agent_joueur" "joueur" "$nn"; r=$?
       if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
       if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
       if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
       if [ "$r" -ne 0 ]; then
         raison="craquement-timeout"
-        ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant action-$nn.md"
+        ecrire_craquement "$partie_dir" "$nn" "timeout" "$(printf \
+          'agent : joueur (%s)\nfichier attendu : %s\nrelance envoyée : %s\n\n--- 30 dernières lignes de `herdr agent read %s` ---\n%s\n' \
+          "$agent_joueur" "$partie_dir/action-$nn.md" "$RELANCE_ENVOYEE" "$agent_joueur" "$TRANSCRIPTION_TIMEOUT")"
         craquements+=("craquement-timeout-$nn.md")
         break
       fi
@@ -834,13 +897,15 @@ jouer_partie() {
       herdr agent prompt "$agent_mj" "go — tour $nn. Action du joueur (verbatim) : $action" >/dev/null 2>&1
     fi
 
-    attendre_fichier "$partie_dir/tour-$nn.md" "$agent_mj" "$agent_joueur"; r=$?
+    attendre_fichier "$partie_dir/tour-$nn.md" "$agent_mj" "$agent_joueur" "$agent_mj" "mj" "$nn"; r=$?
     if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
     if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
     if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
     if [ "$r" -ne 0 ]; then
       raison="craquement-timeout"
-      ecrire_craquement "$partie_dir" "$nn" "timeout" "timeout en attendant tour-$nn.md"
+      ecrire_craquement "$partie_dir" "$nn" "timeout" "$(printf \
+        'agent : mj (%s)\nfichier attendu : %s\nrelance envoyée : %s\n\n--- 30 dernières lignes de `herdr agent read %s` ---\n%s\n' \
+        "$agent_mj" "$partie_dir/tour-$nn.md" "$RELANCE_ENVOYEE" "$agent_mj" "$TRANSCRIPTION_TIMEOUT")"
       craquements+=("craquement-timeout-$nn.md")
       break
     fi

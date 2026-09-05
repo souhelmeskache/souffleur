@@ -2,10 +2,11 @@
 # tools/banc/verifier-avant-nuit.sh — garde avant de lancer une nuit (#260,
 # complément cadrage nuit.cmd) : prérequis (herdr joignable, claude/gh
 # présents, save présente) + « rien en vol » (un agent banc-mj/banc-joueur
-# survivant d'une nuit précédente REFUSE ; une lane-*/revue-* de circuit.sh
-# en vol ou une PR ouverte sur le dépôt sont l'état normal du poste et sont
-# seulement signalées en AVERTISSEMENT, #292/#297). Sortie non nulle et
-# message clair sur REFUS — jamais un lancement à l'aveugle.
+# survivant d'une nuit précédente, ou un workspace banc non vide (#298),
+# REFUSE ; une lane-*/revue-* de circuit.sh en vol ou une PR ouverte sur le
+# dépôt sont l'état normal du poste et sont seulement signalées en
+# AVERTISSEMENT, #292/#297). Sortie non nulle et message clair sur REFUS —
+# jamais un lancement à l'aveugle.
 #
 # Usage : tools/banc/verifier-avant-nuit.sh [save-slug]
 set -u
@@ -124,6 +125,17 @@ if [ "$AGENTS_EN_VOL_RC" -ne 0 ]; then
   refus "${SORTIE_AGENTS_EN_VOL#REFUS : }"
 fi
 [ -z "$SORTIE_AGENTS_EN_VOL" ] || echo "$SORTIE_AGENTS_EN_VOL"
+
+# --- workspace(s) banc non vide(s) : partie survivante (#298) ---------------
+#
+# Classification déléguée à verifier-workspace-banc-vide.sh (extrait pour
+# être testable indépendamment de herdr, même discipline que
+# verifier-agents-en-vol.sh, #292).
+SORTIE_WORKSPACE_BANC="$(herdr workspace list 2>/dev/null | "$REPO_ROOT/tools/banc/verifier-workspace-banc-vide.sh" 2>&1)"
+WORKSPACE_BANC_RC=$?
+if [ "$WORKSPACE_BANC_RC" -ne 0 ]; then
+  refus "${SORTIE_WORKSPACE_BANC#REFUS : }"
+fi
 
 # --- PR(s) ouverte(s) sur le dépôt : avertissement, pas un refus (#297) ----
 #
