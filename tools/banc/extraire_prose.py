@@ -1,15 +1,21 @@
 """tools/banc/extraire_prose.py — extraction MÉCANIQUE de prose-NN.md depuis
 tour-NN.md (Issue #269).
 
-Le gabarit `banc-mj.md` (gelé, D-276 §4) spécifie `tour-NN.md` comme
-livrable du MJ — jamais `prose-NN.md`, qui n'est mentionné nulle part comme
-fichier à écrire. `prose-NN.md` est l'organe zéro-spoiler du banc (D-219) :
-le joueur ne doit lire QUE la prose du narrateur, jamais la visée du
-Director, les événements moteur ou les chemins de paquets qui vivent dans
-`tour-NN.md`. Ce script produit donc `prose-NN.md` par extraction pure
-(aucun LLM, aucun jugement) de la section « Prose du Narrateur » de
+Le gabarit `banc-mj.md` (D-276 §4 — le gel ne couvre pas l'outillage de
+test, décision Souhel #295) IMPOSE au MJ d'écrire la prose du narrateur
+VERBATIM, INLINE, dans une section `## Prose du Narrateur` de `tour-NN.md`
+lui-même (étape 8, § Journal du banc) — jamais un renvoi vers `prose-NN.md`,
+que le MJ n'écrit plus lui-même. `prose-NN.md` reste l'organe zéro-spoiler
+du banc (D-219) : le joueur ne doit lire QUE la prose du narrateur, jamais
+la visée du Director, les événements moteur ou les chemins de paquets qui
+vivent dans `tour-NN.md`. Ce script produit `prose-NN.md` par extraction
+pure (aucun LLM, aucun jugement) de la section « Prose du Narrateur » de
 `tour-NN.md` — tolérant aux variantes de titre (niveau de titre, casse,
-suffixe « (verbatim) » ou non).
+suffixe « (verbatim) » ou non). C'est la voie PRIMAIRE depuis #295 ;
+`tools/banc/arbitrer_prose.py` (appelé par `nuit.sh`) l'essaie en premier
+et ne retombe sur la voie fichier (repli tolérant, MJ ayant malgré tout
+écrit `prose-NN.md` lui-même) que si elle échoue — voir ce module, qui
+arbitre entre les deux.
 
 Usage :
     python tools/banc/extraire_prose.py <tour-NN.md> <prose-NN.md>

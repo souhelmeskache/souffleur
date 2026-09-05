@@ -118,4 +118,18 @@ gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
 assert "bench/banc-fumee/" in gitignore, ".gitignore ne couvre pas bench/banc-fumee/"
 print("6) .gitignore couvre bench/banc-fumee/ (journal du banc jamais versionné)")
 
+# ============================================================
+# 7) Issue #295 : la prose du narrateur va INLINE dans tour-NN.md sous un
+# titre dédié -- jamais un renvoi vers prose-NN.md, que le MJ n'écrit plus
+# lui-même (voie extraction = primaire, tools/banc/arbitrer_prose.py).
+# ============================================================
+assert "## Prose du Narrateur" in texte_mj, \
+    "gabarit MJ : titre de section '## Prose du Narrateur' absent (#295)"
+assert "jamais un renvoi" in basse_mj or "jamais renvoyer" in basse_mj, \
+    "gabarit MJ : interdiction du renvoi vers prose-NN.md absente (#295)"
+assert "n'écris plus" in basse_mj or "n'écrit plus" in basse_mj, \
+    "gabarit MJ : consigne 'n'écrit plus prose-NN.md lui-même' absente (#295)"
+print("7) Issue #295 : section '## Prose du Narrateur' inline imposée, renvoi interdit, "
+      "le MJ n'écrit plus prose-NN.md lui-même")
+
 print("\nOK -- outillage du banc de fumée (D-264, Issue #151) : forme des gabarits + du lanceur")

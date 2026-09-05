@@ -47,7 +47,7 @@ craquements par classe D-276 §4 (matériau / règle / Director / outillage) :
 purement mécanique, lu dans le nom `craquement-<classe>-NN.md` — un fichier
 dont le token de classe ne correspond à aucune des quatre compte « non
 classé » (aujourd'hui la totalité des craquements mécaniques de nuit.sh :
-fixture/lancement/nettoyage/timeout/prose-absente ne portent pas ces noms de
+fixture/lancement/nettoyage/timeout/prose-absente/prose-polluee ne portent pas ces noms de
 classe — la classification D-276 réelle est l'analyste N2, hors périmètre
 #276). L'A/B Director (haiku ⊥ sonnet) relit le casting déjà écrit par
 `ecrire_resume_run` dans `resume-run.md` (ligne `casting: ... director=<modele>(...)`).
@@ -196,7 +196,7 @@ def formater_markdown(m: dict) -> str:
 # --- rapport-nuit.md (#276) --------------------------------------------------
 
 # Classes reconnues D-276 §4 — tout le reste (y compris les types mécaniques
-# actuels de nuit.sh : fixture/lancement/nettoyage/timeout/prose-absente)
+# actuels de nuit.sh : fixture/lancement/nettoyage/timeout/prose-absente/prose-polluee)
 # compte « non classé » (classification N2, hors périmètre #276).
 CLASSES_D276 = {"materiau", "matériau", "regle", "règle", "director", "outillage"}
 NON_CLASSE = "non classé"
