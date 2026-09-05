@@ -32,6 +32,12 @@ Métriques rendues (fonction `calculer`) :
   en séquentiel, une paire par slot en parallèle). Une partie sans
   `resume-run.md` (interrompue avant sa fin) ne compte pour aucune paire ;
   1 par défaut si aucune partie n'a encore de `resume-run.md`.
+- `timeouts_joueur` / `timeouts_mj` : nombre de `craquement-timeout-NN.md`
+  imputés à chaque rôle (Issue #299 — départager « Haiku se tait » de « le
+  banc attend mal ») — lu dans la ligne `agent : joueur (...)`/`agent : mj
+  (...)` que `nuit.sh::attendre_fichier` écrit désormais en tête de chaque
+  craquement timeout. Un craquement-timeout sans cette ligne (run d'avant
+  #299) compte « non classé » côté rôle, ni joueur ni mj.
 
 Étendu pour #281 (garde monde vide) : `lire_module_info` lit `module.json` +
 compte lieux/PNJ dans la save de la première partie qui en porte un — la
@@ -145,6 +151,31 @@ def lire_resume_run(partie_dir: Path) -> dict:
     return out
 
 
+def compter_timeouts_par_role(run_dir: Path) -> dict:
+    """Compte les `craquement-timeout-NN.md` par rôle (#299) — lit la ligne
+    `agent : joueur (...)`/`agent : mj (...)` écrite par
+    `nuit.sh::attendre_fichier` en tête du détail de chaque craquement
+    timeout. Fichier absent de cette ligne (run d'avant #299, ou détail
+    tronqué) : ni joueur ni mj, jamais deviné."""
+    joueur = mj = 0
+    for p in sorted(run_dir.glob("partie-*")):
+        if not p.is_dir():
+            continue
+        for f in sorted(p.glob("craquement-timeout-*.md")):
+            try:
+                contenu = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            m = re.search(r"^agent : (joueur|mj) ", contenu, re.MULTILINE)
+            if not m:
+                continue
+            if m.group(1) == "joueur":
+                joueur += 1
+            else:
+                mj += 1
+    return {"joueur": joueur, "mj": mj}
+
+
 def compter_paires(parties_dirs: list[Path]) -> int:
     """Nombre de paires Director/joueur distinctes ayant joué dans ce run
     (#282) — lu dans la ligne `paire: NN` de chaque `resume-run.md`. 1 par
@@ -167,6 +198,7 @@ def calculer(run_dir: Path) -> dict:
         events_tous.extend(lire_events(p / "save" / "memory" / "events.jsonl"))
 
     combats = compter_combats(events_tous)
+    timeouts = compter_timeouts_par_role(run_dir)
     return {
         "parties_lancees": len(parties_dirs),
         "parties_finies": finies,
@@ -176,6 +208,8 @@ def calculer(run_dir: Path) -> dict:
         "bouchages": compter_bouchages(events_tous),
         "combats_sous_systeme": combats["sous_systeme"],
         "combats_hors_sous_systeme": combats["hors_sous_systeme"],
+        "timeouts_joueur": timeouts["joueur"],
+        "timeouts_mj": timeouts["mj"],
     }
 
 
@@ -190,6 +224,7 @@ def formater_markdown(m: dict) -> str:
         f"- Combats dans le sous-système (`start_combat`) : {m['combats_sous_systeme']}\n"
         f"- Combats hors sous-système (deltas d'ennemi hors dnd5e-engine) : "
         f"{m['combats_hors_sous_systeme']}\n"
+        f"- Timeouts par rôle (#299) : joueur {m['timeouts_joueur']} / mj {m['timeouts_mj']}\n"
     )
 
 
@@ -328,6 +363,8 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "ab_director": stats_ab_director(run_dir),
         "limite_session": limite_session,
         "pires_craquements": pires_craquements(run_dir),
+        "timeouts_joueur": m["timeouts_joueur"],
+        "timeouts_mj": m["timeouts_mj"],
     }
 
 
@@ -362,6 +399,8 @@ def formater_rapport_markdown(r: dict) -> str:
                            f"craquements imputés au Director {d['craquements_director']}")
     else:
         lignes.append("  - (aucune partie castée)")
+    lignes.append(f"- Timeouts par rôle (#299) : joueur {r['timeouts_joueur']} / "
+                  f"mj {r['timeouts_mj']}")
     lignes.append(f"- Limite de session touchée : {r['limite_session']}")
     lignes.append(f"- Budget consommé : durée {r['duree_totale_s']}s (jetons non mesurés)")
     lignes.append("- Pires craquements (jusqu'à 3, ordre : plus récent d'abord) :")
