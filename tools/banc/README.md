@@ -246,21 +246,54 @@ jouée a été instanciée, `coderain/converter/install.py`), au moyen de
 ```
 python tools/banc/save-depart.py
     [--slug banc-depart-beyond-the-vale-of-madness]
-    [--from-save beyond-the-vale-of-madness]   # source du scénario à reprendre
+    [--from-save beyond-the-vale-of-madness]   # source du scénario ET de la partition à reprendre
     [--scenario <slug scénario, déduit de --from-save par défaut>]
     [--profil guerrier] [--force]
 ```
 
-`--from-save` ne sert qu'à retrouver, dans son `meta.json`, le slug du
-scénario dont repartir — la save de départ n'en copie ni l'état ni les
-tours. Le slug de départ et le profil de fixture sont des paramètres, pas
-des constantes : d'autres profils de personnage (hors périmètre #275)
-n'exigeront pas de réécrire ce script.
+`--from-save` sert à retrouver DEUX choses dans les fichiers de cette save
+déjà installée : le slug du scénario (dans son `meta.json`) et le chemin de
+la partition (dans son `module.json`) — la save de départ n'en copie ni
+l'état ni les tours.
 
-`tools/banc/verifier-avant-nuit.sh` vérifie, en plus de ses gardes
-existantes, que la save `-Save` (ou son défaut) existe et est bien au tour
-0 — même contrat que la garde de `nuit.sh`, pour échouer avant même de
-tenter un lancement.
+### Contrat de la save de départ : module installé, jamais un monde vide (#281)
+
+Constat #281 (lu le 05/09 sur `bench/nuit-20260903/`) : la save fabriquée
+portait le personnage mais aucun module — pas de `module.json`,
+`locations.md`/`characters.md`/`custom-instructions.md` réduits au gabarit
+vide. Le Director l'a constaté lui-même en séance (« aucun contenu
+scénarisé n'existe derrière ce seuil ») : les 80 tours de N1 mesuraient la
+tenue du Director dans le vide, pas le module.
+
+`save-depart.py` **installe désormais la partition** après `new_save` — même
+fonction que `converter/install.py::install` appelle (`converter/projection.py
+::derive`, jamais réécrite), appelée seule pour ne pas écraser le player.md
+que la fixture personnage installe juste après. Le contrat, vérifié SUR
+DISQUE avant de rendre `"created"` (refus nommé sinon) :
+
+- `module.json` présent, pointant sur une partition qui existe encore sur
+  disque ;
+- `locations.md` et `characters.md` non réduits au gabarit vide (au moins un
+  lieu, au moins un PNJ projetés depuis la partition) ;
+- `custom-instructions.md` porte le brief de direction P4 (marqueur
+  `P4-BRIEF-START`) — seulement si la partition source porte elle-même un
+  `directeur.md` (pièce standard `MRPG-D-177`).
+
+**`threads.md` n'est délibérément pas vérifié** : ni `derive()` ni
+`install()` ne projettent de fils depuis la partition — les threads d'une
+save jouée viennent des tours joués (`quest_update`), inexistants au tour 0.
+Un gabarit vide y est légitime tant que le convertisseur ne gagne pas cette
+capacité (hors périmètre #281 : « ne pas réécrire converter/install.py »).
+
+`tools/banc/nuit.sh` et `tools/banc/verifier-avant-nuit.sh` vérifient, en
+plus de ses gardes existantes, que la save `-Save` (ou son défaut) existe,
+est bien au tour 0, ET porte un module installé (`module.json` présent,
+`locations.md` non réduit au gabarit) — REFUS nommé sinon (« la save
+'<slug>' n'a pas de module installé, une nuit ne joue pas un monde vide »),
+à côté de la garde tour 0, pour échouer avant même de tenter un lancement.
+Le slug de départ et le profil de fixture sont des paramètres, pas des
+constantes : d'autres profils de personnage (hors périmètre #275)
+n'exigeront pas de réécrire ce script.
 - `-TimeoutTour <minutes>` (défaut 6) : au-delà, sans nouveau fichier de
   tour, la partie craque (`craquement-timeout-NN.md`) et se ferme ; la
   suivante démarre.
@@ -365,6 +398,10 @@ fonctions `calculer_rapport`/`formater_rapport_markdown`, appelées `<run_dir>
 rapport <raison_arret> <duree_totale_s> <limite_session:oui|non>` — étend
 `metriques_nuit.py`, ne duplique rien) :
 
+- module joué en tête du rapport (`Module : <titre>, <n> lieux, <n> PNJ`,
+  #281) — lu dans `save/module.json` + `locations.md`/`characters.md` de la
+  première partie qui en porte un ; « aucun » si absent, jamais une ligne
+  fantôme — pour que le vide se voie dans le rapport lui-même ;
 - parties finies / lancées, durée totale, raison d'arrêt ;
 - tours sans craquement par partie (médiane / min / max) ;
 - craquements par classe D-276 §4 (matériau / règle / Director / outillage)

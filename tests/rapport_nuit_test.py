@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import sys
 import tempfile
@@ -97,12 +98,40 @@ def main() -> int:
         assert "(aucun)" in rendu_vide and "(aucune partie castée)" in rendu_vide, rendu_vide
         print("4) aucune partie jouée : calculer_rapport()/formater_rapport_markdown() ne crashent pas")
 
-        # --- 5. CLI `main()` mode rapport ------------------------------------
+        # --- 5bis. ligne « Module : ... » (#281), depuis save/module.json ---
+        (p1 / "save" / "memory").mkdir(parents=True)
+        (p1 / "save" / "module.json").write_text(
+            json.dumps({"titre": "Module Factice Rapport",
+                       "partition": "/dev/null/partition"}),
+            encoding="utf-8")
+        (p1 / "save" / "locations.md").write_text(
+            "# Locations\n\n## Entree  {#entree}\nimportance: 3\n\nUn hall.\n",
+            encoding="utf-8")
+        (p1 / "save" / "characters.md").write_text(
+            "# Characters\n\n## Garde  {#garde}\nimportance: 3\n\nUn garde.\n\n"
+            "## Aubergiste  {#aubergiste}\nimportance: 2\n\nSert la biere.\n",
+            encoding="utf-8")
+        info = metriques_nuit.lire_module_info(run_dir)
+        assert info == {"titre": "Module Factice Rapport", "lieux": 1, "pnj": 2}, info
+        rapport_module = metriques_nuit.calculer_rapport(run_dir, "STOP", 10, "non")
+        assert rapport_module["module"] == info, rapport_module
+        rendu_module = metriques_nuit.formater_rapport_markdown(rapport_module)
+        assert "Module : Module Factice Rapport, 1 lieux, 2 PNJ" in rendu_module, rendu_module
+        print("5bis) lire_module_info() + ligne « Module : ... » en tête du rapport : OK")
+
+        # aucune save avec module.json dans l'arbre -> ligne nommée, jamais fatal
+        info_absent = metriques_nuit.lire_module_info(run_dir_vide)
+        assert info_absent is None, info_absent
+        rendu_sans_module = metriques_nuit.formater_rapport_markdown(rapport_vide)
+        assert "Module : aucun" in rendu_sans_module, rendu_sans_module
+        print("5ter) aucun module.json dans l'arbre -> ligne nommée « aucun », pas fatal")
+
+        # --- 6. CLI `main()` mode rapport ------------------------------------
         rc = metriques_nuit.main([str(run_dir), "rapport", "STOP", "42", "oui"])
         assert rc == 0
         rc_bad = metriques_nuit.main([str(run_dir), "rapport", "STOP"])
         assert rc_bad == 1
-        print("5) CLI `<run_dir> rapport <raison> <duree_s> <limite_session>` OK, usage sinon")
+        print("6) CLI `<run_dir> rapport <raison> <duree_s> <limite_session>` OK, usage sinon")
 
         print("\nALL RAPPORT_NUIT TESTS PASSED")
         return 0

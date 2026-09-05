@@ -66,6 +66,25 @@ print(len(MemoryStore(r'$SAVE_SRC_WIN').turns()))
 [[ "$NB_TOURS_SAVE" =~ ^[0-9]+$ ]] || refus "impossible de lire le nombre de tours de la save '$SAVE' ($SAVE_SRC)."
 [ "$NB_TOURS_SAVE" -eq 0 ] || refus "la save '$SAVE' est au tour $NB_TOURS_SAVE, une nuit ne joue qu'une save de départ (tour 0)."
 
+# --- module installé, pas un monde vide (#281, à côté de la garde tour 0) ---
+#
+# `save-depart.py` installe désormais la partition associée (module.json +
+# lieux/PNJ projetés) — REFUS si la save n'a pas de module.json ou si ses
+# lieux sont au gabarit vide (fabriquée avant #281, ou par un autre chemin).
+MODULE_OK="$(cd "$REPO_ROOT" && python -c "
+import sys, json
+sys.path.insert(0, '.')
+from coderain.memory import MemoryStore
+save_dir = r'$SAVE_SRC_WIN'
+try:
+    json.load(open(save_dir + '/module.json', encoding='utf-8'))
+    nb_lieux = len(MemoryStore(save_dir).entries('locations.md'))
+    print(1 if nb_lieux > 0 else 0)
+except Exception:
+    print(0)
+" 2>/dev/null)"
+[ "$MODULE_OK" = "1" ] || refus "la save '$SAVE' n'a pas de module installé, une nuit ne joue pas un monde vide."
+
 # --- envoi à blanc des deux gabarits (#263) ---------------------------------
 #
 # tools/lancer-banc-fumee.ps1 envoie chaque gabarit rendu en un seul argument

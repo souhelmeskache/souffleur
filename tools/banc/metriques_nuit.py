@@ -27,6 +27,12 @@ Métriques rendues (fonction `calculer`) :
   échange de coups hors dnd5e-engine (apply_envelope, ex. `attack`) laisse
   aujourd'hui dans le journal.
 
+Étendu pour #281 (garde monde vide) : `lire_module_info` lit `module.json` +
+compte lieux/PNJ dans la save de la première partie qui en porte un — la
+ligne « Module : <titre>, <n> lieux, <n> PNJ » en tête de `rapport-nuit.md`
+rend visible, dans le rapport lui-même, qu'une nuit a bien joué un module et
+pas un monde vide (#281, constat N1 du 05/09).
+
 Étendu pour #276 (« lis la nuit » sans agent) : `calculer_rapport` /
 `formater_rapport_markdown` produisent `rapport-nuit.md`, écrit par
 `tools/banc/nuit.sh` à la fin de la nuit quelle que soit la raison d'arrêt
@@ -47,6 +53,13 @@ import re
 import statistics
 import sys
 from pathlib import Path
+
+# Import `coderain.memory` (#281, ligne « module : ... » du rapport) —
+# sys.path résolu depuis __file__, jamais depuis le cwd : ce script est
+# appelé par nuit.sh sans `cd "$REPO_ROOT"` préalable pour cet appel.
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 
 def lire_events(events_path: Path) -> list[dict]:
@@ -238,6 +251,31 @@ def pires_craquements(run_dir: Path, n: int = 3) -> list[str]:
     return pointeurs
 
 
+def lire_module_info(run_dir: Path) -> dict | None:
+    """Lit `module.json` + compte lieux/PNJ dans la save de la première
+    partie du run qui en porte un (#281) — chaque partie copie fraîchement
+    la même save source, son module est donc représentatif de la nuit
+    entière. None si aucune partie n'a de `save/module.json` lisible (avant
+    #281 ; ou lancement raté dès la partie 00) — le rapport le nomme alors
+    plutôt que d'inventer un module, la garde de `nuit.sh` REFUSANT déjà en
+    amont une save sans module (voir README, § « Save de DÉPART gelée »)."""
+    from coderain.memory import MemoryStore
+    for p in sorted(run_dir.glob("partie-*")):
+        save_dir = p / "save"
+        module_path = save_dir / "module.json"
+        if not module_path.exists():
+            continue
+        try:
+            module_ptr = json.loads(module_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        store = MemoryStore(save_dir)
+        return {"titre": module_ptr.get("titre", "?"),
+                "lieux": len(store.entries("locations.md")),
+                "pnj": len(store.entries("characters.md"))}
+    return None
+
+
 def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
                       limite_session: str) -> dict:
     """Calcule `rapport-nuit.md` (§ « Livrer » 2 de #276) — étend `calculer`
@@ -246,6 +284,7 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
     tours_par_partie = [tours_sans_craquement(p)
                          for p in sorted(run_dir.glob("partie-*")) if p.is_dir()]
     return {
+        "module": lire_module_info(run_dir),
         "parties_finies": m["parties_finies"],
         "parties_lancees": m["parties_lancees"],
         "duree_totale_s": duree_totale_s,
@@ -262,9 +301,15 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
 
 def formater_rapport_markdown(r: dict) -> str:
     """Rend `rapport-nuit.md` (dix à vingt lignes, forme fixe #276)."""
+    module = r.get("module")
+    module_ligne = (
+        f"- Module : {module['titre']}, {module['lieux']} lieux, "
+        f"{module['pnj']} PNJ" if module else
+        "- Module : aucun (save sans module.json — voir garde nuit.sh, #281)")
     lignes = [
         "# rapport-nuit",
         "",
+        module_ligne,
         f"- Parties finies / lancées : {r['parties_finies']} / {r['parties_lancees']}",
         f"- Durée totale : {r['duree_totale_s']}s",
         f"- Raison d'arrêt : {r['raison_arret']}",
