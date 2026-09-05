@@ -19,6 +19,15 @@
 # « ce que la nuit ne fait pas ».
 set -u
 
+# Ceinture et bretelles (Issue #279) : chaque script Python du banc force déjà
+# UTF-8 sur stdout/stderr lui-même (reconfigure), mais cet export protège
+# aussi tout script tiers/futur appelé depuis ici sans ce garde — sous
+# Windows, sys.stdout est en cp1252 hors terminal UTF-8 explicite, et un
+# caractère hors cp1252 (« », accents) dans une sortie faisait planter le
+# script avant même d'écrire quoi que ce soit (UnicodeEncodeError, nuit du
+# 03/09).
+export PYTHONIOENCODING=utf-8
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LANCEUR_PS1="$REPO_ROOT/tools/lancer-banc-fumee.ps1"
 FIXTURE_PY="$REPO_ROOT/bench/fixtures/personnage-banc.py"

@@ -24,6 +24,18 @@ import re
 import sys
 from pathlib import Path
 
+# Force UTF-8 sur stdout/stderr quel que soit le terminal (Issue #279) : sous
+# Windows, sys.stdout/stderr sont en cp1252 hors terminal UTF-8 explicite, et
+# un message d'erreur portant un caractère hors cp1252 (« », accents) fait
+# planter le script avant même d'écrire quoi que ce soit. `reconfigure` peut
+# lever si le flux n'en dispose pas (ex. capturé par un test) — sans
+# conséquence, le flux garde alors son encodage d'origine.
+for _flux in (sys.stdout, sys.stderr):
+    try:
+        _flux.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 # Titre de section : 1 à 6 '#', "Prose du Narrateur" (casse libre), puis
 # n'importe quel suffixe (ex. " (verbatim)", " :", rien).
 TITRE_RE = re.compile(r"^(#{1,6})\s*Prose du Narrateur\b.*$", re.IGNORECASE)

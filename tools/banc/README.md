@@ -113,6 +113,29 @@ distincts, et un seul est piégeux :
   `tests/verifier_liste_blanche_nuit_test.py` cas 5 (la garde, chemin `/c/…`
   simulé — reproduit le défaut #270 sans dépendre d'un vrai poste cassé).
 
+## UTF-8 garanti, quel que soit le terminal (#279)
+
+Sous Windows, `sys.stdout`/`sys.stderr` de Python sont en cp1252 hors
+terminal UTF-8 explicite (même défaut que la frontière bash ⊥ Windows
+ci-dessus). Nuit du 03/09 : `metriques_nuit.py` a levé `UnicodeEncodeError`
+sur le caractère « ⊥ » du rapport (position hors table cp1252), faisant
+tomber `rapport-nuit.md` en trace d'erreur au lieu du rapport — même famille
+que le mojibake déjà vu sous PowerShell 5.1 (H-753 §4).
+
+**Ceinture et bretelles**, les deux systématiques plutôt que l'une ou
+l'autre :
+- Chaque script du banc qui imprime (`metriques_nuit.py`,
+  `extraire_prose.py`, `save-depart.py`) force `sys.stdout`/`sys.stderr` en
+  UTF-8 en tête de fichier (`reconfigure(encoding="utf-8")`, protégé contre
+  un flux qui n'en dispose pas, ex. capturé par un test).
+- `nuit.sh` exporte `PYTHONIOENCODING=utf-8` en tête — protège aussi tout
+  script tiers/futur appelé depuis là sans ce garde.
+
+Test : `tests/metriques_nuit_test.py` cas 6, sous-processus avec
+`PYTHONIOENCODING` retiré de l'environnement, sur un rapport portant « ⊥ »
+et des accents — reproduit le défaut #279 sans le correctif (vérifié en
+local), sortie 0 et UTF-8 intact avec.
+
 ## Deux protections partagées avec `tools/lancer-lane.ps1` (#276, cadrage complémentaire 03/09)
 
 - **Refus nommé Haiku + mode `auto`** (`tools/refus-haiku-auto.ps1`,
@@ -211,6 +234,15 @@ tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
 
 - `-Parties N` (obligatoire) : nombre de parties à jouer ce lancement — le
   budget de la nuit. Plafond dur : aucune (N+1)-ème partie n'est lancée.
+  **Constat #279** (nuit du 03/09) : `-Parties 4` a épuisé son budget à
+  01:30 sur les ~7h disponibles avant `-FinA 06:00` — le budget `-Parties`
+  fixe, pas l'heure de fin, a été le facteur limitant. Deux pistes possibles
+  pour combler l'écart, **ni l'une ni l'autre tranchée ici** (décision
+  Souhel, hors périmètre #279) : (a) `nuit.cmd` boucle des lancements
+  successifs jusqu'à `-FinA` quand `-Parties` n'est pas fourni au `.cmd` ;
+  (b) relever le défaut de `nuit.cmd` au-delà de 4 (ex. 8). Les deux gardent
+  `-Parties` obligatoire côté `nuit.sh` (le plafond dur reste nécessaire
+  quelle que soit l'option retenue).
 - `-Director haiku|sonnet|ab` (défaut `sonnet`) : modèle du Director
   (agent MJ). `ab` alterne haiku/sonnet en commençant par haiku (N0 = 4
   parties : 2 et 2) — le casting de chaque partie est écrit dans son

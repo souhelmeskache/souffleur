@@ -48,6 +48,19 @@ import statistics
 import sys
 from pathlib import Path
 
+# Force UTF-8 sur stdout/stderr quel que soit le terminal (Issue #279) : sous
+# Windows, sys.stdout/stderr sont en cp1252 hors terminal UTF-8 explicite —
+# `nuit.sh` redirige la sortie de ce script (rapport-nuit.md, nuit.md), et un
+# rapport contenant « » ou des accents faisait tomber le calcul avant
+# d'écrire quoi que ce soit (UnicodeEncodeError, nuit du 03/09). `reconfigure`
+# peut lever si le flux n'en dispose pas (ex. capturé par un test) — sans
+# conséquence, le flux garde alors son encodage d'origine.
+for _flux in (sys.stdout, sys.stderr):
+    try:
+        _flux.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 
 def lire_events(events_path: Path) -> list[dict]:
     """Lit un `events.jsonl` ; une ligne malformée est ignorée (jamais
