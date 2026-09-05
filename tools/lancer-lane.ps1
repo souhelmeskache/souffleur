@@ -685,6 +685,14 @@ chacun des trois moments suivants — aucun n'est optionnel :
    règles fixes ci-dessus). Voir sonnette ci-dessous : même tentative
    ``SendMessage`` avant ce commentaire si ``-SessionTour`` a été fourni.
 
+**Après CHAQUE correction (verdict REFUS de revue, CI rouge, conflit de
+merge — tout renvoi que la veille (`veiller`) t'adresse), reposte un
+commentaire TERMINÉ, pas seulement un Jalon.** La veille attend
+spécifiquement ce mot pour relancer le circuit (revue/CI/merge) ; un
+« Jalon : ... corrigé » ne relance rien et laisse la veille tourner à vide
+jusqu'à son timeout (I-291). Le format est le même qu'à la fin du travail
+initial : ``TERMINÉ : <lien PR>`` (plus ``REVUE REQUISE`` si applicable).
+
 $sonnette
 "@
 }

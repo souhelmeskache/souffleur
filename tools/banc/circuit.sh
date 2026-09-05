@@ -426,15 +426,42 @@ attendre_pr() {
   return 3
 }
 
+# Tolérance (#291) : la lane a posté un commentaire postérieur au verdict
+# (T0) sans qu'il commence par TERMINÉ (ex. "Jalon : ... traité") — un
+# gabarit à moitié suivi, même famille que #280/#288. Si en plus la CI de la
+# PR est verte sur un commit poussé après T0, le travail est considéré comme
+# rendu : on ne bloque pas 90 min sur un mot qui ne viendra pas. Return 0 si
+# la tolérance s'applique, 1 sinon (aucun appel gh en trop si le premier
+# test échoue déjà).
+verdict_tolere_sans_termine() {
+  local issue="$1" pr="$2" t0="$3" autre dernier_commit ck
+  autre=$(gh issue view "$issue" -R "$REPO" --json comments --jq "[.comments[] | select(.createdAt > \"$t0\")] | length" 2>/dev/null)
+  [ -n "$autre" ] && [ "$autre" != "0" ] || return 1
+  dernier_commit=$(gh pr view "$pr" -R "$REPO" --json commits --jq '.commits[-1].committedDate // empty' 2>/dev/null)
+  [ -n "$dernier_commit" ] && [[ "$dernier_commit" > "$t0" ]] || return 1
+  ck=$(gh pr view "$pr" -R "$REPO" --json statusCheckRollup --jq '[.statusCheckRollup[]? | (.conclusion // .state // "PENDING")] | join(",")' 2>/dev/null)
+  case "$ck" in
+    *FAILURE*|*ERROR*|*CANCELLED*|*TIMED_OUT*) return 1 ;;
+    *SUCCESS*) return 0 ;;
+  esac
+  return 1
+}
+
 # Phase 5, second temps (attente_termine) : après renvoi du verdict de REFUS,
-# attend un nouveau commentaire TERMINÉ posté après l'appel. Mêmes codes de
-# retour qu'attendre_pr (0/2/3), pas de $_PR à poser (PR inchangée).
+# attend un nouveau commentaire TERMINÉ posté après l'appel — ou, à défaut
+# (tolérance #291), un commentaire quelconque de la lane plus une CI verte
+# sur un commit postérieur. Mêmes codes de retour qu'attendre_pr (0/2/3),
+# pas de $_PR à poser (PR inchangée).
 attendre_termine() {
-  local issue="$1" t0 c nb=0 i
+  local issue="$1" pr="$2" t0 c nb=0 i
   t0=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
   for i in $(seq 1 180); do
     c=$(gh issue view "$issue" -R "$REPO" --json comments --jq "[.comments[] | select(.createdAt > \"$t0\") | select(.body | startswith(\"TERMIN\"))] | length")
     if [ -n "$c" ] && [ "$c" != "0" ]; then return 0; fi
+    if verdict_tolere_sans_termine "$issue" "$pr" "$t0"; then
+      echo "$(date '+%H:%M:%S') #$issue : pas de TERMINÉ mais commentaire postérieur + CI verte sur commit postérieur — tolérance (#291), on considère le travail rendu"
+      return 0
+    fi
     if [ -n "$(agent_lane_bloque "$issue")" ]; then
       nb=$((nb+1))
       if [ "$nb" -ge 2 ]; then
@@ -574,10 +601,10 @@ veiller() {
         local run_id
         run_id=$(obtenir_run_id_ci "$pr")
         echo "=== veiller #$issue : CI rouge (cycle $cycle) — renvoi automatique à lane-$issue ==="
-        herdr agent prompt "lane-$issue" "CI ROUGE sur la PR #$pr (run $run_id) : lis \`gh run view $run_id --log-failed\`, corrige, pousse, reposte TERMINÉ" >/dev/null 2>&1
+        herdr agent prompt "lane-$issue" "CI ROUGE sur la PR #$pr (run $run_id) : lis \`gh run view $run_id --log-failed\`, corrige, pousse, reposte un commentaire TERMINÉ (pas un Jalon) — c'est ce mot qui relance la veille" >/dev/null 2>&1
 
         echo "=== veiller #$issue : phase attente_termine (CI rouge, cycle $cycle) ==="
-        attendre_termine "$issue"
+        attendre_termine "$issue" "$pr"
         case $? in
           2) gh issue comment "$issue" -R "$REPO" --body "BLOQUÉ (watcher) : $_BLOQUE_EXTRAIT"
              journal_sortie "$issue" 2 "agent bloqué" "attente_termine" ;;
@@ -622,7 +649,7 @@ veiller() {
           t0_conflit=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
           gh issue comment "$issue" -R "$REPO" --body "PR #$pr en conflit avec main après un merge concurrent (T0=$t0_conflit) ; consigne de rebase envoyée à lane-$issue."
           echo "=== veiller #$issue : CONFLIT de merge (cycle $cycle, T0=$t0_conflit) — renvoi automatique à lane-$issue ==="
-          herdr agent prompt "lane-$issue" "CONFLIT DE MERGE : rebase sur origin/main, résous en gardant les deux apports, tests verts, \`push --force-with-lease\`, nouveau TERMINÉ" >/dev/null 2>&1
+          herdr agent prompt "lane-$issue" "CONFLIT DE MERGE : rebase sur origin/main, résous en gardant les deux apports, tests verts, \`push --force-with-lease\`, reposte un commentaire TERMINÉ (pas un Jalon) — c'est ce mot qui relance la veille" >/dev/null 2>&1
           # Ce qui crée détruit (I-243) : la lane de revue (verdict APPROUVE
           # déjà obtenu avant le conflit) doit être détruite avant de
           # reboucler, sinon `lancer_revue` (au prochain cycle) échoue en
@@ -631,7 +658,7 @@ veiller() {
           nettoyer_une "revue-$pr"
 
           echo "=== veiller #$issue : phase attente_termine (conflit, cycle $cycle) ==="
-          attendre_termine "$issue"
+          attendre_termine "$issue" "$pr"
           case $? in
             2) gh issue comment "$issue" -R "$REPO" --body "BLOQUÉ (watcher) : $_BLOQUE_EXTRAIT"
                journal_sortie "$issue" 2 "agent bloqué" "attente_termine" ;;
@@ -663,11 +690,11 @@ veiller() {
     fi
 
     echo "=== veiller #$issue : REFUS (cycle $cycle) — renvoi automatique du verdict à lane-$issue ==="
-    herdr agent prompt "lane-$issue" "$_VERDICT_BODY — pousse puis poste un nouveau TERMINÉ" >/dev/null 2>&1
+    herdr agent prompt "lane-$issue" "$_VERDICT_BODY — pousse puis poste un nouveau commentaire TERMINÉ (pas un Jalon) — c'est ce mot qui relance la veille" >/dev/null 2>&1
     nettoyer_une "revue-$pr"
 
     echo "=== veiller #$issue : phase attente_termine (cycle $cycle) ==="
-    attendre_termine "$issue"
+    attendre_termine "$issue" "$pr"
     case $? in
       2) gh issue comment "$issue" -R "$REPO" --body "BLOQUÉ (watcher) : $_BLOQUE_EXTRAIT"
          journal_sortie "$issue" 2 "agent bloqué" "attente_termine" ;;
