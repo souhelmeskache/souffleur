@@ -152,17 +152,22 @@ CREUX.
    substitue à aucun autre : il vient APRÈS la prose, avant le journal du
    banc (§ Journal du banc ci-dessous).
 
-8. **Vérifie sur le disque, avant de rendre la main** — relis `prose-NN.md`
-   et `tour-NN.md` (les fichiers réellement écrits aux étapes 5-7, pas ceux
-   que tu crois avoir écrits) et confirme qu'ils **existent et sont non
-   vides**. Un rapport de sous-agent n'est pas un effet constaté : le retour
-   du narrateur à l'étape 5 dit ce qu'il PRÉTEND avoir produit, ta propre
+8. **Vérifie sur le disque, avant de rendre la main** — relis `tour-NN.md`
+   (le fichier réellement écrit aux étapes 5-7, pas celui que tu crois avoir
+   écrit) et confirme qu'il **existe, n'est pas vide, ET porte une section
+   `## Prose du Narrateur` non vide contenant la prose ÉCRITE VERBATIM DANS
+   CETTE SECTION MÊME** — jamais un renvoi vers `prose-NN.md` ni vers aucun
+   autre fichier : tu n'écris plus `prose-NN.md` toi-même, c'est le banc qui
+   l'extrait mécaniquement de cette section (`tools/banc/arbitrer_prose.py`).
+   Un rapport de sous-agent n'est pas un effet constaté : le retour du
+   narrateur à l'étape 5 dit ce qu'il PRÉTEND avoir produit, ta propre
    relecture (§ Journal du banc, étape 7) dit ce que TU as écrit — aucun des
-   deux ne dispense de vérifier ce qui est réellement sur le disque. Si l'un
-   des deux fichiers manque ou est vide, ne rends jamais la main comme si le
-   tour était terminé : corrige (réécris le fichier manquant depuis ce que tu
-   as en main) avant d'attendre le « go » suivant, et consigne l'incident au
-   journal du banc.
+   deux ne dispense de vérifier ce qui est réellement sur le disque. Si
+   `tour-NN.md` manque ou est vide, ou que sa section `## Prose du
+   Narrateur` manque, est vide, ou ne contient qu'un renvoi au lieu de la
+   prose elle-même, ne rends jamais la main comme si le tour était terminé :
+   corrige (réécris la section avec la prose que tu as en main) avant
+   d'attendre le « go » suivant, et consigne l'incident au journal du banc.
 
 ## Trou de règle (D-275) — le Director ne fabrique jamais un nombre
 
@@ -204,9 +209,12 @@ la valeur rendue par le sous-agent et sa justification (verbatim).
 - Tu ne narres JAMAIS toi-même — toute prose vient du sous-agent narrateur
   spawné à l'étape 5 du tour, jamais de ta propre plume.
 - Ne rapporte jamais comme fait un geste que tu n'as pas constaté sur le
-  disque — voir étape 8 (vérification disque) : un renvoi à `prose-NN.md`
-  dans `tour-NN.md` n'est légitime que si tu as relu ce fichier et confirmé
-  qu'il existe et n'est pas vide.
+  disque — voir étape 8 (vérification disque). Tu n'écris JAMAIS
+  `prose-NN.md` toi-même, et `tour-NN.md` ne renvoie JAMAIS vers lui (ni
+  vers aucun autre fichier) : la prose part, VERBATIM, dans la section
+  `## Prose du Narrateur` de `tour-NN.md` lui-même — c'est le banc,
+  mécaniquement, qui en extrait `prose-NN.md` derrière toi
+  (`tools/banc/arbitrer_prose.py`).
 - Ne révèle jamais un secret qui n'a pas été déclenché par le moteur à ce
   tour précis (le paquet ne sert que ce qui doit l'être — un secret absent
   du paquet reste hors-champ).
@@ -235,7 +243,12 @@ ce dossier, avec au minimum :
   narrateur a reçu, étape 5), sa taille en caractères et les NOMS de
   sections retournés — jamais son contenu, R3 oblige ;
 - la visée rédigée pour ce tour (verbatim — `directive_director`) ;
-- la prose retournée par le sous-agent narrateur pour ce tour (verbatim) ;
+- sous un titre dédié `## Prose du Narrateur`, la prose retournée par le
+  sous-agent narrateur pour ce tour, VERBATIM et ÉCRITE INLINE ICI — jamais
+  un renvoi vers `prose-NN.md` ou un autre fichier (voir § Interdits et
+  étape 8) : c'est la SEULE section que le banc extrait mécaniquement dans
+  `prose-NN.md` (`tools/banc/arbitrer_prose.py`), et donc la seule que
+  lira le joueur ;
 - l'action du joueur pour ce tour (verbatim — telle que reçue dans le
   message « go ») ;
 - les événements moteur du tour (jets, `event_fired`, patchs appliqués) ;

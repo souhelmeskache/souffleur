@@ -40,6 +40,7 @@ LANCEUR_PS1="$REPO_ROOT/tools/lancer-banc-fumee.ps1"
 FIXTURE_PY="$REPO_ROOT/bench/fixtures/personnage-banc.py"
 METRIQUES_PY="$REPO_ROOT/tools/banc/metriques_nuit.py"
 EXTRAIRE_PROSE_PY="$REPO_ROOT/tools/banc/extraire_prose.py"
+ARBITRER_PROSE_PY="$REPO_ROOT/tools/banc/arbitrer_prose.py"
 
 # Frontière bash ⊥ Windows (#270) : source la conversion partagée avec
 # verifier-liste-blanche-nuit.sh — jamais un chemin `pwd` brut (`/c/Users/...`)
@@ -803,7 +804,7 @@ jouer_partie() {
   # --- boucle de tours (fil 2, sans LLM dans CE script) ---------------------
   local tour=1
   while [ "$tour" -le "$TOURS" ]; do
-    local nn pn r
+    local nn pn r go_ts
     nn=$(printf '%02d' "$tour")
     pn=$(printf '%02d' $((tour - 1)))
 
@@ -812,6 +813,7 @@ jouer_partie() {
       # fait pas ») : le gabarit banc-mj.md (gelé D-276 §4) ne décrit pas de
       # protocole de tour 1 froid — le MJ ouvre lui-même la scène
       # (opening_scene) plutôt que d'attendre une action joueur inexistante.
+      go_ts=$(date +%s)
       herdr agent prompt "$agent_mj" "go — tour $nn : ouverture, pas d'action joueur — établis la scène d'ouverture (opening_scene) puis écris tour-$nn.md en conséquence" >/dev/null 2>&1
     else
       echo "=== partie $pnn tour $nn — go joueur $(date '+%H:%M:%S')"
@@ -828,6 +830,7 @@ jouer_partie() {
       fi
       local action; action="$(cat "$partie_dir/action-$nn.md")"
       echo "=== partie $pnn tour $nn — go MJ $(date '+%H:%M:%S')"
+      go_ts=$(date +%s)
       herdr agent prompt "$agent_mj" "go — tour $nn. Action du joueur (verbatim) : $action" >/dev/null 2>&1
     fi
 
@@ -842,16 +845,29 @@ jouer_partie() {
       break
     fi
 
-    # Extraction MÉCANIQUE de prose-NN.md depuis tour-NN.md (#269) — jamais
-    # espérée du MJ : l'organe zéro-spoiler (D-219) doit exister même si le
-    # MJ n'a écrit que tour-NN.md (le seul livrable que le gabarit spécifie).
-    extraction_err="$(python "$EXTRAIRE_PROSE_PY" "$partie_dir/tour-$nn.md" "$partie_dir/prose-$nn.md" 2>&1)"
-    if [ $? -ne 0 ]; then
+    # Arbitrage MÉCANIQUE de prose-NN.md entre les deux voies du gabarit
+    # (Issue #295) : voie extraction (PRIMAIRE, section « Prose du
+    # Narrateur » inline imposée par le gabarit dans tour-NN.md, #269),
+    # sinon voie fichier (REPLI TOLÉRANT, le MJ a malgré tout écrit
+    # prose-NN.md lui-même) — craquement `prose-absente` seulement si
+    # aucune des deux n'aboutit, `prose-polluee` si le fichier écrit par le
+    # MJ fuite du matériau zéro-spoiler (D-219). Voir
+    # tools/banc/arbitrer_prose.py.
+    prose_msg="$(python "$ARBITRER_PROSE_PY" "$partie_dir/tour-$nn.md" "$partie_dir/prose-$nn.md" "$go_ts" 2>&1)"
+    prose_rc=$?
+    if [ "$prose_rc" -eq 2 ]; then
+      raison="craquement-prose-polluee"
+      ecrire_craquement "$partie_dir" "$nn" "prose-polluee" "$prose_msg"
+      craquements+=("craquement-prose-polluee-$nn.md")
+      break
+    fi
+    if [ "$prose_rc" -ne 0 ]; then
       raison="craquement-prose-absente"
-      ecrire_craquement "$partie_dir" "$nn" "prose-absente" "$extraction_err"
+      ecrire_craquement "$partie_dir" "$nn" "prose-absente" "$prose_msg"
       craquements+=("craquement-prose-absente-$nn.md")
       break
     fi
+    echo "=== partie $pnn tour $nn — prose via $prose_msg $(date '+%H:%M:%S')"
 
     tours_joues=$tour
     echo "=== partie $pnn tour $nn joué $(date '+%H:%M:%S')"
