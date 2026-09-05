@@ -136,5 +136,9 @@ SORTIE_PRS_OUVERTES="$(gh pr list -R "$REPO" --json number --jq 'length' 2>/dev/
   | "$REPO_ROOT/tools/banc/verifier-prs-ouvertes.sh")"
 [ -z "$SORTIE_PRS_OUVERTES" ] || echo "$SORTIE_PRS_OUVERTES"
 
-echo "OK : prérequis satisfaits, rien en vol (save '$SAVE')."
+if [ -n "$SORTIE_AGENTS_EN_VOL" ] || [ -n "$SORTIE_PRS_OUVERTES" ]; then
+  echo "OK : prérequis satisfaits (save '$SAVE') — voir avertissement(s) ci-dessus."
+else
+  echo "OK : prérequis satisfaits, rien en vol (save '$SAVE')."
+fi
 exit 0

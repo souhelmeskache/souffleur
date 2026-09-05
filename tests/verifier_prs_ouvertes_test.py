@@ -10,8 +10,10 @@ un REFUS -- corrigé ici (#297).
 1. Aucune PR ouverte (0) -> OK, code 0, sortie vide.
 2. Une PR ouverte -> OK, code 0, AVERTISSEMENT citant le nombre.
 3. Plusieurs PR ouvertes -> OK, code 0, AVERTISSEMENT citant le compte.
-4. Sortie vide/non numérique (échec gh) -> OK, code 0, sortie vide (jamais
-   un refus sur une panne de lecture du décompte).
+4. Sortie vide (échec gh) -> OK, code 0, sortie vide (jamais un refus sur
+   une panne de lecture du décompte).
+5. Sortie textuelle non numérique (message d'erreur gh) -> même chose, OK,
+   code 0, sortie vide.
 """
 import shutil
 import subprocess
@@ -77,7 +79,16 @@ def main():
     p4 = lancer("")
     assert p4.returncode == 0, f"cas 4 : code attendu 0, reçu {p4.returncode}\n{p4.stderr}"
     assert p4.stdout.strip() == "", f"cas 4 : sortie attendue vide, reçu {p4.stdout!r}"
-    print("PASS: cas 4 -- décompte illisible, OK silencieux")
+    print("PASS: cas 4 -- décompte illisible (vide), OK silencieux")
+
+    # ------------------------------------------------------------------
+    # Cas 5 : sortie textuelle non numérique (ex. message d'erreur gh) ->
+    # OK silencieux
+    # ------------------------------------------------------------------
+    p5 = lancer("gh: command not found\n")
+    assert p5.returncode == 0, f"cas 5 : code attendu 0, reçu {p5.returncode}\n{p5.stderr}"
+    assert p5.stdout.strip() == "", f"cas 5 : sortie attendue vide, reçu {p5.stdout!r}"
+    print("PASS: cas 5 -- décompte illisible (texte), OK silencieux")
 
     print("OK")
 
