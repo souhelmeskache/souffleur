@@ -11,9 +11,11 @@
 # narrateur qu'ils spawnent — jamais dans ce script.
 #
 # Usage :
-#   tools/banc/nuit.sh -Parties N [-Paires N] [-Director haiku|sonnet|ab]
+#   tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab]
 #                       [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>]
 #                       [-FinA HH:MM] [-DryRun]
+#   -Parties ou -FinA requis (au moins un des deux) -- sans -Parties, la nuit
+#   boucle sans plafond de parties, bornée par -FinA seule (Souhel #279).
 #
 # -Paires N (défaut 1, Issue #282) : N parties tournent SIMULTANÉMENT (N
 # paires Director/joueur, N copies de save, N `.turn/` -- voir « limite
@@ -23,6 +25,15 @@
 # Voir tools/banc/README.md pour le détail des sorties, codes de sortie, et
 # « ce que la nuit ne fait pas ».
 set -u
+
+# Ceinture et bretelles (Issue #279) : chaque script Python du banc force déjà
+# UTF-8 sur stdout/stderr lui-même (reconfigure), mais cet export protège
+# aussi tout script tiers/futur appelé depuis ici sans ce garde — sous
+# Windows, sys.stdout est en cp1252 hors terminal UTF-8 explicite, et un
+# caractère hors cp1252 (« », accents) dans une sortie faisait planter le
+# script avant même d'écrire quoi que ce soit (UnicodeEncodeError, nuit du
+# 03/09).
+export PYTHONIOENCODING=utf-8
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LANCEUR_PS1="$REPO_ROOT/tools/lancer-banc-fumee.ps1"
@@ -53,7 +64,8 @@ LANCEMENT_CMD_OVERRIDE=""
 
 usage() {
   cat >&2 <<EOF
-Usage : $0 -Parties N [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+Usage : $0 [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+       -Parties ou -FinA requis (au moins un des deux).
 EOF
 }
 
@@ -83,8 +95,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if ! [[ "$PARTIES" =~ ^[0-9]+$ ]] || [ "$PARTIES" -lt 1 ]; then
-  echo "REFUS : -Parties doit être un entier >= 1 (reçu '$PARTIES')." >&2
+# -Parties devient optionnel (Souhel #279, constat N1 : -Parties 4 a fini la
+# nuit à 01:30 pour un -FinA 06:00, 4h30 perdues) -- SI -FinA est donnée, la
+# nuit boucle sans plafond de parties, bornée par -FinA seule (§ 6 ci-dessous
+# et fin_a_atteinte()). Sans aucun des deux, la nuit n'aurait aucune borne
+# d'arrêt : refusé nommément.
+if [ -n "$PARTIES" ]; then
+  if ! [[ "$PARTIES" =~ ^[0-9]+$ ]] || [ "$PARTIES" -lt 1 ]; then
+    echo "REFUS : -Parties doit être un entier >= 1 (reçu '$PARTIES')." >&2
+    usage; exit 1
+  fi
+elif [ -z "$FIN_A" ]; then
+  echo "REFUS : -Parties ou -FinA requis (au moins un des deux) -- sans borne, la nuit ne s'arrêterait jamais." >&2
   usage; exit 1
 fi
 if ! [[ "$PAIRES" =~ ^[0-9]+$ ]] || [ "$PAIRES" -lt 1 ]; then
@@ -837,9 +859,11 @@ jouer_partie() {
 if [ "$PAIRES" -eq 1 ]; then
   # Chemin séquentiel historique (INCHANGÉ depuis #276) — une seule paire,
   # noms d'agent nus "banc-mj"/"banc-joueur", finaliser_nuit appelée
-  # directement dans ce process (jamais un subshell).
+  # directement dans ce process (jamais un subshell). -Parties optionnel
+  # (Souhel #279) : sans elle, boucle sans plafond de parties, bornée par
+  # -FinA seule (fin_a_atteinte ci-dessous).
   i=1
-  while [ "$i" -le "$PARTIES" ]; do
+  while [ -z "$PARTIES" ] || [ "$i" -le "$PARTIES" ]; do
     if arret_demande; then
       echo "=== ARRÊT DEMANDÉ (fichier STOP/PAUSE, #271) — nuit interrompue avant partie $i ==="
       RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE)"
@@ -887,12 +911,17 @@ PAIRES_MODE=1
 rm -rf "$ARRET_DIR" "$RUN_DIR"/.claim-*   # jamais un résidu d'un appel précédent sur ce -RunDir
 
 prochain_rang() {
-  local n
-  for (( n = 1; n <= PARTIES; n++ )); do
+  # -Parties optionnel (Souhel #279) : quand elle n'est pas donnée, aucun
+  # plafond de rang ici -- le budget en parallèle reste alors borné par
+  # -FinA seule (contrôlée par slot_boucle avant chaque appel), jamais par
+  # ce compteur.
+  local n=1
+  while [ -z "$PARTIES" ] || [ "$n" -le "$PARTIES" ]; do
     if mkdir "$RUN_DIR/.claim-$n" 2>/dev/null; then
       echo "$n"
       return 0
     fi
+    n=$((n + 1))
   done
   return 1
 }
@@ -935,7 +964,11 @@ slot_boucle() {
 }
 
 N_SLOTS="$PAIRES"
-[ "$N_SLOTS" -gt "$PARTIES" ] && N_SLOTS="$PARTIES"
+# -Parties optionnel (Souhel #279) : sans elle, aucun plafond de rangs à
+# comparer -- tous les slots demandés tournent (bornés par -FinA seule).
+if [ -n "$PARTIES" ] && [ "$N_SLOTS" -gt "$PARTIES" ]; then
+  N_SLOTS="$PARTIES"
+fi
 
 PIDS=()
 for (( s = 1; s <= N_SLOTS; s++ )); do

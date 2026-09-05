@@ -54,6 +54,19 @@ import statistics
 import sys
 from pathlib import Path
 
+# Force UTF-8 sur stdout/stderr quel que soit le terminal (Issue #279) : sous
+# Windows, sys.stdout/stderr sont en cp1252 hors terminal UTF-8 explicite —
+# `nuit.sh` redirige la sortie de ce script (rapport-nuit.md, nuit.md), et un
+# rapport contenant « » ou des accents faisait tomber le calcul avant
+# d'écrire quoi que ce soit (UnicodeEncodeError, nuit du 03/09). `reconfigure`
+# peut lever si le flux n'en dispose pas (ex. capturé par un test) — sans
+# conséquence, le flux garde alors son encodage d'origine.
+for _flux in (sys.stdout, sys.stderr):
+    try:
+        _flux.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 
 def lire_events(events_path: Path) -> list[dict]:
     """Lit un `events.jsonl` ; une ligne malformée est ignorée (jamais
@@ -117,6 +130,27 @@ def lire_resume_run(partie_dir: Path) -> dict:
         cle, _, valeur = ligne.partition(":")
         out[cle.strip().lower()] = valeur.strip()
     return out
+
+
+def lire_module_titre(run_dir: Path) -> str | None:
+    """Titre du module joué cette nuit (décision Souhel #279, en attendant
+    l'issue « save de départ sans module ») : lu dans `meta.json` (champ
+    `title`, écrit par `coderain/templates.py::new_save`) de la copie de save
+    de la première partie du run — toutes les parties d'une même nuit
+    partagent la même save source (`-Save`, une seule par nuit), donc une
+    seule lecture suffit. `None` (rendu « ABSENT ») si aucune partie, ou si
+    `meta.json` est absent/illisible/sans champ `title` non vide."""
+    for partie_dir in sorted(run_dir.glob("partie-*")):
+        chemin = partie_dir / "save" / "meta.json"
+        if not chemin.exists():
+            continue
+        try:
+            meta = json.loads(chemin.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        titre = str(meta.get("title", "")).strip()
+        return titre or None
+    return None
 
 
 def compter_paires(parties_dirs: list[Path]) -> int:
@@ -276,6 +310,7 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "ab_director": stats_ab_director(run_dir),
         "limite_session": limite_session,
         "pires_craquements": pires_craquements(run_dir),
+        "module_titre": lire_module_titre(run_dir),
     }
 
 
@@ -284,6 +319,7 @@ def formater_rapport_markdown(r: dict) -> str:
     lignes = [
         "# rapport-nuit",
         "",
+        f"- Module : {r.get('module_titre') or 'ABSENT'}",
         f"- Parties finies / lancées : {r['parties_finies']} / {r['parties_lancees']}",
         f"- Paires simultanées : {r['paires']}",
         f"- Durée totale : {r['duree_totale_s']}s",

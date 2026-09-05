@@ -129,6 +129,29 @@ distincts, et un seul est piégeux :
   `tests/verifier_liste_blanche_nuit_test.py` cas 5 (la garde, chemin `/c/…`
   simulé — reproduit le défaut #270 sans dépendre d'un vrai poste cassé).
 
+## UTF-8 garanti, quel que soit le terminal (#279)
+
+Sous Windows, `sys.stdout`/`sys.stderr` de Python sont en cp1252 hors
+terminal UTF-8 explicite (même défaut que la frontière bash ⊥ Windows
+ci-dessus). Nuit du 03/09 : `metriques_nuit.py` a levé `UnicodeEncodeError`
+sur le caractère « ⊥ » du rapport (position hors table cp1252), faisant
+tomber `rapport-nuit.md` en trace d'erreur au lieu du rapport — même famille
+que le mojibake déjà vu sous PowerShell 5.1 (H-753 §4).
+
+**Ceinture et bretelles**, les deux systématiques plutôt que l'une ou
+l'autre :
+- Chaque script du banc qui imprime (`metriques_nuit.py`,
+  `extraire_prose.py`, `save-depart.py`) force `sys.stdout`/`sys.stderr` en
+  UTF-8 en tête de fichier (`reconfigure(encoding="utf-8")`, protégé contre
+  un flux qui n'en dispose pas, ex. capturé par un test).
+- `nuit.sh` exporte `PYTHONIOENCODING=utf-8` en tête — protège aussi tout
+  script tiers/futur appelé depuis là sans ce garde.
+
+Test : `tests/metriques_nuit_test.py` cas 6, sous-processus avec
+`PYTHONIOENCODING` retiré de l'environnement, sur un rapport portant « ⊥ »
+et des accents — reproduit le défaut #279 sans le correctif (vérifié en
+local), sortie 0 et UTF-8 intact avec.
+
 ## Deux protections partagées avec `tools/lancer-lane.ps1` (#276, cadrage complémentaire 03/09)
 
 - **Refus nommé Haiku + mode `auto`** (`tools/refus-haiku-auto.ps1`,
@@ -212,9 +235,9 @@ vol, aucune PR ouverte, envoi à blanc des deux gabarits rendus vers un
 agent inexistant — #263,
 `tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
 l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
-`tools/banc/nuit.sh -Parties 4 -Director ab` (défauts — un argument passé au
-`.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd -Parties 8
--Director sonnet`) → affiche le chemin de `nuit.md` produit.
+`tools/banc/nuit.sh -Director sonnet -FinA 06:00` (défauts — un argument
+passé au `.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd
+-Parties 8 -Director ab`) → affiche le chemin de `nuit.md` produit.
 
 **Le matin** : ouvrir un fil et dire « lis la nuit » — Claude relit
 `bench/nuit-AAAAMMJJ/nuit.md` et les `resume-run.md` de chaque partie.
@@ -222,23 +245,33 @@ l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
 ### `nuit.sh` — paramètres
 
 ```
-tools/banc/nuit.sh -Parties N [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40]
+tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40]
                     [-Save <slug>] [-TimeoutTour <minutes>]
                     [-FinA HH:MM] [-DryRun]
 ```
 
-- `-Parties N` (obligatoire) : nombre de parties à jouer ce lancement — le
-  budget de la nuit. Plafond dur : aucune (N+1)-ème partie n'est lancée.
+- `-Parties N` : nombre de parties à jouer ce lancement — le budget de la
+  nuit. Plafond dur quand elle est donnée : aucune (N+1)-ème partie n'est
+  lancée. **Optionnelle depuis #279** (décision Souhel du 05/09, constat N1 :
+  `-Parties 4` a épuisé son budget à 01:30 sur les ~7h disponibles avant
+  `-FinA 06:00`, 4h30 perdues) : sans `-Parties`, la nuit boucle sans plafond
+  de parties, bornée par `-FinA` seule (en séquentiel comme en parallèle,
+  voir `-Paires` ci-dessous). `-Parties` et `-FinA` sont donc chacune
+  optionnelle, mais **au moins une des deux est requise** (REFUS nommé
+  sinon — sans borne, la nuit ne s'arrêterait jamais).
 - `-Paires N` (défaut 1, Issue #282) : N parties tournent SIMULTANÉMENT (N
   paires Director/joueur). Quand une paire finit sa partie, elle reprend la
-  suivante du budget `-Parties` — jusqu'à épuisement du budget ou `-FinA`.
-  Étanchéité par paire : agents suffixés (`banc-mj-1`/`banc-joueur-1`,
+  suivante du budget `-Parties` (ou continue sans plafond si `-Parties`
+  n'est pas donnée) — jusqu'à épuisement du budget ou `-FinA`. Étanchéité
+  par paire : agents suffixés (`banc-mj-1`/`banc-joueur-1`,
   `banc-mj-2`/`banc-joueur-2`, ... — jamais de collision de nom, #271), sa
   propre copie de save et son propre dossier `partie-NN` (déjà vrai avant
   #282). `-Paires 1` (défaut) est le chemin séquentiel historique, INCHANGÉ
   bit à bit. Voir « Limite connue : `.turn/` partagé » ci-dessous avant
   d'utiliser `-Paires > 1`.
-- `-Director haiku|sonnet|ab` (défaut `sonnet`) : modèle du Director
+- `-Director haiku|sonnet|ab` (défaut `sonnet` — décision Souhel #279,
+  mesure N1 : Haiku 0/2 parties finies, Sonnet 2/2 ; `ab` reste disponible
+  en option) : modèle du Director
   (agent MJ). `ab` alterne haiku/sonnet en commençant par haiku (N0 = 4
   parties : 2 et 2) — le casting de chaque partie est écrit dans son
   `resume-run.md`. Le joueur tourne toujours en haiku/low, le narrateur
@@ -397,6 +430,10 @@ fonctions `calculer_rapport`/`formater_rapport_markdown`, appelées `<run_dir>
 rapport <raison_arret> <duree_totale_s> <limite_session:oui|non>` — étend
 `metriques_nuit.py`, ne duplique rien) :
 
+- module joué (décision Souhel #279, en attendant l'issue « save de départ
+  sans module ») : titre lu dans `meta.json` (champ `title`) de la copie de
+  save de la première partie du run — `ABSENT` si aucune partie n'a démarré
+  ou si `meta.json` n'a pas ce champ ;
 - parties finies / lancées, durée totale, raison d'arrêt ;
 - tours sans craquement par partie (médiane / min / max) ;
 - craquements par classe D-276 §4 (matériau / règle / Director / outillage)
