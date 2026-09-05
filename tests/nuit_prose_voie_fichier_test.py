@@ -69,11 +69,11 @@ LANCEMENT_CMD_FAKE = (
     'echo "Pane MJ: fake-mj-pane"; '
     'echo "Pane joueur-banc: fake-joueur-pane"; '
     'printf "# tour 01\\n\\n## Visee du Director\\n\\n'
-    'la marche glaciale vers le Chateau de la Folie... scene #1 du module.\\n\\n'
+    'la marche vers le Donjon Factice... scene #1 du module factice.\\n\\n'
     'Prose retournee par le narrateur (verbatim) : voir prose-01.md -- '
     'relue sur le disque, non vide.\\n" > "$partie_dir/tour-01.md"; '
-    'printf "Le vent glacial mord les joues des voyageurs qui avancent vers '
-    'le chateau.\\n" > "$partie_dir/prose-01.md"; '
+    'printf "Le vent mord les joues des voyageurs synthetiques qui avancent '
+    'vers le donjon factice.\\n" > "$partie_dir/prose-01.md"; '
     'python -c "import os,sys; f=sys.argv[1]; os.utime(f, (9999999999, 9999999999))" '
     '"$partie_dir/prose-01.md"; '
     'exit 0'
@@ -130,7 +130,7 @@ def main() -> int:
             "prose-01.md doit être PRÉSENT (voie fichier) -- exactement le cas "
             "constaté en production où il craquait à tort"
         )
-        assert "Le vent glacial" in prose.read_text(encoding="utf-8"), (
+        assert "Le vent mord" in prose.read_text(encoding="utf-8"), (
             "prose-01.md doit garder le texte écrit par le MJ (voie fichier), "
             "jamais réécrit par l'extraction"
         )
