@@ -56,15 +56,31 @@
        **Au plus 2 cycles de refus** — le 3ᵉ `REFUS` sort en code 4 (REFUS
        persistant) plutôt que de rerenvoyer indéfiniment.
 
+    **CI rouge et REFUS de revue sont le même cas (#280)** : un juge
+    automatique a dit non, la lane doit corriger — ni l'un ni l'autre n'est
+    une sortie tant que la lane est vivante.
+    - **CI rouge, lane `lane-<ISSUE>` vivante** (`herdr agent list`) : renvoi
+      automatique (`herdr agent prompt lane-<ISSUE> "CI ROUGE sur la PR #N
+      (run <id>) : lis \`gh run view <id> --log-failed\`, corrige, pousse,
+      reposte TERMINÉ"`), puis `attente_termine` — **même compteur de cycles**
+      que les `REFUS` de revue (2 max, puis sortie 4 « CI rouge persistante »).
+    - **CI rouge, lane morte** : sortie 1 immédiate (« CI rouge, lane
+      absente »), aucun renvoi tenté.
+    - **REFUS de revue, lane morte** (cas symétrique, mesuré sur #271 le
+      03/09) : sortie 1 immédiate (« REFUS, lane absente — relancer un agent
+      neuf sur le worktree avec le verdict ») plutôt que d'attendre 90 min un
+      `TERMINÉ` impossible ; le worktree de revue est quand même nettoyé.
+
     **Codes de sortie** :
     - `0` — succès : merge fait, ou Issue déjà soldée détectée au lancement
       (rejeu idempotent — Issue fermée ou PR déjà mergée pour elle).
-    - `1` — CI rouge, verdict de revue absent/en timeout, ou échec du merge.
+    - `1` — CI rouge (lane morte), REFUS de revue (lane morte), verdict de
+      revue absent/en timeout, ou échec du merge.
     - `2` — agent `lane-<ISSUE>` relevé `blocked` deux fois de suite : lit
       les 20 dernières lignes du pane (`herdr agent read`), les poste en
       commentaire `BLOQUÉ (watcher) : …` sur l'Issue.
     - `3` — 90 min sans changement de phase.
-    - `4` — REFUS persistant (3ᵉ cycle).
+    - `4` — CI rouge ou REFUS persistant (3ᵉ cycle, compteur partagé).
 
     Chaque sortie non nulle poste en commentaire de l'Issue une ligne
     `VEILLE <ISSUE> : <code> <raison> <phase>` — le journal du circuit vit

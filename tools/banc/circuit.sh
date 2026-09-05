@@ -370,6 +370,25 @@ agent_lane_bloque() {
   herdr agent list 2>/dev/null | tr '{' '\n' | grep "\"name\":\"lane-$issue\"" | grep -q 'agent_status":"blocked' && echo 1
 }
 
+# Vrai (code 0) si l'agent lane-<issue> apparaît dans `herdr agent list`,
+# quel que soit son statut — "lane vivante" au sens de #280 : encore là pour
+# recevoir un renvoi de verdict (CI rouge ou REFUS de revue), par opposition
+# à une lane disparue (workspace fermé, agent jamais démarré/déjà terminé).
+agent_lane_vivante() {
+  local issue="$1"
+  herdr agent list 2>/dev/null | tr '{' '\n' | grep -q "\"name\":\"lane-$issue\""
+}
+
+# Identifiant du dernier run CI (workflow) de la branche de la PR $1, pour le
+# message de renvoi "lis `gh run view <id> --log-failed`" (#280). Vide si
+# indisponible — le message le mentionne alors sans planter dessus.
+obtenir_run_id_ci() {
+  local pr="$1" head_branch
+  head_branch=$(gh pr view "$pr" -R "$REPO" --json headRefName --jq '.headRefName' 2>/dev/null)
+  [ -n "$head_branch" ] || return 0
+  gh run list -R "$REPO" --branch "$head_branch" -L 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null
+}
+
 # Poste "VEILLE <issue> : <code> <raison> <phase>" en commentaire de l'Issue
 # (le journal du circuit vit sur l'Issue, jamais un scratchpad), puis quitte
 # avec ce code. Sortie 0 : pas de ligne de journal, ce n'est pas un échec.
@@ -523,7 +542,31 @@ veiller() {
     echo "=== veiller #$issue : phase ci (PR $pr) ==="
     attendre_ci "$pr"
     case $? in
-      1) journal_sortie "$issue" 1 "CI rouge" "ci" ;;
+      1)
+        # CI rouge (#280) : ce n'est une sortie que si la lane est morte —
+        # sinon c'est un verdict de plus à lui renvoyer, même compteur de
+        # cycles que les REFUS de revue ci-dessous (2 max, puis sortie 4).
+        if ! agent_lane_vivante "$issue"; then
+          journal_sortie "$issue" 1 "CI rouge, lane absente" "ci"
+        fi
+        cycle=$((cycle+1))
+        if [ "$cycle" -gt 2 ]; then
+          journal_sortie "$issue" 4 "CI rouge persistante ($cycle cycles)" "ci"
+        fi
+        local run_id
+        run_id=$(obtenir_run_id_ci "$pr")
+        echo "=== veiller #$issue : CI rouge (cycle $cycle) — renvoi automatique à lane-$issue ==="
+        herdr agent prompt "lane-$issue" "CI ROUGE sur la PR #$pr (run $run_id) : lis \`gh run view $run_id --log-failed\`, corrige, pousse, reposte TERMINÉ" >/dev/null 2>&1
+
+        echo "=== veiller #$issue : phase attente_termine (CI rouge, cycle $cycle) ==="
+        attendre_termine "$issue"
+        case $? in
+          2) gh issue comment "$issue" -R "$REPO" --body "BLOQUÉ (watcher) : $_BLOQUE_EXTRAIT"
+             journal_sortie "$issue" 2 "agent bloqué" "attente_termine" ;;
+          3) journal_sortie "$issue" 3 "90 min sans TERMINÉ après CI rouge" "attente_termine" ;;
+        esac
+        continue
+        ;;
       3) journal_sortie "$issue" 3 "90 min sans CI verte" "ci" ;;
     esac
 
@@ -544,6 +587,14 @@ veiller() {
 
     if [ "$verdict" != "REFUS" ]; then
       journal_sortie "$issue" 1 "verdict de revue absent" "revue"
+    fi
+
+    # REFUS avec lane morte (#280, symétrique du cas CI ci-dessus, mesuré
+    # sur #271 le 03/09) : inutile d'attendre 90 min un TERMINÉ impossible —
+    # sortie immédiate, teardown de la revue quand même (ce qui crée détruit).
+    if ! agent_lane_vivante "$issue"; then
+      nettoyer_une "revue-$pr"
+      journal_sortie "$issue" 1 "REFUS, lane absente — relancer un agent neuf sur le worktree avec le verdict" "revue"
     fi
 
     cycle=$((cycle+1))
