@@ -201,12 +201,25 @@ def main() -> int:
             **env,
             "PATH": f"{fake_bin_tour}{os.pathsep}{env.get('PATH', '')}",
         }
-        heure_proche = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
+        # CI ROUGE run 33979847360 (#305) : `-FinA` n'a qu'une résolution
+        # MINUTE (HH:MM) -- `strftime("%H:%M")` tronque les secondes, donc
+        # `timedelta(minutes=1)` ne garantit PAS ~60s de marge réelle avant
+        # échéance : si "now" tombe tard dans sa minute (ex. 17:08:59), +1
+        # minute = 17:09:59 -> tronqué "17:09", échéance dans ~1s seulement.
+        # Sur ce run CI, cette marge quasi nulle a laissé la relance
+        # mi-timeout (#299) et le craquement `timeout` se déclencher AVANT
+        # que `fin_a_atteinte` ne devienne vrai -- jamais un défaut de
+        # nuit.sh, un défaut du test. `timedelta(minutes=3)` donne une marge
+        # RÉELLE d'AU MOINS 120s (pire cas, "now" à la dernière seconde de sa
+        # minute) quel que soit l'instant exact où le test s'exécute --
+        # `-TimeoutTour 6` (mi-timeout à 180s) reste toujours après cette
+        # pire marge, jamais une course.
+        heure_proche = (datetime.now() + timedelta(minutes=3)).strftime("%H:%M")
         p = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug,
-             "-RunDir", str(run_dir_tour), "-TimeoutTour", "2",
+             "-RunDir", str(run_dir_tour), "-TimeoutTour", "6",
              "-FinA", heure_proche, "-LancementCmd", "true"],
-            capture_output=True, text=True, timeout=150, env=env_tour,
+            capture_output=True, text=True, timeout=280, env=env_tour,
         )
         assert p.returncode == 130, (
             f"arrêt au tour suivant (heure de fin) : attendu 130, reçu {p.returncode}\n"
