@@ -126,6 +126,27 @@ def lire_resume_run(partie_dir: Path) -> dict:
     return out
 
 
+def lire_module_titre(run_dir: Path) -> str | None:
+    """Titre du module joué cette nuit (décision Souhel #279, en attendant
+    l'issue « save de départ sans module ») : lu dans `meta.json` (champ
+    `title`, écrit par `coderain/templates.py::new_save`) de la copie de save
+    de la première partie du run — toutes les parties d'une même nuit
+    partagent la même save source (`-Save`, une seule par nuit), donc une
+    seule lecture suffit. `None` (rendu « ABSENT ») si aucune partie, ou si
+    `meta.json` est absent/illisible/sans champ `title` non vide."""
+    for partie_dir in sorted(run_dir.glob("partie-*")):
+        chemin = partie_dir / "save" / "meta.json"
+        if not chemin.exists():
+            continue
+        try:
+            meta = json.loads(chemin.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        titre = str(meta.get("title", "")).strip()
+        return titre or None
+    return None
+
+
 def calculer(run_dir: Path) -> dict:
     """Calcule toutes les métriques §3 de #201 pour un run `bench/nuit-*/`."""
     parties_dirs = sorted(p for p in run_dir.glob("partie-*") if p.is_dir())
@@ -270,6 +291,7 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "ab_director": stats_ab_director(run_dir),
         "limite_session": limite_session,
         "pires_craquements": pires_craquements(run_dir),
+        "module_titre": lire_module_titre(run_dir),
     }
 
 
@@ -278,6 +300,7 @@ def formater_rapport_markdown(r: dict) -> str:
     lignes = [
         "# rapport-nuit",
         "",
+        f"- Module : {r.get('module_titre') or 'ABSENT'}",
         f"- Parties finies / lancées : {r['parties_finies']} / {r['parties_lancees']}",
         f"- Durée totale : {r['duree_totale_s']}s",
         f"- Raison d'arrêt : {r['raison_arret']}",

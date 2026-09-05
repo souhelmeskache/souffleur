@@ -11,9 +11,11 @@
 # narrateur qu'ils spawnent — jamais dans ce script.
 #
 # Usage :
-#   tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
+#   tools/banc/nuit.sh [-Parties N] [-Director haiku|sonnet|ab] [-Tours 40]
 #                       [-Save <slug>] [-TimeoutTour <minutes>]
 #                       [-FinA HH:MM] [-DryRun]
+#   -Parties ou -FinA requis (au moins un des deux) -- sans -Parties, la nuit
+#   boucle sans plafond de parties, bornée par -FinA seule (Souhel #279).
 #
 # Voir tools/banc/README.md pour le détail des sorties, codes de sortie, et
 # « ce que la nuit ne fait pas ».
@@ -56,7 +58,8 @@ LANCEMENT_CMD_OVERRIDE=""
 
 usage() {
   cat >&2 <<EOF
-Usage : $0 -Parties N [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+Usage : $0 [-Parties N] [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+       -Parties ou -FinA requis (au moins un des deux).
 EOF
 }
 
@@ -85,8 +88,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if ! [[ "$PARTIES" =~ ^[0-9]+$ ]] || [ "$PARTIES" -lt 1 ]; then
-  echo "REFUS : -Parties doit être un entier >= 1 (reçu '$PARTIES')." >&2
+# -Parties devient optionnel (Souhel #279, constat N1 : -Parties 4 a fini la
+# nuit à 01:30 pour un -FinA 06:00, 4h30 perdues) -- SI -FinA est donnée, la
+# nuit boucle sans plafond de parties, bornée par -FinA seule (§ 6 ci-dessous
+# et fin_a_atteinte()). Sans aucun des deux, la nuit n'aurait aucune borne
+# d'arrêt : refusé nommément.
+if [ -n "$PARTIES" ]; then
+  if ! [[ "$PARTIES" =~ ^[0-9]+$ ]] || [ "$PARTIES" -lt 1 ]; then
+    echo "REFUS : -Parties doit être un entier >= 1 (reçu '$PARTIES')." >&2
+    usage; exit 1
+  fi
+elif [ -z "$FIN_A" ]; then
+  echo "REFUS : -Parties ou -FinA requis (au moins un des deux) -- sans borne, la nuit ne s'arrêterait jamais." >&2
   usage; exit 1
 fi
 case "$DIRECTOR" in
@@ -730,7 +743,7 @@ jouer_partie() {
 # --- 6. Boucle des parties ----------------------------------------------------
 
 i=1
-while [ "$i" -le "$PARTIES" ]; do
+while [ -z "$PARTIES" ] || [ "$i" -le "$PARTIES" ]; do
   if arret_demande; then
     echo "=== ARRÊT DEMANDÉ (fichier STOP/PAUSE, #271) — nuit interrompue avant partie $i ==="
     RAISON_ARRET_NUIT="arrêt demandé (fichier STOP/PAUSE)"

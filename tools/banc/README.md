@@ -217,9 +217,9 @@ présente, aucun agent `lane-*`/`revue-*` de circuit.sh, aucune PR ouverte,
 envoi à blanc des deux gabarits rendus vers un agent inexistant — #263,
 `tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
 l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
-`tools/banc/nuit.sh -Parties 4 -Director ab` (défauts — un argument passé au
-`.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd -Parties 8
--Director sonnet`) → affiche le chemin de `nuit.md` produit.
+`tools/banc/nuit.sh -Director sonnet -FinA 06:00` (défauts — un argument
+passé au `.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd
+-Parties 8 -Director ab`) → affiche le chemin de `nuit.md` produit.
 
 **Le matin** : ouvrir un fil et dire « lis la nuit » — Claude relit
 `bench/nuit-AAAAMMJJ/nuit.md` et les `resume-run.md` de chaque partie.
@@ -227,23 +227,22 @@ l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
 ### `nuit.sh` — paramètres
 
 ```
-tools/banc/nuit.sh -Parties N [-Director haiku|sonnet|ab] [-Tours 40]
+tools/banc/nuit.sh [-Parties N] [-Director haiku|sonnet|ab] [-Tours 40]
                     [-Save <slug>] [-TimeoutTour <minutes>]
                     [-FinA HH:MM] [-DryRun]
 ```
 
-- `-Parties N` (obligatoire) : nombre de parties à jouer ce lancement — le
-  budget de la nuit. Plafond dur : aucune (N+1)-ème partie n'est lancée.
-  **Constat #279** (nuit du 03/09) : `-Parties 4` a épuisé son budget à
-  01:30 sur les ~7h disponibles avant `-FinA 06:00` — le budget `-Parties`
-  fixe, pas l'heure de fin, a été le facteur limitant. Deux pistes possibles
-  pour combler l'écart, **ni l'une ni l'autre tranchée ici** (décision
-  Souhel, hors périmètre #279) : (a) `nuit.cmd` boucle des lancements
-  successifs jusqu'à `-FinA` quand `-Parties` n'est pas fourni au `.cmd` ;
-  (b) relever le défaut de `nuit.cmd` au-delà de 4 (ex. 8). Les deux gardent
-  `-Parties` obligatoire côté `nuit.sh` (le plafond dur reste nécessaire
-  quelle que soit l'option retenue).
-- `-Director haiku|sonnet|ab` (défaut `sonnet`) : modèle du Director
+- `-Parties N` : nombre de parties à jouer ce lancement — le budget de la
+  nuit. Plafond dur quand elle est donnée : aucune (N+1)-ème partie n'est
+  lancée. **Optionnelle depuis #279** (décision Souhel du 05/09, constat N1 :
+  `-Parties 4` a épuisé son budget à 01:30 sur les ~7h disponibles avant
+  `-FinA 06:00`, 4h30 perdues) : sans `-Parties`, la nuit boucle sans plafond
+  de parties, bornée par `-FinA` seule. `-Parties` et `-FinA` sont donc
+  chacune optionnelle, mais **au moins une des deux est requise** (REFUS
+  nommé sinon — sans borne, la nuit ne s'arrêterait jamais).
+- `-Director haiku|sonnet|ab` (défaut `sonnet` — décision Souhel #279,
+  mesure N1 : Haiku 0/2 parties finies, Sonnet 2/2 ; `ab` reste disponible
+  en option) : modèle du Director
   (agent MJ). `ab` alterne haiku/sonnet en commençant par haiku (N0 = 4
   parties : 2 et 2) — le casting de chaque partie est écrit dans son
   `resume-run.md`. Le joueur tourne toujours en haiku/low, le narrateur
@@ -397,6 +396,10 @@ fonctions `calculer_rapport`/`formater_rapport_markdown`, appelées `<run_dir>
 rapport <raison_arret> <duree_totale_s> <limite_session:oui|non>` — étend
 `metriques_nuit.py`, ne duplique rien) :
 
+- module joué (décision Souhel #279, en attendant l'issue « save de départ
+  sans module ») : titre lu dans `meta.json` (champ `title`) de la copie de
+  save de la première partie du run — `ABSENT` si aucune partie n'a démarré
+  ou si `meta.json` n'a pas ce champ ;
 - parties finies / lancées, durée totale, raison d'arrêt ;
 - tours sans craquement par partie (médiane / min / max) ;
 - craquements par classe D-276 §4 (matériau / règle / Director / outillage)
