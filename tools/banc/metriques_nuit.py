@@ -38,6 +38,12 @@ Métriques rendues (fonction `calculer`) :
   (...)` que `nuit.sh::attendre_fichier` écrit désormais en tête de chaque
   craquement timeout. Un craquement-timeout sans cette ligne (run d'avant
   #299) compte « non classé » côté rôle, ni joueur ni mj.
+- `processus_sortis_joueur` / `processus_sortis_mj` : nombre de
+  `craquement-processus-sorti-NN.md` imputés à chaque rôle (Issue #305 —
+  « muet » (#299, timeout) et « sorti » (le process claude a quitté, pane
+  vivant) sont deux diagnostics distincts que le banc doit compter à part) —
+  même lecture de la ligne `agent : joueur (...)`/`agent : mj (...)` que les
+  timeouts ci-dessus, sur ce nom de craquement.
 
 Étendu pour #281 (garde monde vide) : `lire_module_info` lit `module.json` +
 compte lieux/PNJ dans la save de la première partie qui en porte un — la
@@ -151,17 +157,18 @@ def lire_resume_run(partie_dir: Path) -> dict:
     return out
 
 
-def compter_timeouts_par_role(run_dir: Path) -> dict:
-    """Compte les `craquement-timeout-NN.md` par rôle (#299) — lit la ligne
-    `agent : joueur (...)`/`agent : mj (...)` écrite par
-    `nuit.sh::attendre_fichier` en tête du détail de chaque craquement
-    timeout. Fichier absent de cette ligne (run d'avant #299, ou détail
-    tronqué) : ni joueur ni mj, jamais deviné."""
+def _compter_craquements_par_role(run_dir: Path, motif_glob: str) -> dict:
+    """Compte les craquements dont le nom suit `motif_glob` (ex.
+    `craquement-timeout-*.md`) par rôle — lit la ligne `agent : joueur
+    (...)`/`agent : mj (...)` écrite par `nuit.sh::attendre_fichier` en tête
+    du détail. Fichier absent de cette ligne : ni joueur ni mj, jamais
+    deviné. Partagée par #299 (timeouts) et #305 (processus sortis) — même
+    forme de craquement, seul le nom de classe change."""
     joueur = mj = 0
     for p in sorted(run_dir.glob("partie-*")):
         if not p.is_dir():
             continue
-        for f in sorted(p.glob("craquement-timeout-*.md")):
+        for f in sorted(p.glob(motif_glob)):
             try:
                 contenu = f.read_text(encoding="utf-8")
             except OSError:
@@ -174,6 +181,19 @@ def compter_timeouts_par_role(run_dir: Path) -> dict:
             else:
                 mj += 1
     return {"joueur": joueur, "mj": mj}
+
+
+def compter_timeouts_par_role(run_dir: Path) -> dict:
+    """Compte les `craquement-timeout-NN.md` par rôle (#299)."""
+    return _compter_craquements_par_role(run_dir, "craquement-timeout-*.md")
+
+
+def compter_processus_sortis_par_role(run_dir: Path) -> dict:
+    """Compte les `craquement-processus-sorti-NN.md` par rôle (#305) —
+    diagnostic distinct du timeout (#299) : le processus claude a quitté
+    (pane vivant, « Resume this session with: claude --resume <id> »), pas
+    seulement silencieux."""
+    return _compter_craquements_par_role(run_dir, "craquement-processus-sorti-*.md")
 
 
 def lire_noeud(partie_dir: Path) -> str | None:
@@ -237,6 +257,7 @@ def calculer(run_dir: Path) -> dict:
 
     combats = compter_combats(events_tous)
     timeouts = compter_timeouts_par_role(run_dir)
+    processus_sortis = compter_processus_sortis_par_role(run_dir)
     return {
         "parties_lancees": len(parties_dirs),
         "parties_finies": finies,
@@ -250,6 +271,8 @@ def calculer(run_dir: Path) -> dict:
         "combats_hors_sous_systeme": combats["hors_sous_systeme"],
         "timeouts_joueur": timeouts["joueur"],
         "timeouts_mj": timeouts["mj"],
+        "processus_sortis_joueur": processus_sortis["joueur"],
+        "processus_sortis_mj": processus_sortis["mj"],
         "tours_par_noeud": tours_par_noeud(parties_dirs),
     }
 
@@ -268,6 +291,8 @@ def formater_markdown(m: dict) -> str:
         f"- Combats hors sous-système (deltas d'ennemi hors dnd5e-engine) : "
         f"{m['combats_hors_sous_systeme']}\n"
         f"- Timeouts par rôle (#299) : joueur {m['timeouts_joueur']} / mj {m['timeouts_mj']}\n"
+        f"- Processus sortis par rôle (#305) : joueur {m['processus_sortis_joueur']} / "
+        f"mj {m['processus_sortis_mj']}\n"
         "- Tours joués (moyenne) par nœud atteint (#306) : "
     )
     if m["tours_par_noeud"]:
@@ -417,6 +442,8 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "pires_craquements": pires_craquements(run_dir),
         "timeouts_joueur": m["timeouts_joueur"],
         "timeouts_mj": m["timeouts_mj"],
+        "processus_sortis_joueur": m["processus_sortis_joueur"],
+        "processus_sortis_mj": m["processus_sortis_mj"],
     }
 
 
@@ -455,6 +482,8 @@ def formater_rapport_markdown(r: dict) -> str:
         lignes.append("  - (aucune partie castée)")
     lignes.append(f"- Timeouts par rôle (#299) : joueur {r['timeouts_joueur']} / "
                   f"mj {r['timeouts_mj']}")
+    lignes.append(f"- Processus sortis par rôle (#305) : joueur {r['processus_sortis_joueur']} / "
+                  f"mj {r['processus_sortis_mj']}")
     lignes.append("- Tours joués (moyenne) par nœud atteint (#306) :")
     if r["tours_par_noeud"]:
         for noeud, t in sorted(r["tours_par_noeud"].items()):

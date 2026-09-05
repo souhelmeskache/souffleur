@@ -307,6 +307,7 @@ fi
 PANE_MJ_COURANT=""
 PANE_JOUEUR_COURANT=""
 PARTIE_DIR_COURANTE=""
+PID_SONDE=""   # #305, complément de spec 05/09 17:00 — voir demarrer_sonde_ecran
 DEBUT_NUIT=$(date +%s)
 RAISON_ARRET_NUIT=""
 AVERTISSEMENT_PRE_NUIT="${AVERTISSEMENT_PRE_NUIT:-}"  # #292 -- avertissement
@@ -378,6 +379,70 @@ arreter_toute_la_nuit() {
   exit "$code"
 }
 
+# Sonde d'écran (#305, complément de spec 05/09 17:00) : lit LES DEUX panes
+# de la partie toutes les 10s, PENDANT TOUTE LA PARTIE (pas seulement à la
+# détection d'un processus sorti, et pas seulement à mi-timeout comme #299)
+# — mesure du 05/09 16:43-17:00 (deux runs de plus) : les deux runs qui ont
+# survécu étaient les deux qui tournaient sous une sonde équivalente ; deux
+# observations ne prouvent rien, mais la sonde est gratuite et donne l'écran
+# au moment exact d'une sortie, morte ou vive. Journalise dans
+# `partie-NN/ecran-<role>.log` (bloc horodaté, 12 dernières lignes du pane),
+# DÉDOUBLONNÉ : n'ajoute une entrée que si le contenu du pane a changé depuis
+# la dernière lecture de CE rôle — un pane inchangé entre deux tours ne noie
+# pas le journal. Tourne dans un SUBSHELL bash détaché (`&`), jamais une
+# boucle d'attente qui bloquerait ce script (Issue #244) : ce n'est pas un
+# poll d'attente d'un fichier, c'est une observation continue en tâche de
+# fond, tuée par `arreter_sonde_ecran` (appelée depuis `fermer_panes`, donc
+# sur CHAQUE chemin qui ferme les panes de la partie — timeout, craquement,
+# STOP/PAUSE/-FinA, fin normale, interruption Ctrl+C).
+demarrer_sonde_ecran() {
+  local partie_dir="$1" pane_mj="$2" pane_joueur="$3"
+  (
+    dernier_mj=""
+    dernier_joueur=""
+    while true; do
+      if [ -n "$pane_mj" ]; then
+        contenu_mj="$(herdr pane read "$pane_mj" --lines 12 2>/dev/null)"
+        if [ "$contenu_mj" != "$dernier_mj" ]; then
+          { echo "--- $(date '+%Y-%m-%d %H:%M:%S') ---"; printf '%s\n' "$contenu_mj"; } \
+            >> "$partie_dir/ecran-mj.log"
+          dernier_mj="$contenu_mj"
+        fi
+      fi
+      if [ -n "$pane_joueur" ]; then
+        contenu_joueur="$(herdr pane read "$pane_joueur" --lines 12 2>/dev/null)"
+        if [ "$contenu_joueur" != "$dernier_joueur" ]; then
+          { echo "--- $(date '+%Y-%m-%d %H:%M:%S') ---"; printf '%s\n' "$contenu_joueur"; } \
+            >> "$partie_dir/ecran-joueur.log"
+          dernier_joueur="$contenu_joueur"
+        fi
+      fi
+      sleep 10
+    done
+  ) &
+  PID_SONDE=$!
+}
+
+# Arrête la sonde d'écran de la partie courante — idempotent (aucun effet si
+# aucune sonde n'est en vol, ex. partie craquée avant le lancement).
+arreter_sonde_ecran() {
+  if [ -n "$PID_SONDE" ]; then
+    kill "$PID_SONDE" 2>/dev/null
+    wait "$PID_SONDE" 2>/dev/null
+    PID_SONDE=""
+  fi
+}
+
+# 30 dernières lignes du journal de sonde du rôle $2 ("mj"|"joueur") de la
+# partie $1 — cité par le craquement `processus-sorti` (#305), à côté du
+# `herdr pane read` ponctuel déjà capturé à la détection : la sonde couvre
+# l'INSTANT de la sortie (relevé toutes les 10s), le `pane read` ponctuel
+# seulement l'instant de la détection (jusqu'à 10s plus tard).
+journal_ecran_role() {
+  local partie_dir="$1" role="$2"
+  tail -n 30 "$partie_dir/ecran-$role.log" 2>/dev/null
+}
+
 fermer_panes() {
   # Ferme au mieux les deux panes de la partie courante — jamais fatal (un
   # pane déjà fermé, ou jamais ouvert, ne bloque pas la fermeture de
@@ -393,6 +458,10 @@ fermer_panes() {
   # $1/$2 (#282, défauts "banc-mj"/"banc-joueur") : noms d'agent réels de
   # CETTE paire — suffixés par paire en parallèle (-Paires > 1) pour que le
   # message d'avertissement nomme le bon agent.
+  #
+  # Arrête d'abord la sonde d'écran (#305) — jamais un process de sonde
+  # laissé en vol après la fermeture des panes qu'elle lit.
+  arreter_sonde_ecran
   local agent_mj="${1:-banc-mj}" agent_joueur="${2:-banc-joueur}"
   local p sortie nom
   for p in "$PANE_MJ_COURANT" "$PANE_JOUEUR_COURANT"; do
@@ -430,6 +499,72 @@ fermer_panes_workspace_banc() {
 # "1" si l'agent nommé $1 apparaît dans `herdr agent list`, vide sinon.
 agent_existe() {
   herdr agent list 2>/dev/null | grep -q "\"name\":\"$1\"" && echo 1
+}
+
+# "1" si l'agent nommé $1 est SORTI du point de vue du PROCESSUS (#305) : le
+# pane reste vivant (« Resume this session with: claude --resume <id> »
+# affiché dedans) mais `herdr agent get` ne détecte plus aucun agent —
+# `agent_not_found`. Distinct d'un agent « muet » (#299, encore détecté par
+# `herdr agent list`, juste silencieux) : un processus sorti ne progressera
+# JAMAIS tant qu'il n'est pas relancé, une relance mi-timeout (`herdr agent
+# prompt`) tombe alors dans le vide — constat #299 mis à jour 05/09 (runs de
+# 15:00/15:09/16:35), le banc attendait 6 min un agent déjà mort.
+agent_processus_sorti() {
+  local nom="$1" sortie
+  sortie="$(herdr agent get "$nom" 2>&1)"
+  if [ $? -ne 0 ] && printf '%s' "$sortie" | grep -q 'agent_not_found'; then
+    echo 1
+  fi
+}
+
+# Pane courant de la partie pour le rôle $1 ("joueur"|"mj").
+pane_pour_role() {
+  if [ "$1" = "joueur" ]; then printf '%s' "$PANE_JOUEUR_COURANT"
+  else printf '%s' "$PANE_MJ_COURANT"; fi
+}
+
+# Relance un agent dont le PROCESSUS claude est sorti (#305) : lit dans le
+# pane la commande de reprise affichée par Claude Code à la sortie
+# (« Resume this session with: claude --resume <id> »), relance `herdr agent
+# start` DANS LE MÊME PANE avec `--resume <id>` comme ARGUMENT AGENT (après
+# `--`, comme `--model`/`--effort`/`--permission-mode` — jamais une option de
+# `herdr` lui-même, qui n'en a pas), ATTEND l'interactive_ready (`agent
+# prompt ... --wait --until working --timeout 15000`, même idiome que le
+# lancement initial dans `lancer-banc-fumee.ps1`) puis renvoie le go du tour
+# en cours à l'identique (`go_texte`). Rend 0 SEULEMENT si toute la séquence
+# a réussi jusqu'à la réception effective du go, 1 sinon (id de session
+# introuvable dans le pane, `herdr agent start` a échoué, ou le go n'a
+# jamais été reçu sous 15s) — variables GLOBALES en sortie (même convention
+# que RELANCE_ENVOYEE/TRANSCRIPTION_TIMEOUT, #299) :
+# - ID_SESSION_PROCESSUS : id de session lu dans le pane (vide si
+#   introuvable).
+# - PANE_LOG_PROCESSUS : 30 dernières lignes du pane, capturées AVANT la
+#   tentative — utiles au craquement même si la relance échoue aussi.
+relancer_processus_sorti() {
+  local agent="$1" role="$2" modele="$3" effort="$4" go_texte="$5"
+  local pane; pane="$(pane_pour_role "$role")"
+  PANE_LOG_PROCESSUS="$(herdr pane read "$pane" --lines 30 2>/dev/null)"
+  ID_SESSION_PROCESSUS="$(printf '%s' "$PANE_LOG_PROCESSUS" \
+    | grep -oE 'claude --resume [A-Za-z0-9._-]+' | tail -1 | sed 's/^claude --resume //')"
+  [ -n "$pane" ] || return 1
+  [ -n "$ID_SESSION_PROCESSUS" ] || return 1
+  if ! herdr agent start "$agent" --kind claude --pane "$pane" \
+       -- --resume "$ID_SESSION_PROCESSUS" --model "$modele" --effort "$effort" \
+       --permission-mode acceptEdits >/dev/null 2>&1; then
+    return 1
+  fi
+  # Attend l'`interactive_ready` avant d'envoyer le go (revue REFUS #305) :
+  # `agent start` a déjà attendu la détection interactive dans le pane (son
+  # propre --timeout, 30s par défaut) mais un `claude --resume` fraîchement
+  # redémarré peut rester quelques secondes de plus avant d'accepter
+  # vraiment un prompt — même idiome que `lancer-banc-fumee.ps1` au premier
+  # lancement (`agent prompt ... --wait --until working --timeout 15000`),
+  # ici l'échec d'envoi est PROPAGÉ dans le code de retour (jamais un OK qui
+  # ne certifierait que `agent start`, pas la réception réelle du go).
+  if ! herdr agent prompt "$agent" "$go_texte" --wait --until working --timeout 15000 >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
 }
 
 # Envoie /exit à un agent via `send-keys` — JAMAIS `agent prompt` depuis bash
@@ -532,7 +667,9 @@ limite_session_detectee() {
 # Attend qu'un fichier existe et soit non vide. Rend 0 (produit), 3 (arrêt
 # demandé — sentinelle STOP/PAUSE, #271), 4 (timeout du tour, craquement
 # LOCAL à la partie), 5 (limite de session — arrêt de TOUTE la nuit, budget
-# #260), 8 (heure de fin -FinA atteinte — arrêt de TOUTE la nuit, #276).
+# #260), 8 (heure de fin -FinA atteinte — arrêt de TOUTE la nuit, #276), 9
+# (processus sorti, relance impossible ou déjà tentée — craquement LOCAL à
+# la partie, #305).
 #
 # $4 (agent_attendu) / $5 (role_attendu, "joueur"|"mj") / $6 (nn, numéro de
 # tour) — Issue #299 : à mi-timeout sans fichier, relance UNE FOIS l'agent
@@ -540,22 +677,42 @@ limite_session_detectee() {
 # craquement — constat N1/partie 03 et bench/nuit-20260905/partie-04 : un
 # agent (joueur Haiku, puis Director Haiku) se tait après un appel d'outil,
 # sans erreur ni relance, jusqu'au craquement `timeout` (6 min perdus).
+# $7 (modele_attendu) / $8 (effort_attendu) / $9 (go_texte_attendu) —
+# Issue #305 : à CHAQUE relevé (pas seulement mi-timeout), si `herdr agent
+# get $agent_attendu` rend `agent_not_found`, le PROCESSUS claude est sorti
+# (pane vivant, « muet » est un diagnostic différent, #299) — relance
+# immédiate dans le même pane (`relancer_processus_sorti`, mêmes
+# modèle/effort/permission-mode que le lancement) plutôt que d'attendre le
+# timeout sur un mort (constat #299 mis à jour 05/09 : runs de 15:00/15:09/
+# 16:35, 6 min perdues à chaque fois). Une seule relance de PROCESSUS par
+# appel (donc par tour) : la seconde sortie détectée craque directement
+# (retour 9).
 # Variables GLOBALES en sortie (relues par l'appelant pour le craquement,
 # une fonction bash ne peut pas rendre une chaîne) :
-# - RELANCE_ENVOYEE : "oui"/"non" — une relance a-t-elle été envoyée.
+# - RELANCE_ENVOYEE : "oui"/"non" — une relance mi-timeout a-t-elle été
+#   envoyée (#299).
 # - TRANSCRIPTION_TIMEOUT : 30 dernières lignes de `herdr agent read
 #   $agent_attendu`, capturées AVANT toute fermeture de pane (#299 point 2 —
 #   aujourd'hui l'écran est perdu avec le pane, seule la transcription de
 #   session Claude Code restait lisible après coup).
+# - RELANCE_PROCESSUS_ENVOYEE : "oui"/"non" — une relance de processus a-t-elle
+#   été tentée (#305).
+# - ID_SESSION_PROCESSUS / PANE_LOG_PROCESSUS : id de session lu dans le pane
+#   et ses 30 dernières lignes (#305, `herdr agent read` est impossible sur un
+#   processus sorti — l'agent n'existe plus, seul le pane reste lisible).
 attendre_fichier() {
   local fichier="$1" agent_mj="${2:-banc-mj}" agent_joueur="${3:-banc-joueur}"
   local agent_attendu="${4:-}" role_attendu="${5:-}" nn="${6:-}"
+  local modele_attendu="${7:-}" effort_attendu="${8:-}" go_texte_attendu="${9:-}"
   local n=0 bloque_polls=0
   local max_polls=$(( (TIMEOUT_TOUR_SECS + POLL_SECS - 1) / POLL_SECS ))
   local max_polls_bloque=$(( (LIMITE_SESSION_IDLE_SECS + POLL_SECS - 1) / POLL_SECS ))
   local mi_polls=$(( max_polls / 2 )); [ "$mi_polls" -ge 1 ] || mi_polls=1
   RELANCE_ENVOYEE="non"
   TRANSCRIPTION_TIMEOUT=""
+  RELANCE_PROCESSUS_ENVOYEE="non"
+  ID_SESSION_PROCESSUS=""
+  PANE_LOG_PROCESSUS=""
   while [ ! -s "$fichier" ]; do
     if arret_demande; then
       echo "ARRÊT DEMANDÉ (fichier STOP/PAUSE détecté, #271)"
@@ -564,6 +721,24 @@ attendre_fichier() {
     if fin_a_atteinte; then
       echo "HEURE DE FIN ATTEINTE ($FIN_A, #276)"
       return 8
+    fi
+    if [ -n "$agent_attendu" ] && [ -n "$(agent_processus_sorti "$agent_attendu")" ]; then
+      if [ "$RELANCE_PROCESSUS_ENVOYEE" = "non" ]; then
+        RELANCE_PROCESSUS_ENVOYEE="oui"
+        if relancer_processus_sorti "$agent_attendu" "$role_attendu" "$modele_attendu" \
+             "$effort_attendu" "$go_texte_attendu"; then
+          echo "PROCESSUS SORTI ($role_attendu, tour $nn) — reprise --resume $ID_SESSION_PROCESSUS : OK"
+          sleep "$POLL_SECS"
+          continue
+        else
+          echo "PROCESSUS SORTI ($role_attendu, tour $nn) — reprise --resume $ID_SESSION_PROCESSUS : ÉCHEC"
+          return 9
+        fi
+      else
+        PANE_LOG_PROCESSUS="$(herdr pane read "$(pane_pour_role "$role_attendu")" --lines 30 2>/dev/null)"
+        echo "PROCESSUS SORTI À NOUVEAU ($role_attendu, tour $nn) après relance — craquement (#305)"
+        return 9
+      fi
     fi
     if [ -n "$(limite_session_detectee)" ]; then
       echo "LIMITE DE SESSION (texte détecté dans un pane)"
@@ -846,6 +1021,11 @@ jouer_partie() {
   local t0=$(date +%s)
   local raison="" fin_atteinte="N" tours_joues=0
   local craquements=()
+  # Modèle/effort de CHAQUE agent réel de cette partie (#305, relance de
+  # processus sorti — `herdr agent start ... --resume` doit reprendre à
+  # l'identique du lancement initial, `lancer-banc-fumee.ps1`, jamais ni
+  # -ModeleMj/-ModeleJoueur ci-dessous, ni le mode `acceptEdits` hardcodé).
+  local modele_joueur="haiku" effort_mj="medium" effort_joueur="low"
 
   PARTIE_DIR_COURANTE="$partie_dir"
   mkdir -p "$partie_dir"
@@ -908,10 +1088,15 @@ jouer_partie() {
   fi
   ECHECS_LANCEMENT_CONSECUTIFS=0
 
+  # Sonde d'écran (#305) : démarrée dès que les deux panes existent, tourne
+  # jusqu'à `fermer_panes` (tout chemin de fin de partie confondu, voir
+  # `demarrer_sonde_ecran` ci-dessus).
+  demarrer_sonde_ecran "$partie_dir" "$PANE_MJ_COURANT" "$PANE_JOUEUR_COURANT"
+
   # --- boucle de tours (fil 2, sans LLM dans CE script) ---------------------
   local tour=1
   while [ "$tour" -le "$TOURS" ]; do
-    local nn pn r go_ts
+    local nn pn r go_ts go_texte_mj go_texte_joueur
     nn=$(printf '%02d' "$tour")
     pn=$(printf '%02d' $((tour - 1)))
 
@@ -920,15 +1105,28 @@ jouer_partie() {
       # fait pas ») : le gabarit banc-mj.md (gelé D-276 §4) ne décrit pas de
       # protocole de tour 1 froid — le MJ ouvre lui-même la scène
       # (opening_scene) plutôt que d'attendre une action joueur inexistante.
+      go_texte_mj="go — tour $nn : ouverture, pas d'action joueur — établis la scène d'ouverture (opening_scene) puis écris tour-$nn.md en conséquence"
       go_ts=$(date +%s)
-      herdr agent prompt "$agent_mj" "go — tour $nn : ouverture, pas d'action joueur — établis la scène d'ouverture (opening_scene) puis écris tour-$nn.md en conséquence" >/dev/null 2>&1
+      herdr agent prompt "$agent_mj" "$go_texte_mj" >/dev/null 2>&1
     else
       echo "=== partie $pnn tour $nn — go joueur $(date '+%H:%M:%S')"
-      herdr agent prompt "$agent_joueur" "go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md" >/dev/null 2>&1
-      attendre_fichier "$partie_dir/action-$nn.md" "$agent_mj" "$agent_joueur" "$agent_joueur" "joueur" "$nn"; r=$?
+      go_texte_joueur="go — tour $nn : lis UNIQUEMENT $partie_dir/prose-$pn.md, joue ton tour (un paragraphe), puis écris-le verbatim dans $partie_dir/action-$nn.md"
+      herdr agent prompt "$agent_joueur" "$go_texte_joueur" >/dev/null 2>&1
+      attendre_fichier "$partie_dir/action-$nn.md" "$agent_mj" "$agent_joueur" "$agent_joueur" "joueur" "$nn" \
+        "$modele_joueur" "$effort_joueur" "$go_texte_joueur"; r=$?
       if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "arret-demande" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
       if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "fin-a-atteinte" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
       if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
+      if [ "$r" -eq 9 ]; then
+        raison="craquement-processus-sorti"
+        ecrire_craquement "$partie_dir" "$nn" "processus-sorti" "$(printf \
+          'agent : joueur (%s)\nfichier attendu : %s\nid_session : %s\nrelance tentée : %s\n\n--- 30 dernières lignes de `herdr pane read` (détection) ---\n%s\n\n--- 30 dernières lignes de la sonde d'"'"'écran (partie-%s/ecran-joueur.log, #305) ---\n%s\n' \
+          "$agent_joueur" "$partie_dir/action-$nn.md" "$ID_SESSION_PROCESSUS" "$RELANCE_PROCESSUS_ENVOYEE" "$PANE_LOG_PROCESSUS" \
+          "$pnn" "$(journal_ecran_role "$partie_dir" "joueur")")"
+        craquements+=("craquement-processus-sorti-$nn.md")
+        detecter_fin_partie "$save_dest"
+        break
+      fi
       if [ "$r" -ne 0 ]; then
         raison="craquement-timeout"
         ecrire_craquement "$partie_dir" "$nn" "timeout" "$(printf \
@@ -940,14 +1138,26 @@ jouer_partie() {
       fi
       local action; action="$(cat "$partie_dir/action-$nn.md")"
       echo "=== partie $pnn tour $nn — go MJ $(date '+%H:%M:%S')"
+      go_texte_mj="go — tour $nn. Action du joueur (verbatim) : $action"
       go_ts=$(date +%s)
-      herdr agent prompt "$agent_mj" "go — tour $nn. Action du joueur (verbatim) : $action" >/dev/null 2>&1
+      herdr agent prompt "$agent_mj" "$go_texte_mj" >/dev/null 2>&1
     fi
 
-    attendre_fichier "$partie_dir/tour-$nn.md" "$agent_mj" "$agent_joueur" "$agent_mj" "mj" "$nn"; r=$?
+    attendre_fichier "$partie_dir/tour-$nn.md" "$agent_mj" "$agent_joueur" "$agent_mj" "mj" "$nn" \
+      "$modele" "$effort_mj" "$go_texte_mj"; r=$?
     if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "arret-demande" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
     if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "fin-a-atteinte" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
     if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
+    if [ "$r" -eq 9 ]; then
+      raison="craquement-processus-sorti"
+      ecrire_craquement "$partie_dir" "$nn" "processus-sorti" "$(printf \
+        'agent : mj (%s)\nfichier attendu : %s\nid_session : %s\nrelance tentée : %s\n\n--- 30 dernières lignes de `herdr pane read` (détection) ---\n%s\n\n--- 30 dernières lignes de la sonde d'"'"'écran (partie-%s/ecran-mj.log, #305) ---\n%s\n' \
+        "$agent_mj" "$partie_dir/tour-$nn.md" "$ID_SESSION_PROCESSUS" "$RELANCE_PROCESSUS_ENVOYEE" "$PANE_LOG_PROCESSUS" \
+        "$pnn" "$(journal_ecran_role "$partie_dir" "mj")")"
+      craquements+=("craquement-processus-sorti-$nn.md")
+      detecter_fin_partie "$save_dest"
+      break
+    fi
     if [ "$r" -ne 0 ]; then
       raison="craquement-timeout"
       ecrire_craquement "$partie_dir" "$nn" "timeout" "$(printf \
