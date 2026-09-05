@@ -12,9 +12,15 @@ et `nettoyer_une` sont egalement redefinies pour eviter tout appel reel
 (PowerShell / herdr workspace / git worktree) -- aucune des deux n'est le
 sujet de ce test.
 
-Les appels `herdr agent prompt`/`gh issue comment` sont journalises dans un
-fichier ($CALLS_FILE) plutot que sur stdout : le code reel redirige le
-premier vers `/dev/null`.
+Les appels `herdr agent prompt`/`gh issue comment`/`nettoyer_une` sont
+journalises dans un fichier ($CALLS_FILE) plutot que sur stdout : le code
+reel redirige le premier vers `/dev/null`. `nettoyer_une` est journalisee
+(pas seulement stubbee a `return 0`) pour attraper la fuite de lane de
+revue signalee en REFUS de revue adversariale (ce qui cree detruit, I-243 :
+la lane revue-$pr, deja creee pour obtenir le verdict APPROUVE avant le
+conflit, doit etre detruite avant tout rebouclage/sortie, sinon
+`lancer_revue` echouerait au cycle suivant en recreant un worktree/branche
+revue-$pr deja existant).
 
 Deux scenarios, chacun un appel bash independant :
   1) PR APPROUVEE mais CONFLICTING + lane vivante, persistant -> consigne de
@@ -59,7 +65,7 @@ def run(gh_herdr_fakes, extra_prelude="", scenario_tail='(veiller "$ISSUE"); ech
             f'ISSUE="{ISSUE}"\n'
             f'PR="{PR}"\n'
             f'CALLS_FILE="{calls.as_posix()}"\n'
-            'nettoyer_une() { return 0; }\n'
+            'nettoyer_une() { echo "NETTOYER-CALL: $*" >> "$CALLS_FILE"; return 0; }\n'
             'lancer_revue() { _VERDICT_BODY="REVUE : APPROUVE -- rien a redire"; return 0; }\n'
             + gh_herdr_fakes + extra_prelude + scenario_tail
             + f'echo "=== CALLS ==="; cat "{calls.as_posix()}" 2>/dev/null\n'
@@ -114,7 +120,9 @@ assert p.stdout.count("GH-CALL: issue comment 999") >= 2, \
     "attendu un commentaire clair sur l'Issue a chaque renvoi"
 assert "1 échec du merge merge" not in p.stdout, "jamais le message inutilisable historique"
 assert "en conflit avec main" in p.stdout
-print("1) CONFLICTING + lane vivante persistante -> renvoi a chaque cycle, sortie 4 au 3e")
+assert p.stdout.count("NETTOYER-CALL: revue-42") == 3, \
+    f"attendu un teardown de la lane de revue a chaque cycle de conflit (ce qui cree detruit, I-243) : {p.stdout!r}"
+print("1) CONFLICTING + lane vivante persistante -> renvoi a chaque cycle, sortie 4 au 3e, revue-42 nettoyee a chaque cycle")
 
 # ---- 2) CONFLICTING + lane morte -> sortie 1 nommee, aucun renvoi ----------
 
@@ -151,6 +159,8 @@ p = run(gh_conflit_morte)
 assert "EXIT=1" in p.stdout, f"attendu sortie 1 (conflit, lane morte) : stdout={p.stdout!r} stderr={p.stderr!r}"
 assert "HERDR-CALL: agent prompt" not in p.stdout, "aucun renvoi attendu, la lane est morte"
 assert "GH-CALL: issue comment 999 -R test/repo --body VEILLE 999 : 1 CONFLIT avec lane morte : relancer la lane merge" in p.stdout
-print("2) CONFLICTING + lane morte -> sortie 1 nommee, aucun renvoi tente")
+assert "NETTOYER-CALL: revue-42" in p.stdout, \
+    "attendu un teardown de la lane de revue avant la sortie nommee (ce qui cree detruit, I-243)"
+print("2) CONFLICTING + lane morte -> sortie 1 nommee, revue-42 nettoyee, aucun renvoi tente")
 
 print("\nALL CIRCUIT_VEILLER_CONFLIT_MERGE TESTS PASSED")

@@ -605,10 +605,17 @@ veiller() {
           # un état de PR que la lane peut corriger est un verdict à lui
           # renvoyer, pas une sortie — sauf lane morte, alors sortie nommée.
           if ! agent_lane_vivante "$issue"; then
+            # Ce qui crée détruit (I-243) : la lane de revue (workspace +
+            # worktree + branche revue-$pr) existe encore (verdict APPROUVE
+            # obtenu avant le conflit) et n'a pas été détruite par
+            # merger_et_nettoyer, qui n'a pas mergé — la nettoyer ici évite
+            # la fuite (revue REFUS #288).
+            nettoyer_une "revue-$pr"
             journal_sortie "$issue" 1 "CONFLIT avec lane morte : relancer la lane" "merge"
           fi
           cycle=$((cycle+1))
           if [ "$cycle" -gt 2 ]; then
+            nettoyer_une "revue-$pr"
             journal_sortie "$issue" 4 "CONFLIT de merge persistant ($cycle cycles)" "merge"
           fi
           local t0_conflit
@@ -616,6 +623,12 @@ veiller() {
           gh issue comment "$issue" -R "$REPO" --body "PR #$pr en conflit avec main après un merge concurrent (T0=$t0_conflit) ; consigne de rebase envoyée à lane-$issue."
           echo "=== veiller #$issue : CONFLIT de merge (cycle $cycle, T0=$t0_conflit) — renvoi automatique à lane-$issue ==="
           herdr agent prompt "lane-$issue" "CONFLIT DE MERGE : rebase sur origin/main, résous en gardant les deux apports, tests verts, \`push --force-with-lease\`, nouveau TERMINÉ" >/dev/null 2>&1
+          # Ce qui crée détruit (I-243) : la lane de revue (verdict APPROUVE
+          # déjà obtenu avant le conflit) doit être détruite avant de
+          # reboucler, sinon `lancer_revue` (au prochain cycle) échoue en
+          # recréant un worktree/branche revue-$pr déjà existant (revue
+          # REFUS #288, symétrique du chemin REFUS ci-dessous).
+          nettoyer_une "revue-$pr"
 
           echo "=== veiller #$issue : phase attente_termine (conflit, cycle $cycle) ==="
           attendre_termine "$issue"
