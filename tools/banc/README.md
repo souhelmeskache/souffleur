@@ -1,7 +1,8 @@
 # tools/banc/ — scripts de veille du banc
 
-- `nuit.sh` / `nuit.cmd` / `verifier-avant-nuit.sh` / `metriques_nuit.py` :
-  **banc de nuit N1** (#201, D-276 ; #260) — voir section dédiée ci-dessous.
+- `nuit.sh` / `nuit.cmd` / `verifier-avant-nuit.sh` / `metriques_nuit.py` /
+  `detecter_fin.py` : **banc de nuit N1** (#201, D-276 ; #260 ; #306) — voir
+  section dédiée ci-dessous.
 - `fermer-workspace-banc.sh <label>` / `verifier-workspace-banc-vide.sh` :
   workspace herdr dédié au banc (#298) — voir § « Workspace dédié au banc »
   ci-dessous.
@@ -257,7 +258,7 @@ passé au `.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd
 ### `nuit.sh` — paramètres
 
 ```
-tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40]
+tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 200]
                     [-Save <slug>] [-TimeoutTour <minutes>]
                     [-FinA HH:MM] [-DryRun]
 ```
@@ -288,7 +289,15 @@ tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 
   parties : 2 et 2) — le casting de chaque partie est écrit dans son
   `resume-run.md`. Le joueur tourne toujours en haiku/low, le narrateur
   (sous-agent spawné par le Director) en haiku.
-- `-Tours 40` : plafond de tours par partie.
+- `-Tours 200` (relevé de 40 à 200, #306 — décision Souhel du 05/09 : « j'ai
+  besoin de voir des parties COMPLÈTES, pas des bancs qui testent le début
+  du scénario ») : plafond de tours par partie, borne HAUTE seulement — la
+  partie s'arrête plus tôt dès que `fin_atteinte` bascule (mort ou nœud
+  terminal, voir « Ce que la nuit ne fait pas » ci-dessous). `40` était un
+  réglage de fumée (banc de fumée manuel, jamais calibré pour une nuit
+  complète) : N1 a joué 2 x 40 tours sans jamais dépasser l'ouverture du
+  module. Toujours borné par `-FinA` (inchangé), qui reste la seule borne
+  quand `-Tours` n'est pas atteinte non plus.
 - `-Save <slug>` (défaut `banc-depart-beyond-the-vale-of-madness`) : save
   source (`saves/<slug>`, résolution `coderain/config.py::saves_dir`),
   copiée fraîche pour chaque partie — jamais jouée directement. **Doit être
@@ -526,15 +535,20 @@ joueur.
 `action-NN.md`, `craquement-*.md` (comme le banc de fumée) + un
 `resume-run.md` MINIMAL écrit par le script (casting, **paire** — #282,
 numéro de la paire Director/joueur qui a joué cette partie, "01" en
-séquentiel —, tours joués, fin atteinte O/N, raison de l'arrêt, liste des
-craquements, durée) — l'analyse est N2, pas ce script.
+séquentiel —, tours joués, fin atteinte O/N, raison de l'arrêt,
+**`noeud_final` (fin atteinte) ou `noeud_atteint` (sinon)** — #306, le nœud
+courant de la partition à la sortie, LA mesure de progression, à toute
+sortie de partie (tours_max, craquement, fin) —, liste des craquements,
+durée) — l'analyse est N2, pas ce script.
 
 `bench/nuit-AAAAMMJJ/nuit.md` : table des parties (director, tours joués,
-fin atteinte, raison), budget consommé, nombre de paires (`-Paires`, #282),
-raison de l'arrêt de la nuit, les métriques §3 de #201
-(`tools/banc/metriques_nuit.py`, calculées par le script, jamais un
-jugement — inclut désormais « Paires simultanées », #282), et le statut du
-dépôt de `rapport-nuit.md` sur l'Issue #201 (voir ci-dessous). La table est
+fin atteinte, raison, **nœud atteint / terminal** — #306), budget consommé,
+nombre de paires (`-Paires`, #282), raison de l'arrêt de la nuit, les
+métriques §3 de #201 (`tools/banc/metriques_nuit.py`, calculées par le
+script, jamais un jugement — inclut désormais « Paires simultanées » #282,
+et depuis #306 « Parties complètes (fin_module) / mortes (mort) » distinctes
+et « Tours joués (moyenne) par nœud atteint »), et le statut du dépôt de
+`rapport-nuit.md` sur l'Issue #201 (voir ci-dessous). La table est
 reconstruite mécaniquement à partir des `resume-run.md` déjà écrits (jamais
 accumulée en mémoire pendant la nuit) — fonctionne identiquement en
 séquentiel et en parallèle.
@@ -680,14 +694,22 @@ alternance, contenus distincts sur disque, aucun croisement).
 
 - **Pas d'analyse, pas de correction** — N2/N3 lisent `nuit.md` et les
   `resume-run.md`, ce script les écrit seuls.
-- **Pas de détection narrative de « fin de module »** : aucun signal
-  générique de complétion narrative n'existe côté moteur sans jugement
-  humain/LLM (hors périmètre #260 : « aucun LLM dans le script »). `fin
-  atteinte` dans `resume-run.md` est un PROXY MÉCANIQUE — mort du joueur
-  (`rpg.player.conditions` contient `"dead"`) — pas une lecture de la
-  progression narrative. Une partie qui épuise `-Tours` sans mourir sort
-  avec `fin_atteinte: N`, `raison_arret: tours_max`, sans que ce soit un
-  échec.
+- **Pas de jugement narratif de « fin de module »** — mais une détection
+  MÉCANIQUE de la fin STRUCTURELLE de la partition existe depuis #306,
+  toujours sans LLM (hors périmètre #260 : « aucun LLM dans le script ») :
+  `tools/banc/detecter_fin.py` lit le nœud courant de la save (même lecture
+  que `coderain/assembleur_position.py` — position + `module.json` →
+  partition → `nodes/<id>.md`) et statue « fin de module » si ce nœud a
+  `liens: []` ET porte une `charniere_sortie` (D-123), et n'est pas
+  `avant-propos` (l'entrée du module — jamais une fin). `fin_atteinte` dans
+  `resume-run.md` couvre donc désormais DEUX proxys mécaniques distincts,
+  jamais confondus dans `raison_arret` : `mort` (`rpg.player.conditions`
+  contient `"dead"`, proxy historique) et `fin_module` (nœud terminal
+  atteint). Une partie qui épuise `-Tours` sans ni mourir ni atteindre de
+  nœud terminal sort avec `fin_atteinte: N`, `raison_arret: tours_max`, sans
+  que ce soit un échec — et porte quand même `noeud_atteint: para-NN`, LA
+  mesure de progression (à toute sortie de partie : tours_max, craquement,
+  ou fin — voir `ecrire_resume_run`).
 - **Pas de protocole de tour 1 « froid »** : les gabarits gelés
   (`banc-mj.md`/`banc-joueur.md`, D-276 §4) supposent une reprise, pas un
   démarrage à vide. `nuit.sh` comble ce trou en envoyant le premier « go »
