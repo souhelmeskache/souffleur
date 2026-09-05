@@ -170,13 +170,43 @@ def main() -> int:
         # --- 5. arrêt AU TOUR SUIVANT (partie en cours) : -LancementCmd
         # "true" (lancement réussi, aucun agent réel), -FinA atteinte pendant
         # l'attente du premier tour -> exit 130, même chemin que STOP -------
+        # Faux `herdr` (#305) : `agent get` doit rendre l'agent "trouvé" —
+        # sans lui, le `herdr` RÉEL de ce poste (contrairement à un poste CI
+        # sans herdr) répondrait honnêtement `agent_not_found` pour l'agent
+        # `banc-mj` fictif de ce test (jamais réellement démarré), et
+        # `nuit.sh::agent_processus_sorti` (#305) le prendrait — à raison,
+        # côté agent réel — pour un PROCESSUS SORTI, préemptant ce scénario
+        # avant même que `-FinA` ait eu la chance d'être atteint. Ce test
+        # vérifie `-FinA` en cours de tour, pas la détection de processus
+        # sorti (couverte par tests/nuit_processus_sorti_test.py).
         run_dir_tour = tmp / "run-tour"
+        fake_bin_tour = tmp / "fake-bin-tour"
+        fake_bin_tour.mkdir()
+        fake_herdr_tour = fake_bin_tour / "herdr"
+        fake_herdr_tour.write_text(
+            "#!/bin/bash\n"
+            "if [ \"$1\" = \"agent\" ] && [ \"$2\" = \"get\" ]; then\n"
+            "  echo '{\"result\":{\"agent\":{\"name\":\"'\"$3\"'\"}}}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$1\" = \"agent\" ] && [ \"$2\" = \"list\" ]; then\n"
+            "  echo '{\"result\":{\"agents\":[]}}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8", newline="\n",
+        )
+        fake_herdr_tour.chmod(0o755)
+        env_tour = {
+            **env,
+            "PATH": f"{fake_bin_tour}{os.pathsep}{env.get('PATH', '')}",
+        }
         heure_proche = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
         p = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug,
              "-RunDir", str(run_dir_tour), "-TimeoutTour", "2",
              "-FinA", heure_proche, "-LancementCmd", "true"],
-            capture_output=True, text=True, timeout=150, env=env,
+            capture_output=True, text=True, timeout=150, env=env_tour,
         )
         assert p.returncode == 130, (
             f"arrêt au tour suivant (heure de fin) : attendu 130, reçu {p.returncode}\n"

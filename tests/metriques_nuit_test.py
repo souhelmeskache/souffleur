@@ -126,6 +126,41 @@ def main() -> int:
     finally:
         shutil.rmtree(tmp2, ignore_errors=True)
 
+    # --- 7. timeouts_par_role / processus_sortis_par_role (#299, #305) ------
+    # Deux diagnostics distincts (« muet » vs « sorti », #305) sur la même
+    # forme de craquement (ligne `agent : joueur (...)`/`agent : mj (...)`
+    # en tête) — comptés séparément, jamais mélangés.
+    tmp3 = Path(tempfile.mkdtemp(prefix="metriques-nuit-roles-test-"))
+    try:
+        run_dir3 = tmp3 / "nuit-roles"
+        p1 = run_dir3 / "partie-01"
+        p1.mkdir(parents=True)
+        (p1 / "craquement-timeout-02.md").write_text(
+            "agent : joueur (banc-joueur)\nfichier attendu : x\n", encoding="utf-8")
+        (p1 / "craquement-timeout-03.md").write_text(
+            "agent : mj (banc-mj)\nfichier attendu : x\n", encoding="utf-8")
+        (p1 / "craquement-processus-sorti-04.md").write_text(
+            "agent : mj (banc-mj)\nid_session : abc-123\n", encoding="utf-8")
+        p2 = run_dir3 / "partie-02"
+        p2.mkdir(parents=True)
+        (p2 / "craquement-processus-sorti-01.md").write_text(
+            "agent : joueur (banc-joueur-2)\nid_session : def-456\n", encoding="utf-8")
+
+        timeouts = metriques_nuit.compter_timeouts_par_role(run_dir3)
+        assert timeouts == {"joueur": 1, "mj": 1}, timeouts
+        processus_sortis = metriques_nuit.compter_processus_sortis_par_role(run_dir3)
+        assert processus_sortis == {"joueur": 1, "mj": 1}, processus_sortis
+        print("7) timeouts_par_role / processus_sortis_par_role : comptés séparément (#299 ⊥ #305)")
+
+        m3 = metriques_nuit.calculer(run_dir3)
+        assert m3["timeouts_joueur"] == 1 and m3["timeouts_mj"] == 1, m3
+        assert m3["processus_sortis_joueur"] == 1 and m3["processus_sortis_mj"] == 1, m3
+        rendu3 = metriques_nuit.formater_markdown(m3)
+        assert "Processus sortis par rôle (#305) : joueur 1 / mj 1" in rendu3, rendu3
+        print("8) calculer()/formater_markdown() propagent processus_sortis_joueur/mj")
+    finally:
+        shutil.rmtree(tmp3, ignore_errors=True)
+
     print("\nALL METRIQUES_NUIT TESTS PASSED")
     return 0
 

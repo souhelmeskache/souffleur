@@ -379,6 +379,49 @@ n'exigeront pas de réécrire ce script.
   les 30 dernières lignes de `herdr agent read <agent>` — capturées AVANT la
   fermeture des panes (avant #299, l'écran était perdu avec le pane, seule
   la transcription de session Claude Code restait lisible après coup).
+  **« Muet » ⊥ « sorti » (#305)** : la relance mi-timeout ci-dessus suppose
+  l'agent encore détecté (juste silencieux) — un agent dont le PROCESSUS
+  claude a quitté (pane vivant, « Resume this session with: claude --resume
+  <id> » affiché dedans, disparu de `herdr agent list`) ne répond JAMAIS à
+  un `herdr agent prompt`. Constat #299 mis à jour le 05/09 (16:35, 15:09,
+  15:00) : trois runs sur cinq ont attendu le timeout COMPLET (6 min) un
+  processus déjà mort, la relance mi-timeout tombant dans le vide — voir
+  « Processus sorti » ci-dessous, qui traite ce cas séparément et
+  immédiatement, sans attendre.
+- **Processus sorti, relance dans le même pane (#305)** : à CHAQUE relevé
+  (pas seulement à mi-timeout), `attendre_fichier` vérifie `herdr agent get
+  <agent attendu>` — `agent_not_found` alors que le pane existe signale un
+  processus SORTI, diagnostic distinct du « muet » ci-dessus. Relance
+  immédiate, une seule fois par tour : lecture de la commande de reprise
+  affichée par le pane (`herdr pane read`, « Resume this session with:
+  claude --resume <id> »), `herdr agent start <agent> --kind claude --pane
+  <même pane> -- --resume <id> --model <même modèle> --effort <même effort>
+  --permission-mode acceptEdits` (mêmes réglages que le lancement initial,
+  `lancer-banc-fumee.ps1`), puis renvoi du go du tour en cours à
+  l'identique. Une seconde sortie détectée dans le même tour (relance
+  déjà tentée, échouée ou re-sortie aussitôt) craque directement
+  (`craquement-processus-sorti-NN.md` : agent, fichier attendu, id de
+  session, si la relance a été tentée, et l'écran du pane — voir sonde
+  ci-dessous) — la partie se ferme, la suivante démarre, **n'arrête pas la
+  nuit**. `metriques_nuit.py` compte les processus sortis par rôle
+  (`processus_sortis_joueur`/`processus_sortis_mj`), à côté des timeouts
+  #299.
+- **Sonde d'écran (#305, complément de spec 05/09 17:00)** : `nuit.sh` lit
+  les deux panes de la partie **toutes les 10s pendant toute la partie**
+  (pas seulement à la détection d'un processus sorti, ni seulement à
+  mi-timeout) et journalise dans `partie-NN/ecran-mj.log`/`ecran-joueur.log`
+  (bloc horodaté, 12 dernières lignes du pane, dédoublonné — une entrée
+  seulement si le contenu a changé depuis la dernière lecture de ce rôle).
+  Tourne en tâche de fond (subshell bash détaché), tuée dès que les panes de
+  la partie se ferment (`fermer_panes`, tout chemin de fin confondu — jamais
+  un process de sonde laissé en vol). Le craquement `processus-sorti` cite
+  les 30 dernières lignes de ce journal, à côté du `herdr pane read`
+  ponctuel déjà capturé à la détection : la sonde couvre l'INSTANT de la
+  sortie (relevé toutes les 10s), le `pane read` ponctuel seulement
+  l'instant de la détection (jusqu'à 10s plus tard). Origine : mesure du
+  05/09 16:43-17:00 — les deux runs qui ont survécu étaient les deux qui
+  tournaient sous une sonde équivalente (deux observations ne prouvent
+  rien, mais la sonde est gratuite).
 - `-FinA HH:MM` (#276, heure locale du poste, défaut `06:00` dans
   `nuit.cmd`, pas de défaut dans `nuit.sh` seul) : plus aucune partie ne
   démarre après cette heure ; une partie en cours s'arrête proprement au
