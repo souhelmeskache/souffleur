@@ -12,7 +12,7 @@
 #
 # Usage :
 #   tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab]
-#                       [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>]
+#                       [-Tours 200] [-Save <slug>] [-TimeoutTour <minutes>]
 #                       [-FinA HH:MM] [-DryRun]
 #   -Parties ou -FinA requis (au moins un des deux) -- sans -Parties, la nuit
 #   boucle sans plafond de parties, bornée par -FinA seule (Souhel #279).
@@ -41,6 +41,7 @@ FIXTURE_PY="$REPO_ROOT/bench/fixtures/personnage-banc.py"
 METRIQUES_PY="$REPO_ROOT/tools/banc/metriques_nuit.py"
 EXTRAIRE_PROSE_PY="$REPO_ROOT/tools/banc/extraire_prose.py"
 ARBITRER_PROSE_PY="$REPO_ROOT/tools/banc/arbitrer_prose.py"
+DETECTER_FIN_PY="$REPO_ROOT/tools/banc/detecter_fin.py"
 
 # Frontière bash ⊥ Windows (#270) : source la conversion partagée avec
 # verifier-liste-blanche-nuit.sh — jamais un chemin `pwd` brut (`/c/Users/...`)
@@ -55,7 +56,12 @@ LIMITE_SESSION_IDLE_SECS=600   # 10 min — agent bloqué + idle sans progrès
 PARTIES=""
 PAIRES=1
 DIRECTOR="sonnet"
-TOURS=40
+# Défaut relevé 40 -> 200 (#306, décision Souhel 05/09 : « j'ai besoin de
+# voir des parties COMPLÈTES, pas des bancs qui testent le début du
+# scénario ») — 40 était un réglage de fumée (banc de fumée manuel), jamais
+# calibré pour une nuit : N1 a joué 2 x 40 tours sans jamais dépasser
+# l'ouverture du module. Toujours borné par -FinA (inchangé).
+TOURS=200
 SAVE="banc-depart-beyond-the-vale-of-madness"
 TIMEOUT_TOUR_MIN=6
 FIN_A=""
@@ -65,7 +71,7 @@ LANCEMENT_CMD_OVERRIDE=""
 
 usage() {
   cat >&2 <<EOF
-Usage : $0 [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 40] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+Usage : $0 [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 200] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
        -Parties ou -FinA requis (au moins un des deux).
 EOF
 }
@@ -767,34 +773,58 @@ attendre_fichier() {
   return 0
 }
 
-# "0" (vrai) si la fixture / le save signale la fin de partie — PROXY
-# MÉCANIQUE (mort du joueur, `rpg.player.conditions` contient "dead"), PAS
-# une détection narrative de fin de module : voir tools/banc/README.md,
-# « ce que la nuit ne fait pas ». Aucun signal générique de "module terminé"
-# n'existe côté moteur sans jugement humain/LLM (hors périmètre #260 :
-# "aucun LLM dans le script").
-partie_module_termine() {
+# Détection MÉCANIQUE de fin de partie (#306) — remplace l'ancien proxy
+# joueur-mort-seul : vrai désormais si (a) joueur mort (`rpg.player.conditions`
+# contient "dead", proxy historique inchangé), OU (b) le nœud courant de la
+# save (même lecture que coderain/assembleur_position.py — position +
+# module.json → partition → nodes/<id>.md) est un nœud TERMINAL de la
+# partition (`liens: []` + `charniere_sortie` présente, id != "avant-propos").
+# Voir tools/banc/detecter_fin.py — aucun LLM, aucun jugement narratif (hors
+# périmètre #260/#306 : "aucun LLM dans le script"). Rend deux GLOBALES,
+# relues par l'appelant (une fonction bash ne peut pas rendre deux valeurs) :
+# - FIN_COURANTE : "non"|"mort"|"fin_module".
+# - NOEUD_ATTEINT_COURANT : id du nœud courant, ou "(aucun)" si aucune
+#   position lisible — LA mesure de progression écrite dans resume-run.md à
+#   chaque sortie (tours_max, craquement, fin de partie), pas seulement fin
+#   atteinte.
+FIN_COURANTE="non"
+NOEUD_ATTEINT_COURANT="(aucun)"
+detecter_fin_partie() {
   local save_dir="$1"
-  # Frontière bash ⊥ Windows (#270) : $save_dir est embarqué en LITTÉRAL dans
-  # le code source Python ci-dessous (r'...') — MSYS ne traduit que les
-  # arguments argv d'un exe natif, pas une chaîne cachée dans un -c ; il faut
-  # convertir explicitement avant.
+  # Frontière bash ⊥ Windows (#270) : chemin_windows_depuis_bash avant tout
+  # appel Python — même garde que chemin_windows_depuis_bash ci-dessus.
   local save_dir_win; save_dir_win="$(chemin_windows_depuis_bash "$save_dir")"
-  python -c "
-import json, sys
-try:
-    d = json.load(open(r'$save_dir_win/state.json', encoding='utf-8'))
-except Exception:
-    sys.exit(1)
-conds = ((d.get('rpg') or {}).get('player') or {}).get('conditions') or []
-sys.exit(0 if 'dead' in conds else 1)
-" 2>/dev/null
+  local sortie
+  sortie="$(python "$DETECTER_FIN_PY" "$save_dir_win" 2>/dev/null)"
+  FIN_COURANTE="$(printf '%s\n' "$sortie" | grep '^fin:' | sed 's/^fin: *//')"
+  NOEUD_ATTEINT_COURANT="$(printf '%s\n' "$sortie" | grep '^noeud:' | sed 's/^noeud: *//')"
+  [ -n "$FIN_COURANTE" ] || FIN_COURANTE="non"
+  [ -n "$NOEUD_ATTEINT_COURANT" ] || NOEUD_ATTEINT_COURANT="(aucun)"
+}
+
+# Écrit resume-run.md pour une partie interrompue EN COURS DE TOUR par
+# STOP/PAUSE ou -FinA (#306) — jusqu'ici cette partie ne recevait AUCUN
+# resume-run.md (construire_table_parties la reportait "en cours /
+# interrompue", sans nœud), puisque le chemin `arreter_toute_la_nuit`
+# n'écrivait jamais resume-run.md avant de sortir tout le script. Appelée
+# juste avant `arreter_toute_la_nuit` dans chaque branche STOP/PAUSE/-FinA
+# de jouer_partie — `fermer_et_verifier_agents` doit déjà avoir tourné
+# (les panes sont fermés avant toute lecture de la save, jamais pendant
+# qu'un agent y écrit encore).
+enregistrer_interruption_partie() {
+  local partie_dir="$1" pnn="$2" modele="$3" tours_joues="$4" paire="$5" \
+        save_dest="$6" raison="$7" t0="$8"
+  shift 8
+  local craquements=("$@")
+  detecter_fin_partie "$save_dest"
+  ecrire_resume_run "$partie_dir" "$pnn" "$modele" "$tours_joues" "N" "$raison" \
+    $(( $(date +%s) - t0 )) "$paire" "$NOEUD_ATTEINT_COURANT" "${craquements[@]}"
 }
 
 ecrire_resume_run() {
   local partie_dir="$1" pnn="$2" modele="$3" tours_joues="$4" fin_atteinte="$5" \
-        raison="$6" duree_s="$7" paire="$8"
-  shift 8
+        raison="$6" duree_s="$7" paire="$8" noeud="$9"
+  shift 9
   local craquements=("$@")
   {
     echo "# resume-run — partie $pnn"
@@ -808,6 +838,14 @@ ecrire_resume_run() {
     echo "tours_joues: $tours_joues"
     echo "fin_atteinte: $fin_atteinte"
     echo "raison_arret: $raison"
+    # noeud_final (fin atteinte) / noeud_atteint (sinon) — #306 : LA mesure
+    # de progression, à chaque sortie (tours_max, craquement, fin de partie),
+    # pas seulement quand la partie a fini le module.
+    if [ "$fin_atteinte" = "O" ]; then
+      echo "noeud_final: ${noeud:-(aucun)}"
+    else
+      echo "noeud_atteint: ${noeud:-(aucun)}"
+    fi
     echo "duree_s: $duree_s"
     if [ "${#craquements[@]}" -gt 0 ]; then
       echo "craquements:"
@@ -844,7 +882,7 @@ trap 'nettoyage_interruption TERM' TERM
 # session, avant l'écriture normale de fin de jouer_partie) rend une ligne
 # "en cours / interrompue" plutôt que d'être absente de la table.
 construire_table_parties() {
-  local d pnn resume modele tours fin raison
+  local d pnn resume modele tours fin raison noeud
   for d in "$RUN_DIR"/partie-*/; do
     [ -d "$d" ] || continue
     pnn="$(basename "$d" | sed 's/^partie-//')"
@@ -854,9 +892,12 @@ construire_table_parties() {
       tours="$(grep '^tours_joues:' "$resume" | head -1 | sed 's/^tours_joues: *//')"
       fin="$(grep '^fin_atteinte:' "$resume" | head -1 | sed 's/^fin_atteinte: *//')"
       raison="$(grep '^raison_arret:' "$resume" | head -1 | sed 's/^raison_arret: *//')"
-      echo "| $pnn | ${modele:-?} | ${tours:-0} | ${fin:-N} | ${raison:-?} |"
+      # noeud_final (fin atteinte) OU noeud_atteint (sinon) — #306, un seul
+      # des deux existe par resume-run.md (voir ecrire_resume_run).
+      noeud="$(grep -E '^noeud_(final|atteint):' "$resume" | head -1 | sed -E 's/^noeud_(final|atteint): *//')"
+      echo "| $pnn | ${modele:-?} | ${tours:-0} | ${fin:-N} | ${raison:-?} | ${noeud:-?} |"
     else
-      echo "| $pnn | ? | 0 | N | en cours / interrompue |"
+      echo "| $pnn | ? | 0 | N | en cours / interrompue | ? |"
     fi
   done
 }
@@ -883,8 +924,8 @@ ecrire_nuit_md() {
     echo
     echo "## Parties"
     echo
-    echo "| partie | director | tours joués | fin atteinte | raison |"
-    echo "|---|---|---|---|---|"
+    echo "| partie | director | tours joués | fin atteinte | raison | nœud atteint / terminal |"
+    echo "|---|---|---|---|---|---|"
     construire_table_parties
     echo
     echo "## Métriques (§3 #201)"
@@ -988,6 +1029,11 @@ jouer_partie() {
 
   PARTIE_DIR_COURANTE="$partie_dir"
   mkdir -p "$partie_dir"
+  # Réinitialise les globales de détection de fin (#306) — jamais un résidu
+  # de la partie précédente reporté ici si celle-ci craque avant le premier
+  # tour joué (fixture, lancement).
+  FIN_COURANTE="non"
+  NOEUD_ATTEINT_COURANT="(aucun)"
 
   echo "=== partie $pnn (paire $paire) : copie fraîche de la save '$SAVE' ==="
   local save_dest="$partie_dir/save"
@@ -999,13 +1045,13 @@ jouer_partie() {
     raison="fixture"
     ecrire_craquement "$partie_dir" "00" "fixture" "$(cat "$partie_dir/fixture.log")"
     craquements+=("craquement-fixture-00.md")
-    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "$paire" "${craquements[@]}"
+    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "$paire" "(aucun)" "${craquements[@]}"
     return 0
   fi
 
   if [ "$DRYRUN" -eq 1 ]; then
     echo "=== partie $pnn : -DryRun — aucun agent lancé ==="
-    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "dry-run" $(( $(date +%s) - t0 )) "$paire"
+    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "dry-run" $(( $(date +%s) - t0 )) "$paire" "(aucun)"
     return 0
   fi
 
@@ -1034,7 +1080,7 @@ jouer_partie() {
     ecrire_craquement "$partie_dir" "00" "lancement" "$(tail -30 "$partie_dir/lancement.log")"
     craquements+=("craquement-lancement-00.md")
     fermer_et_verifier_agents "$partie_dir" "00" "$agent_mj" "$agent_joueur"
-    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "$paire" "${craquements[@]}"
+    ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "$raison" $(( $(date +%s) - t0 )) "$paire" "(aucun)" "${craquements[@]}"
     if [ "$ECHECS_LANCEMENT_CONSECUTIFS" -ge 2 ]; then
       arreter_toute_la_nuit 6 "lancement impossible (2 échecs de lancement consécutifs, partie $pnn)"
     fi
@@ -1068,8 +1114,8 @@ jouer_partie() {
       herdr agent prompt "$agent_joueur" "$go_texte_joueur" >/dev/null 2>&1
       attendre_fichier "$partie_dir/action-$nn.md" "$agent_mj" "$agent_joueur" "$agent_joueur" "joueur" "$nn" \
         "$modele_joueur" "$effort_joueur" "$go_texte_joueur"; r=$?
-      if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
-      if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
+      if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "arret-demande" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
+      if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "fin-a-atteinte" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
       if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
       if [ "$r" -eq 9 ]; then
         raison="craquement-processus-sorti"
@@ -1078,6 +1124,7 @@ jouer_partie() {
           "$agent_joueur" "$partie_dir/action-$nn.md" "$ID_SESSION_PROCESSUS" "$RELANCE_PROCESSUS_ENVOYEE" "$PANE_LOG_PROCESSUS" \
           "$pnn" "$(journal_ecran_role "$partie_dir" "joueur")")"
         craquements+=("craquement-processus-sorti-$nn.md")
+        detecter_fin_partie "$save_dest"
         break
       fi
       if [ "$r" -ne 0 ]; then
@@ -1086,6 +1133,7 @@ jouer_partie() {
           'agent : joueur (%s)\nfichier attendu : %s\nrelance envoyée : %s\n\n--- 30 dernières lignes de `herdr agent read %s` ---\n%s\n' \
           "$agent_joueur" "$partie_dir/action-$nn.md" "$RELANCE_ENVOYEE" "$agent_joueur" "$TRANSCRIPTION_TIMEOUT")"
         craquements+=("craquement-timeout-$nn.md")
+        detecter_fin_partie "$save_dest"
         break
       fi
       local action; action="$(cat "$partie_dir/action-$nn.md")"
@@ -1097,8 +1145,8 @@ jouer_partie() {
 
     attendre_fichier "$partie_dir/tour-$nn.md" "$agent_mj" "$agent_joueur" "$agent_mj" "mj" "$nn" \
       "$modele" "$effort_mj" "$go_texte_mj"; r=$?
-    if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
-    if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
+    if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "arret-demande" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
+    if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "fin-a-atteinte" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
     if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
     if [ "$r" -eq 9 ]; then
       raison="craquement-processus-sorti"
@@ -1107,6 +1155,7 @@ jouer_partie() {
         "$agent_mj" "$partie_dir/tour-$nn.md" "$ID_SESSION_PROCESSUS" "$RELANCE_PROCESSUS_ENVOYEE" "$PANE_LOG_PROCESSUS" \
         "$pnn" "$(journal_ecran_role "$partie_dir" "mj")")"
       craquements+=("craquement-processus-sorti-$nn.md")
+      detecter_fin_partie "$save_dest"
       break
     fi
     if [ "$r" -ne 0 ]; then
@@ -1115,6 +1164,7 @@ jouer_partie() {
         'agent : mj (%s)\nfichier attendu : %s\nrelance envoyée : %s\n\n--- 30 dernières lignes de `herdr agent read %s` ---\n%s\n' \
         "$agent_mj" "$partie_dir/tour-$nn.md" "$RELANCE_ENVOYEE" "$agent_mj" "$TRANSCRIPTION_TIMEOUT")"
       craquements+=("craquement-timeout-$nn.md")
+      detecter_fin_partie "$save_dest"
       break
     fi
 
@@ -1132,12 +1182,14 @@ jouer_partie() {
       raison="craquement-prose-polluee"
       ecrire_craquement "$partie_dir" "$nn" "prose-polluee" "$prose_msg"
       craquements+=("craquement-prose-polluee-$nn.md")
+      detecter_fin_partie "$save_dest"
       break
     fi
     if [ "$prose_rc" -ne 0 ]; then
       raison="craquement-prose-absente"
       ecrire_craquement "$partie_dir" "$nn" "prose-absente" "$prose_msg"
       craquements+=("craquement-prose-absente-$nn.md")
+      detecter_fin_partie "$save_dest"
       break
     fi
     echo "=== partie $pnn tour $nn — prose via $prose_msg $(date '+%H:%M:%S')"
@@ -1145,9 +1197,15 @@ jouer_partie() {
     tours_joues=$tour
     echo "=== partie $pnn tour $nn joué $(date '+%H:%M:%S')"
 
-    if [ -n "$(partie_module_termine "$save_dest")" ]; then
+    # Détection MÉCANIQUE de fin (#306) : mort du joueur OU nœud terminal de
+    # la partition (liens: [] + charniere_sortie, id != avant-propos) — voir
+    # detecter_fin_partie ci-dessus. NOEUD_ATTEINT_COURANT est relu même
+    # quand FIN_COURANTE reste "non" (mesure de progression, écrite dans
+    # resume-run.md à toute sortie, pas seulement fin atteinte).
+    detecter_fin_partie "$save_dest"
+    if [ "$FIN_COURANTE" = "mort" ] || [ "$FIN_COURANTE" = "fin_module" ]; then
       fin_atteinte="O"
-      raison="fin_module"
+      raison="$FIN_COURANTE"
       break
     fi
     tour=$((tour + 1))
@@ -1161,7 +1219,7 @@ jouer_partie() {
   fermer_et_verifier_agents "$partie_dir" "$pnn" "$agent_mj" "$agent_joueur"
 
   ecrire_resume_run "$partie_dir" "$pnn" "$modele" "$tours_joues" "$fin_atteinte" "$raison" \
-    $(( $(date +%s) - t0 )) "$paire" "${craquements[@]}"
+    $(( $(date +%s) - t0 )) "$paire" "$NOEUD_ATTEINT_COURANT" "${craquements[@]}"
 }
 
 # --- 6. Boucle des parties ----------------------------------------------------

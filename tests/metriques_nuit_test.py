@@ -62,17 +62,23 @@ def main() -> int:
         print("3) events.jsonl absent -> liste vide (pas d'exception)")
 
         # --- 4. calculer() sur une arborescence de run synthétique ----------
+        # #306 : partie-01 a atteint un nœud terminal (raison_arret:
+        # fin_module, noeud_final) ; partie-02 a épuisé -Tours sans fin,
+        # portant quand même noeud_atteint (mesure de progression).
         run_dir = tmp / "nuit-20260101"
-        for pnn, n_prose, fin, evs in (
-            ("01", 3, "O", [{"turn": 1, "type": "bouchage_enregistre"}]),
-            ("02", 5, "N", [{"turn": 1, "type": "attack", "error": "x"}]),
+        for pnn, n_prose, fin, raison, noeud_champ, noeud, evs in (
+            ("01", 3, "O", "fin_module", "noeud_final", "para-60",
+             [{"turn": 1, "type": "bouchage_enregistre"}]),
+            ("02", 5, "N", "tours_max", "noeud_atteint", "para-12",
+             [{"turn": 1, "type": "attack", "error": "x"}]),
         ):
             partie_dir = run_dir / f"partie-{pnn}"
             (partie_dir / "save" / "memory").mkdir(parents=True)
             for t in range(1, n_prose + 1):
                 (partie_dir / f"prose-{t:02d}.md").write_text("x", encoding="utf-8")
             (partie_dir / "resume-run.md").write_text(
-                f"tours_joues: {n_prose}\nfin_atteinte: {fin}\n", encoding="utf-8")
+                f"tours_joues: {n_prose}\nfin_atteinte: {fin}\n"
+                f"raison_arret: {raison}\n{noeud_champ}: {noeud}\n", encoding="utf-8")
             events_path = partie_dir / "save" / "memory" / "events.jsonl"
             events_path.write_text(
                 "\n".join(json.dumps(e) for e in evs) + "\n", encoding="utf-8")
@@ -80,15 +86,20 @@ def main() -> int:
         m = metriques_nuit.calculer(run_dir)
         assert m["parties_lancees"] == 2, m
         assert m["parties_finies"] == 1, m
+        assert m["parties_completes"] == 1, m
+        assert m["parties_mortes"] == 0, m
         assert m["tours_median"] == 4, m  # médiane de [3, 5]
         assert m["bouchages"] == 1, m
         assert m["refus_outil"] == 1, m
+        assert m["tours_par_noeud"] == {"para-60": 3, "para-12": 5}, m
         print("4) calculer() sur arborescence synthétique : "
               f"{m['parties_finies']}/{m['parties_lancees']} finies, "
+              f"{m['parties_completes']} complète(s) (#306), "
               f"médiane {m['tours_median']}")
 
         rendu = metriques_nuit.formater_markdown(m)
         assert "1 / 2" in rendu, rendu
+        assert "para-60" in rendu and "para-12" in rendu, rendu
         print("5) formater_markdown() : rendu Markdown cohérent avec calculer()")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

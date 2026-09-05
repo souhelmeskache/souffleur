@@ -196,6 +196,35 @@ def compter_processus_sortis_par_role(run_dir: Path) -> dict:
     return _compter_craquements_par_role(run_dir, "craquement-processus-sorti-*.md")
 
 
+def lire_noeud(partie_dir: Path) -> str | None:
+    """Relit le nœud atteint par cette partie (#306) — `noeud_final` si la
+    partie a fini le module (`fin_atteinte: O`), `noeud_atteint` sinon
+    (tours_max, craquement, FinA) : la mesure de PROGRESSION que
+    `nuit.sh::ecrire_resume_run` écrit à toute sortie de partie, pas
+    seulement fin atteinte. None si le champ est absent (run d'avant #306)
+    ou vaut `(aucun)` (aucune position lisible sur cette save)."""
+    r = lire_resume_run(partie_dir)
+    noeud = r.get("noeud_final") or r.get("noeud_atteint")
+    if not noeud or noeud == "(aucun)":
+        return None
+    return noeud
+
+
+def tours_par_noeud(parties_dirs: list[Path]) -> dict[str, float]:
+    """Tours joués MOYENS par nœud atteint (#306) — pour chaque nœud vu en
+    sortie d'au moins une partie (`lire_noeud`), la moyenne des tours joués
+    par les parties qui s'y sont arrêtées. La mesure de progression demandée
+    par #306 : combien de tours il faut, en moyenne, pour atteindre CE
+    nœud."""
+    par_noeud: dict[str, list[int]] = {}
+    for p in parties_dirs:
+        noeud = lire_noeud(p)
+        if noeud is None:
+            continue
+        par_noeud.setdefault(noeud, []).append(tours_sans_craquement(p))
+    return {n: round(statistics.mean(v), 1) for n, v in par_noeud.items()}
+
+
 def compter_paires(parties_dirs: list[Path]) -> int:
     """Nombre de paires Director/joueur distinctes ayant joué dans ce run
     (#282) — lu dans la ligne `paire: NN` de chaque `resume-run.md`. 1 par
@@ -212,6 +241,15 @@ def calculer(run_dir: Path) -> dict:
     tours_par_partie = [tours_sans_craquement(p) for p in parties_dirs]
     finies = sum(1 for p in parties_dirs
                  if lire_resume_run(p).get("fin_atteinte", "").upper().startswith("O"))
+    # Distinction #306 : « parties complètes » (nœud terminal de la
+    # partition, raison_arret: fin_module) vs « parties mortes » (proxy
+    # historique, raison_arret: mort) — deux sous-ensembles disjoints de
+    # `finies` ci-dessus, lus dans raison_arret (absent = run d'avant #306,
+    # compte pour ni l'un ni l'autre).
+    completes = sum(1 for p in parties_dirs
+                     if lire_resume_run(p).get("raison_arret", "") == "fin_module")
+    mortes = sum(1 for p in parties_dirs
+                 if lire_resume_run(p).get("raison_arret", "") == "mort")
 
     events_tous: list[dict] = []
     for p in parties_dirs:
@@ -223,6 +261,8 @@ def calculer(run_dir: Path) -> dict:
     return {
         "parties_lancees": len(parties_dirs),
         "parties_finies": finies,
+        "parties_completes": completes,
+        "parties_mortes": mortes,
         "paires": compter_paires(parties_dirs),
         "tours_median": statistics.median(tours_par_partie) if tours_par_partie else 0,
         "refus_outil": compter_refus_outil(events_tous),
@@ -233,13 +273,16 @@ def calculer(run_dir: Path) -> dict:
         "timeouts_mj": timeouts["mj"],
         "processus_sortis_joueur": processus_sortis["joueur"],
         "processus_sortis_mj": processus_sortis["mj"],
+        "tours_par_noeud": tours_par_noeud(parties_dirs),
     }
 
 
 def formater_markdown(m: dict) -> str:
     """Rend les métriques en lignes Markdown prêtes à coller dans `nuit.md`."""
-    return (
+    lignes = (
         f"- Parties finies / lancées : {m['parties_finies']} / {m['parties_lancees']}\n"
+        f"- Parties complètes (fin_module) / mortes (mort) : "
+        f"{m['parties_completes']} / {m['parties_mortes']} (#306)\n"
         f"- Paires simultanées : {m['paires']}\n"
         f"- Tours sans craquement par partie (médiane) : {m['tours_median']}\n"
         f"- Refus d'outil (`attack`/`roll_check`, events.jsonl) : {m['refus_outil']}\n"
@@ -250,7 +293,13 @@ def formater_markdown(m: dict) -> str:
         f"- Timeouts par rôle (#299) : joueur {m['timeouts_joueur']} / mj {m['timeouts_mj']}\n"
         f"- Processus sortis par rôle (#305) : joueur {m['processus_sortis_joueur']} / "
         f"mj {m['processus_sortis_mj']}\n"
+        "- Tours joués (moyenne) par nœud atteint (#306) : "
     )
+    if m["tours_par_noeud"]:
+        lignes += ", ".join(f"{n} {t}" for n, t in sorted(m["tours_par_noeud"].items())) + "\n"
+    else:
+        lignes += "(aucun)\n"
+    return lignes
 
 
 # --- rapport-nuit.md (#276) --------------------------------------------------
@@ -377,8 +426,11 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
     return {
         "module": lire_module_info(run_dir),
         "parties_finies": m["parties_finies"],
+        "parties_completes": m["parties_completes"],
+        "parties_mortes": m["parties_mortes"],
         "parties_lancees": m["parties_lancees"],
         "paires": m["paires"],
+        "tours_par_noeud": m["tours_par_noeud"],
         "duree_totale_s": duree_totale_s,
         "raison_arret": raison_arret,
         "tours_median": m["tours_median"],
@@ -407,6 +459,8 @@ def formater_rapport_markdown(r: dict) -> str:
         "",
         module_ligne,
         f"- Parties finies / lancées : {r['parties_finies']} / {r['parties_lancees']}",
+        f"- Parties complètes (fin_module) / mortes (mort) : "
+        f"{r['parties_completes']} / {r['parties_mortes']} (#306)",
         f"- Paires simultanées : {r['paires']}",
         f"- Durée totale : {r['duree_totale_s']}s",
         f"- Raison d'arrêt : {r['raison_arret']}",
@@ -430,6 +484,12 @@ def formater_rapport_markdown(r: dict) -> str:
                   f"mj {r['timeouts_mj']}")
     lignes.append(f"- Processus sortis par rôle (#305) : joueur {r['processus_sortis_joueur']} / "
                   f"mj {r['processus_sortis_mj']}")
+    lignes.append("- Tours joués (moyenne) par nœud atteint (#306) :")
+    if r["tours_par_noeud"]:
+        for noeud, t in sorted(r["tours_par_noeud"].items()):
+            lignes.append(f"  - {noeud} : {t}")
+    else:
+        lignes.append("  - (aucun)")
     lignes.append(f"- Limite de session touchée : {r['limite_session']}")
     lignes.append(f"- Budget consommé : durée {r['duree_totale_s']}s (jetons non mesurés)")
     lignes.append("- Pires craquements (jusqu'à 3, ordre : plus récent d'abord) :")
