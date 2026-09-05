@@ -124,6 +124,25 @@ def _require_store() -> MemoryStore:
     return _store
 
 
+def _turn_dir() -> Path:
+    """Résout le scratch `.turn/` du tour courant — Issue #287, UNIQUE point
+    de résolution pour tous les outils MCP qui lisent/écrivent `.turn/`
+    (`paquet_narrateur`, `assemble_context_to_file`, ...). Dérive de la save
+    CHARGÉE (`store.dir`), jamais de `ROOT` : `ROOT` se résout au dossier de
+    ce fichier, donc un seul dossier pour tout le worktree — deux Directors
+    concurrents (`nuit.sh -Paires > 1`) y partageaient le même
+    `paquet-narrateur.md`/`context.md` et pouvaient se lire l'un l'autre
+    (constat #282). Chaque partie a déjà sa propre save (copie fraîche sous
+    `partie-NN/save/`, `SAVES_DIR` override par paire) : dériver de
+    `store.dir` isole donc `.turn/` par partie sans aucun changement au
+    lanceur. Fallback sur `ROOT / ".turn"` si aucune save n'est chargée
+    (ex. `webui.py`/smoke test hors partie) — inchangé pour ce cas
+    historique, jamais concurrent."""
+    if _store is not None:
+        return _store.dir / ".turn"
+    return ROOT / ".turn"
+
+
 def _require_engine():
     if _engine is None:
         raise ValueError(
