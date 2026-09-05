@@ -239,7 +239,11 @@ AVERTISSEMENT informatif seulement, repris dans la sortie et dans
 `nuit.md` (classification déléguée à `verifier-agents-en-vol.sh` — direction
 Souhel du 05/09, #292 : les parties tournent désormais en parallèle des
 lanes, une lane vit dans son propre worktree et ne collisionne plus avec la
-nuit) ; aucune PR ouverte ; envoi à blanc des deux gabarits rendus vers un
+nuit) ; PR ouverte(s) sur le dépôt →
+même chose, AVERTISSEMENT informatif seulement (classification déléguée à
+`verifier-prs-ouvertes.sh` — les parties tournent en parallèle du circuit
+de code, une PR ouverte est l'état normal du dépôt, #297, seconde moitié
+de #292) ; envoi à blanc des deux gabarits rendus vers un
 agent inexistant — #263,
 `tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
 l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
