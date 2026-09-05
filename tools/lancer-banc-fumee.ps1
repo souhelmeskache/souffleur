@@ -56,6 +56,16 @@
     était. Vide par défaut : aucun `--env` posé, comportement historique
     inchangé (résolution SAVES_DIR normale de coderain/config.py).
 
+.PARAMETER AgentMj
+    Nom de l'agent MJ (défaut : "banc-mj"). Ajouté pour le banc de nuit en
+    parallèle (#282) : nuit.sh passe un nom suffixé par paire (ex.
+    "banc-mj-01") pour que N paires simultanées dans le même worktree
+    n'entrent jamais en collision de nom sur `agent start`.
+
+.PARAMETER AgentJoueur
+    Nom de l'agent joueur-banc (défaut : "banc-joueur"). Même usage
+    qu'-AgentMj (#282).
+
 .PARAMETER DryRun
     Affiche le montage complet (panes, gabarits remplis, chemin du journal)
     sans rien créer ni lancer.
@@ -99,6 +109,16 @@ param(
     # isolée (-SavesDirOverride) vivent sous le même dossier de partie.
     # Exclusif avec -Reprise (les deux pilotent $JournalDir autrement).
     [string]$JournalDirOverride = '',
+
+    # Noms d'agent (Issue #282, banc de nuit en PARALLÈLE) : défauts
+    # inchangés ("banc-mj"/"banc-joueur", comportement historique) — nuit.sh
+    # passe des noms suffixés par paire (ex. "banc-mj-01") pour que N paires
+    # simultanées dans le même worktree n'entrent jamais en collision de nom
+    # sur `agent start` (#271, déjà vécu en séquentiel — bataille de panes
+    # constatée le 02/09 en parallèle manuel). Rester sous 32 caractères
+    # (limite herdr, correctif scratchpad #196).
+    [string]$AgentMj = 'banc-mj',
+    [string]$AgentJoueur = 'banc-joueur',
 
     [switch]$DryRun
 )
@@ -321,8 +341,8 @@ if ($Reprise) {
 
 # Correctif scratchpad (issue #196) : 32 chars max pour un nom d'agent herdr —
 # le slug de save faisait déborder ("banc-mj-beyond-the-vale-of-madness" = 33+).
-$AgentMj = "banc-mj"
-$AgentJoueur = "banc-joueur"
+# $AgentMj/$AgentJoueur viennent des paramètres ci-dessus (#282) — défauts
+# "banc-mj"/"banc-joueur" inchangés quand ce script est appelé sans eux.
 
 # --- 2bis. Refus nommé si un agent du banc est déjà en vol (#271) ----------
 #
