@@ -198,4 +198,68 @@ assert "PREMIER_EXIT=0" in p.stdout, f"le premier (en fond) devait aller jusqu'a
 assert "VERROU_LIBERE" in p.stdout, "le verrou doit etre libere (trap EXIT) une fois le premier termine"
 print("5) deux 'veiller #999' a la suite -> un seul travail, le second sort avec le message, verrou libere ensuite")
 
+# ---- (a) le verrou pose en fond porte le PID du SOUS-SHELL, pas du parent --
+#
+# REVUE PR #327 (bloquant) : `veiller "$issue" &` (utilise par
+# veiller_relancer_manquantes) est un sous-shell -- `$$` y designe le PID du
+# shell PARENT (celui du dispatcher `circuit.sh veiller` sans argument, mort
+# des sa boucle finie), jamais celui du sous-shell qui execute reellement la
+# veille. `$BASHPID` est le bon identifiant. Verifie ici en isolant
+# `verrou_acquerir` du reste de `veiller` (le sujet est le choix de variable,
+# pas la boucle de phases).
+
+script_f = '''
+(verrou_acquerir "$ISSUE"; sleep 2) &
+child_pid=$!
+sleep 0.3
+recorded_pid=$(verrou_lire_champ "$ISSUE" pid)
+echo "PARENT_DOLLAR=$$"
+echo "CHILD_PID=$child_pid"
+echo "RECORDED_PID=$recorded_pid"
+wait "$child_pid"
+'''
+p, _ = run(script_f)
+lignes = dict(l.split("=", 1) for l in p.stdout.strip().splitlines() if "=" in l)
+assert lignes.get("RECORDED_PID") == lignes.get("CHILD_PID"), (
+    f"le verrou doit porter le PID reel du sous-shell (\\$!), pas celui du parent (\\$$) : {p.stdout!r}"
+)
+assert lignes.get("RECORDED_PID") != lignes.get("PARENT_DOLLAR"), (
+    f"le verrou d'une veille en fond ne doit jamais porter le PID du parent (mort des sa sortie) : {p.stdout!r}"
+)
+print("6) verrou_acquerir en sous-shell (&) : le verrou porte le PID du sous-shell, pas celui du parent")
+
+# ---- (c) chemin de bout en bout : la veille relancee en fond reste vivante
+# au sens du verrou apres que le relanceur (dispatcher) est reparti ---------
+#
+# Reprend le scenario 4 mais sans mocker `veiller` : la vraie fonction pose
+# son propre verrou via `verrou_acquerir`, comme en production. Le
+# dispatcher (`veiller_relancer_manquantes`) rend la main sans attendre le
+# `sleep` de la veille -- exactement le chemin ou le bogue du PID se serait
+# manifeste (verrou marque orphelin alors que la veille tourne encore).
+
+script_g = '''
+herdr() {
+  case "$*" in
+    *"agent list"*) echo '{"result":{"agents":[{"name":"lane-500"}]}}' ;;
+    *) : ;;
+  esac
+  return 0
+}
+veiller() { verrou_acquerir "$1" || return 0; sleep 2; }
+veiller_relancer_manquantes
+sleep 0.5
+recorded_pid=$(verrou_lire_champ "500" pid)
+echo "DISPATCHER_DOLLAR=$$"
+echo "RECORDED_PID=$recorded_pid"
+pid_vivant "$recorded_pid" && echo "VIVANT" || echo "MORT"
+'''
+p, _ = run(script_g, timeout=30)
+lignes = dict(l.split("=", 1) for l in p.stdout.strip().splitlines() if "=" in l and "VIVANT" not in l and "MORT" not in l)
+assert "VIVANT" in p.stdout, f"la veille relancee en fond doit rester vivante au sens du verrou : {p.stdout!r}"
+assert "MORT" not in p.stdout, p.stdout
+assert lignes.get("RECORDED_PID") != lignes.get("DISPATCHER_DOLLAR"), (
+    f"le verrou de la veille relancee ne doit pas porter le PID du dispatcher : {p.stdout!r}"
+)
+print("7) veiller (sans argument) : la veille relancee en fond garde un verrou vivant apres le retour du dispatcher")
+
 print("\nALL CIRCUIT_VEILLER_VERROU TESTS PASSED")

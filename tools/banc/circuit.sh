@@ -287,7 +287,13 @@ verrou_acquerir() {
     echo "verrou orphelin sur #$issue (pid $pid mort) -- repris."
   fi
   depuis=$(date '+%H:%M')
-  printf 'pid=%s\ndepuis=%s\nphase=%s\n' "$$" "$depuis" "demarrage" > "$fichier"
+  # $BASHPID, jamais $$ : sur un `veiller "$issue" &` lancé en fond depuis
+  # veiller_relancer_manquantes, $$ reste le PID du shell PARENT (le
+  # dispatcher `circuit.sh veiller` sans argument, qui sort dès sa boucle
+  # finie) -- le verrou pointerait alors sur un PID mort tout de suite,
+  # défaisant l'idempotence même sur ce chemin (REVUE PR #327). $BASHPID est
+  # celui du sous-shell qui exécute réellement la veille.
+  printf 'pid=%s\ndepuis=%s\nphase=%s\n' "$BASHPID" "$depuis" "demarrage" > "$fichier"
   # Double quotes ici (pas des simples) : $fichier est local à cette
   # fonction et sort de portée dès son return -- le trap doit porter la
   # VALEUR résolue maintenant, jamais une référence à une variable qui
