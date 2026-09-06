@@ -6,6 +6,13 @@ rem (.\tools\banc\nuit.cmd), SANS ouvrir Claude Code. Enchaine, dans une
 rem fenetre qui reste ouverte :
 rem   git pull --ff-only
 rem   -> garde (herdr/claude/gh presents, save presente, rien en vol)
+rem   -> run de fumee (#313, decision Souhel 06/09, I-468 point 3) : une
+rem      paire, 3 tours, Director sonnet, dans un -RunDir dedie (jamais
+rem      bench/nuit-<date>/, cf. #309) -- le banc se prouve sur lui-meme
+rem      avant de mesurer le jeu. Si ce run ne produit pas 3 tour-NN.md
+rem      avec prose non vide, ou craque (timeout, sortie de processus,
+rem      prose absente), la nuit NE SE LANCE PAS et le motif s'ecrit dans
+rem      bench/nuit-<date>/.arret-nuit/raison.
 rem   -> tools/banc/nuit.sh -Director sonnet -FinA 06:00 (surchargeable par
 rem      les arguments passes a ce .cmd) -- sans -Parties, boucle jusqu'a
 rem      l'heure -FinA (decision Souhel #279 : Director sonnet seul, mesure
@@ -56,6 +63,24 @@ rem Git Bash enfant) pour etre repris dans nuit.md.
 set "AVERTISSEMENT_PRE_NUIT="
 for /f "delims=" %%L in ('findstr /B "AVERTISSEMENT" "%GARDE_LOG%" 2^>nul') do set "AVERTISSEMENT_PRE_NUIT=%%L"
 del "%GARDE_LOG%" >nul 2>&1
+
+for /f "delims=" %%D in ('"%GITBASH%" -c "date +%%Y%%m%%d"') do set "DATEJOUR=%%D"
+set "NUIT_DIR=%REPO_ROOT%\bench\nuit-%DATEJOUR%"
+
+echo.
+echo === run de fumee (une paire, 3 tours, Director sonnet, #313) ===
+set "FUMEE_DIR=%TEMP%\fumee-avant-nuit-%DATEJOUR%-%RANDOM%"
+"%GITBASH%" tools/banc/nuit.sh -Parties 1 -Paires 1 -Director sonnet -Tours 3 -RunDir "%FUMEE_DIR%"
+"%GITBASH%" tools/banc/verifier-fumee-avant-nuit.sh "%FUMEE_DIR%" 3
+set "FUMEE_RC=%ERRORLEVEL%"
+if !FUMEE_RC! neq 0 (
+  if not exist "%NUIT_DIR%\.arret-nuit" mkdir "%NUIT_DIR%\.arret-nuit"
+  echo run de fumee non concluant avant la nuit ^(#313^, voir %FUMEE_DIR%^) > "%NUIT_DIR%\.arret-nuit\raison"
+  echo REFUS : le run de fumee a craque -- la nuit ne se lance pas ^(motif ecrit dans %NUIT_DIR%\.arret-nuit\raison^).
+  goto fin_erreur
+)
+echo OK : run de fumee concluant, la nuit peut se lancer.
+rmdir /s /q "%FUMEE_DIR%" >nul 2>&1
 
 set "NUIT_ARGS=%*"
 if "%NUIT_ARGS%"=="" set "NUIT_ARGS=-Director sonnet -FinA 06:00"
