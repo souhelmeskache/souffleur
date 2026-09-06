@@ -722,6 +722,9 @@ test dédié), logique interne `_`-préfixée comprise.
 | `tools/banc/metriques_nuit.py` | `lire_director_modele`/`stats_ab_director` | A/B Director (haiku ⊥ sonnet) | `rapport_nuit_test.py` | couvert |
 | `tools/banc/metriques_nuit.py` | `pires_craquements`/`lire_module_info` | pointeurs craquements récents / ligne Module (#281) | `rapport_nuit_test.py` | couvert |
 | `tools/banc/metriques_nuit.py` | `calculer_rapport`/`formater_rapport_markdown`/`main` | `rapport-nuit.md` complet (#276), CLI deux modes | `metriques_nuit_test.py`, `rapport_nuit_test.py` | couvert |
+| `tools/banc/metriques_nuit.py` | `lire_paquets_tokens`/`fenetre_mj_tour1_dernier`/`mesures_partie`/`paquet_fenetre_par_partie` | colonnes paquet médian/max + fenêtre MJ tour 1/dernier tour, par partie (I-469 §F0.4, #332) | `metriques_nuit_paquet_fenetre_i469_test.py` | couvert |
+| `mcp_server.py` | `_log_paquet` | journalise `{type: paquet, turn, chars, tokens_est, sections}` dans `events.jsonl` (I-469 §F0.4, #332) | `test-mesure-paquet-i469.py` | couvert |
+| `tools/banc/nuit.sh` | `lire_pct_fenetre`/`journaliser_fenetre` | lecture du % de fenêtre affiché par Claude Code + journalisation `{type: fenetre, ...}` (I-469 §F0.4, #332) | `nuit_fenetre_contexte_i469_test.py` | couvert (motif non confirmé contre un écran réel, voir README) |
 | `tools/banc/save-depart.py` | `_scenario_slug_depuis`/`_partition_dir_depuis` (privés) | résolution scénario/partition depuis une save jouée existante | `save_depart_test.py` | couvert |
 | `tools/banc/save-depart.py` | `fabriquer` | fabrique la save de DÉPART (tour 0, module installé, fixture personnage) | `save_depart_test.py`, `nuit_garde_save_depart_test.py` | couvert |
 | `tools/banc/save-depart.py` | `verifier` | vérifie sur disque le contrat (tour 0, personnage, module installé) | `save_depart_test.py` | couvert |
