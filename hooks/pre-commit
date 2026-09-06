@@ -1,16 +1,95 @@
 #!/bin/sh
-# Pre-commit guard (poste TECHNIQUE, 2026-08-22): never commit a red state.
-# Runs every suite EXCEPT the known pre-existing failure (trinity_test:
-# missing connection profile, documented). A red suite blocks the commit.
+# Pre-commit guard (poste TECHNIQUE, 2026-08-22 ; ciblage I-318, 06/09) :
+# jamais d'etat rouge dans l'historique -- mais rejoue seulement les suites
+# concernees par le diff INDEXE, pas la suite entiere a chaque commit (#318 :
+# ~26 min par commit, CI la rejoue de toute facon sur chaque PR).
+#
+# Regle de mapping fichier indexe -> suite(s) a rejouer :
+#   - tests/<x>_test.py modifie   -> ce test-la.
+#   - hooks/pre-push modifie      -> tests/garde_prepush_test.py.
+#   - tools/banc/<script>.<ext>   -> tests/<script normalise>_test.py
+#                                    ET/OU tests/<script normalise>_*_test.py
+#                                    (ex. nuit.sh -> tous les nuit_*_test.py).
+#   - docs/*, *.md, README*       -> aucune suite (documentation seule).
+#   - tout le reste (moteur coderain/, tests/fixtures/, hooks/pre-commit
+#     lui-meme, fichier de script du banc sans suite nommee correspondante,
+#     etc.) -> repli prudent sur la suite COMPLETE, comme avant #318 : on ne
+#     sait pas mapper -> on ne prend pas le risque de sous-tester.
 cd "$(git rev-parse --show-toplevel)" || exit 1
 PY=.venv/Scripts/python.exe
 [ -f "$PY" ] || PY=python
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+if [ -z "$staged" ]; then
+    echo "aucun fichier indexe -> rien a tester"
+    exit 0
+fi
+
+full_suite=0
+to_run=""
+
+add_test() {
+    case " $to_run " in
+        *" $1 "*) ;;
+        *) to_run="$to_run $1" ;;
+    esac
+}
+
+for f in $staged; do
+    case "$f" in
+        *.md|docs/*|README*|LICENSE*)
+            ;;
+        tests/fixtures/*)
+            full_suite=1
+            ;;
+        tests/*_test.py)
+            [ -f "$f" ] && add_test "$f"
+            ;;
+        hooks/pre-push)
+            add_test "tests/garde_prepush_test.py"
+            ;;
+        hooks/*)
+            # hooks/pre-commit lui-meme (ou un hook nouveau) -- prudence.
+            full_suite=1
+            ;;
+        tools/banc/*)
+            base=$(basename "$f")
+            stem="${base%.*}"
+            pfx=$(echo "$stem" | tr '-' '_')
+            found=0
+            for t in "tests/${pfx}_test.py" tests/${pfx}_*_test.py; do
+                [ -f "$t" ] || continue
+                add_test "$t"
+                found=1
+            done
+            [ "$found" -eq 1 ] || full_suite=1
+            ;;
+        *)
+            full_suite=1
+            ;;
+    esac
+done
+
+if [ "$full_suite" -eq 1 ]; then
+    to_run=""
+    for t in tests/*_test.py; do
+        [ -f "$t" ] || continue
+        to_run="$to_run $t"
+    done
+    portee="suite complete (repli prudent, fichier indexe non mappe)"
+else
+    if [ -z "$to_run" ]; then
+        echo "aucune suite concernee par ce commit (docs/ seul) -> commit autorise"
+        exit 0
+    fi
+    portee="suite(s) ciblee(s) par le diff indexe"
+fi
+
 failed=""
-for t in tests/*_test.py; do
-    [ -f "$t" ] || continue
+for t in $to_run; do
     case "$t" in *trinity*) continue ;; esac
     if ! "$PY" "$t" >/dev/null 2>&1; then
         failed="$failed $t"
@@ -18,8 +97,8 @@ for t in tests/*_test.py; do
 done
 
 if [ -n "$failed" ]; then
-    echo "COMMIT REFUSE — suites en echec:$failed" >&2
+    echo "COMMIT REFUSE — ($portee) suites en echec:$failed" >&2
     echo "Regle: jamais d'etat rouge dans l'historique." >&2
     exit 1
 fi
-echo "suites vertes -> commit autorise"
+echo "suites vertes ($portee) -> commit autorise"

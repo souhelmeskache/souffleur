@@ -97,6 +97,15 @@ def main() -> int:
 
         run_dir = tmp / "run"
 
+        fake_bin = tmp / "fake-bin"
+        fake_bin.mkdir()
+        # I-318 : faux `gh` sur PATH -- deposer_rapport_201 (tools/banc/nuit.sh)
+        # appelle le vrai `gh` des que -DryRun est absent ; ce test exerce un
+        # run REEL et ne doit JAMAIS atteindre le vrai gh/#201 (etancheite).
+        fake_gh = fake_bin / "gh"
+        fake_gh.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8", newline="\n")
+        fake_gh.chmod(0o755)
+
         write_context_py = tmp / "_write_context.py"
         write_context_py.write_text(WRITE_CONTEXT_PY, encoding="utf-8")
 
@@ -113,6 +122,7 @@ def main() -> int:
             "NUIT_CONSERVER_SAVES_DIR": "1",
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
         }
         env = {k: v for k, v in env.items() if not k.startswith("GIT_")}
 
