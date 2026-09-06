@@ -325,11 +325,18 @@ verrou_acquerir() {
 # `_veiller_interne` -- jamais `veiller` directement -- pour repasser par le
 # dispatch complet (garde `BASH_SOURCE == $0`) sans revenir par ce
 # détachement (qui boucleraient sinon indéfiniment l'un sur l'autre).
+#
+# Redirection en AJOUT (`>>`), jamais en troncature (`>`) : un `veiller
+# <ISSUE>` rejoué pendant qu'une veille est déjà vivante sur cette issue
+# (verrou #323) ne doit pas tronquer le fichier sous le descripteur ouvert
+# du process en cours -- verrou_acquerir refusera de toute façon le second
+# travail (message + sortie 0), mais le journal du premier ne doit pas en
+# pâtir (REVUE PR #329).
 veiller_detachee() {
   local issue="$1" log
   mkdir -p "$VEILLES_DIR"
   log="$VEILLES_DIR/$issue.log"
-  nohup bash "$CIRCUIT_SCRIPT" _veiller_interne "$issue" </dev/null >"$log" 2>&1 &
+  nohup bash "$CIRCUIT_SCRIPT" _veiller_interne "$issue" </dev/null >>"$log" 2>&1 &
   disown
   echo "veille #$issue : lancée en tâche détachée (pid $!, journal $log)"
 }
