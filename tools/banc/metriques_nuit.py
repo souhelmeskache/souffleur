@@ -58,6 +58,36 @@ ligne « Module : <titre>, <n> lieux, <n> PNJ » en tête de `rapport-nuit.md`
 rend visible, dans le rapport lui-même, qu'une nuit a bien joué un module et
 pas un monde vide (#281, constat N1 du 05/09).
 
+Étendu pour #340 (découpe (d) de #316 — « la métrique voit tous les
+combats ») : `combats_vus` compte, sur `rapport-nuit.md`, TOUS les combats
+joués, UN PAR PARTIE — pas seulement ceux qui passent par le sous-système
+dnd5e-engine (`start_combat`, déjà compté à part par `compter_combats`
+ci-dessus, mais jamais journalisé aujourd'hui, cf. sa réserve). Un combat
+= une créature en scène (`creatures_par_noeud`/`creatures_module`, priorité
+à la déclaration `combats` de `mapping-regles.json` si présente — #316 (b),
+pas encore écrite — sinon repli sur les records classe `creature` du
+module) croisée avec le MEILLEUR chemin employé n'importe quand dans la
+partie (`chemin_combat_tour`, priorité décroissante) : `start_combat` /
+`attack seul` (`env.deltas.enemies`) / `jets seuls` (`env.check` appliqué
+sans attaque, OU un bouchage D-275 dont `trou.fiche` cite une créature —
+`attaque_bonus`/`degats`/`ca` manquant en pleine résolution) / `prose
+seule` (aucun appel au moteur — le pire cas, jamais deviné : compté ET
+nommé partie+tour dans le rapport). Mesuré sur banc réel (#340) : la
+numérotation `turn` interne d'`events.jsonl` ne coïncide PAS avec celle de
+`prose-NN.md`/`tour-NN.md` (une seule rencontre avance ce compteur de
+plusieurs crans, `engine.py:791-822`) — compter par tour interne aurait
+fragmenté une rencontre en plusieurs « combats » selon le chemin de chaque
+round ; le combat se classe donc UNE fois par partie, au chemin le plus
+abouti qu'elle ait jamais atteint. `combat_partie::tour` (repli prose
+seule) reste dans cette même numérotation `turn` interne — jamais un NN de
+`prose-NN.md`, faute de correspondance disponible aujourd'hui. Une
+partition qui ne pose jamais ses créatures sur un nœud (`pose_sur_nodes`
+absent partout, mesuré sur banc réel) rend `creatures_par_noeud` muette : un
+combat qui n'a jamais touché le moteur ET n'a jamais posé ses créatures sur
+un nœud reste alors invisible à (d) — limite assumée, que #316 (b) doit
+combler. Aucune modification du moteur ni du gabarit : on compte, on ne
+règle pas (#340).
+
 Étendu pour #276 (« lis la nuit » sans agent) : `calculer_rapport` /
 `formater_rapport_markdown` produisent `rapport-nuit.md`, écrit par
 `tools/banc/nuit.sh` à la fin de la nuit quelle que soit la raison d'arrêt
@@ -531,6 +561,245 @@ def lire_module_info(run_dir: Path) -> dict | None:
     return None
 
 
+# --- combats vus (#340, découpe (d) de #316) --------------------------------
+
+def lire_partition_dir(save_dir: Path) -> Path | None:
+    """Résout le pointeur save -> partition, même lecture que
+    `mcp_server._partition_dir` (dupliquée ici : ce script tourne hors
+    processus MCP, sans accès à `mcp_server.py`). None si `module.json` est
+    absent/illisible ou ne porte pas de `partition` — une save non
+    module-backed n'a simplement aucune créature à croiser (#340)."""
+    p = save_dir / "module.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    partition = data.get("partition")
+    return Path(partition) if partition else None
+
+
+def lire_combats_declares(partition_dir: Path) -> dict[str, list[str]] | None:
+    """Lit la déclaration `combats` de `mapping-regles.json` — {node_id:
+    [creature_id, ...]}, même forme que sa clé `checks` voisine
+    (`converter/aval.py::write_checks`). None si le fichier est
+    absent/illisible ou ne porte pas cette clé : #316 (b) n'existe pas
+    encore, (d) est indépendante et retombe alors sur
+    `creatures_par_noeud`/index.json ci-dessous."""
+    chemin = partition_dir / "mapping-regles.json"
+    if not chemin.exists():
+        return None
+    try:
+        payload = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    combats = payload.get("combats")
+    if not isinstance(combats, dict):
+        return None
+    out: dict[str, list[str]] = {}
+    for node_id, creatures in combats.items():
+        if not isinstance(creatures, list):
+            continue
+        out[node_id] = [c["id"] if isinstance(c, dict) else str(c) for c in creatures]
+    return out
+
+
+def creatures_par_noeud(partition_dir: Path | None) -> dict[str, list[str]]:
+    """{node_id: [creature_id, ...]} — créatures « en scène » à chaque
+    nœud de la partition (#340/(d)). Priorité à la déclaration `combats` de
+    `mapping-regles.json` si présente ; sinon repli sur `index.json` : tout
+    record classe `creature` cité au nœud via sa pose initiale
+    (`pose_sur_nodes`, écrit par `converter/emit.py::write_partition`)
+    compte comme créature en scène à ce nœud — lisible dès aujourd'hui,
+    sans attendre #316 (b)."""
+    if partition_dir is None or not partition_dir.is_dir():
+        return {}
+    declares = lire_combats_declares(partition_dir)
+    if declares is not None:
+        return declares
+    index_path = partition_dir / "index.json"
+    if not index_path.exists():
+        return {}
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict[str, list[str]] = {}
+    for r in index.get("records", []) or []:
+        if r.get("classe") != "creature":
+            continue
+        for node_id in r.get("pose_sur_nodes", []) or []:
+            out.setdefault(node_id, []).append(r["id"])
+    return out
+
+
+def lieu_par_tour(events: list[dict], n_tours: int) -> dict[int, str | None]:
+    """Nœud courant à chaque tour 1..n_tours, reconstitué par lecture
+    cumulative des deltas `location` déjà validés/journalisés d'
+    `events.jsonl` (`env.deltas.location`, dans l'ordre des tours). None
+    tant qu'aucun `location` n'a encore été appliqué (limite assumée : la
+    position DE DÉPART, avant tout premier delta, n'est pas journalisée —
+    #340)."""
+    par_tour_brut: dict[int, str] = {}
+    for rec in events:
+        turn = rec.get("turn")
+        env = rec.get("env")
+        if not isinstance(turn, int) or isinstance(turn, bool) or not isinstance(env, dict):
+            continue
+        loc = (env.get("deltas") or {}).get("location")
+        if isinstance(loc, str) and loc:
+            par_tour_brut[turn] = loc
+    out: dict[int, str | None] = {}
+    courant: str | None = None
+    for t in range(1, n_tours + 1):
+        if t in par_tour_brut:
+            courant = par_tour_brut[t]
+        out[t] = courant
+    return out
+
+
+def creatures_module(partition_dir: Path | None) -> set[str]:
+    """Tous les ids de records classe `creature` de la partition, SANS
+    distinction de nœud — le vocabulaire que `bouchage` peut citer
+    (`trou.fiche`) quand une fiche de créature manque un chiffre en pleine
+    scène de combat (D-275, `coderain/mcp/bouchage.py`). Mesuré sur banc réel
+    (#340) : une partition peut ne JAMAIS poser ses créatures sur un nœud
+    (`pose_sur_nodes` absent partout, conversion P4 qui n'a pas assigné de
+    token) — `creatures_par_noeud` y est alors muette, et cette citation-ci,
+    hors nœud, reste le seul repli mécanique disponible aujourd'hui."""
+    if partition_dir is None or not partition_dir.is_dir():
+        return set()
+    index_path = partition_dir / "index.json"
+    if not index_path.exists():
+        return set()
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return {r["id"] for r in index.get("records", []) or []
+            if r.get("classe") == "creature"}
+
+
+def _envelope_cite_ennemi(events_du_tour: list[dict]) -> bool:
+    """Même signal que `compter_combats` (hors sous-système) : un
+    `env.deltas.enemies` non vide, journalisé par `apply_envelope` sur un
+    `attack` résolu."""
+    return any(isinstance(rec.get("env"), dict)
+               and isinstance(rec["env"].get("deltas"), dict)
+               and rec["env"]["deltas"].get("enemies")
+               for rec in events_du_tour)
+
+
+def _bouchage_cite_creature(events_du_tour: list[dict], creatures: set[str]) -> bool:
+    """Un `bouchage_demande`/`bouchage_enregistre` (D-275) dont `trou.fiche`
+    nomme un record classe `creature` de la partition — la fiche manquait un
+    chiffre (`attaque_bonus`/`degats`/`ca`...) en pleine résolution d'un
+    jet contre cette créature. Citation directe et déterministe (le champ
+    `fiche` est écrit verbatim par `demander_bouchage`), jamais devinée."""
+    for rec in events_du_tour:
+        if not str(rec.get("type", "")).startswith("bouchage"):
+            continue
+        fiche = (rec.get("trou") or {}).get("fiche")
+        if fiche in creatures:
+            return True
+    return False
+
+
+def chemin_combat_tour(events_du_tour: list[dict],
+                       creatures: set[str] | None = None) -> str | None:
+    """Le chemin emprunté par ce paquet d'événements parmi les quatre de
+    #340(d), par ordre de priorité : le sous-système déclaré
+    (`start_combat`) ; l'attaque résolue (`attack`/`apply_envelope`,
+    `env.deltas.enemies`) ; le jet seul — un `env.check` appliqué sans
+    attaque (proposition de jet dans l'enveloppe, `coderain/validator.py`),
+    ou un bouchage citant une créature (D-275, `_bouchage_cite_creature`
+    ci-dessus) sans attaque appliquée non plus. None si aucun des trois ne
+    s'est produit (l'appelant décide alors prose seule, ou aucun combat, en
+    fonction de si une créature était en scène par ailleurs).
+
+    Limite assumée (#340) : un `env.check` seul ne redit pas CONTRE QUI il
+    se jette (l'enveloppe ne porte ni acteur ni cible, `validator.py:165-
+    187`) — cette fonction ne revérifie donc pas la créature pour `attack`/
+    `jets`/`start_combat` : le signal moteur EST la citation. Seule la
+    prose seule (repli nœud, ci-dessous) revérifie explicitement une
+    créature, faute d'aucun autre signal à lire."""
+    if any(rec.get("type") == "start_combat" for rec in events_du_tour):
+        return "start_combat"
+    if _envelope_cite_ennemi(events_du_tour):
+        return "attack"
+    if any(isinstance(rec.get("env"), dict) and rec["env"].get("check")
+           for rec in events_du_tour):
+        return "jets"
+    if creatures and _bouchage_cite_creature(events_du_tour, creatures):
+        return "jets"
+    return None
+
+
+def combat_partie(partie_dir: Path) -> dict | None:
+    """Le combat vu dans CETTE partie (#340/(d), un par partie — mesuré sur
+    banc réel : une même rencontre s'étale sur plusieurs `turn` internes
+    d'`events.jsonl`, dont la numérotation ne coïncide PAS avec celle de
+    `prose-NN.md`/`tour-NN.md` [convention `log_turn`, `engine.py:791-822`] ;
+    compter par tour interne aurait fragmenté UNE rencontre en plusieurs
+    « combats » selon le chemin de chaque round, ce que #340 ne demande pas).
+    None si aucune créature n'a jamais été en scène dans cette partie.
+
+    Classé par le chemin le PLUS ABOUTI employé n'importe quand dans la
+    partie (priorité `chemin_combat_tour` : start_combat > attack > jets) —
+    un combat qui a fini par toucher le moteur une fois compte pour ce
+    chemin, jamais pour le pire round qu'il a aussi traversé. La case prose
+    seule est réservée aux combats qui n'ont JAMAIS touché le moteur ;
+    elle exige alors `creatures_par_noeud` (citation par nœud — #340 se lit
+    aujourd'hui sur les records, #316 (b) complètera plus tard), la seule
+    façon de voir un combat qui ne laisse AUCUNE trace mécanique. Rend
+    {"chemin": ..., "tour": N|None} — `tour` ne nomme que le cas prose
+    seule (le premier tour interne où le nœud courant porte une créature),
+    pour la ligne « nommés » du rapport."""
+    events = lire_events(partie_dir / "save" / "memory" / "events.jsonl")
+    partition_dir = lire_partition_dir(partie_dir / "save")
+    creatures_noeud = creatures_par_noeud(partition_dir)
+    creatures_ids = creatures_module(partition_dir)
+
+    chemin = chemin_combat_tour(events, creatures_ids)
+    if chemin is not None:
+        return {"chemin": chemin, "tour": None}
+    if not creatures_noeud:
+        return None
+    turn_max = max((rec["turn"] for rec in events
+                    if isinstance(rec.get("turn"), int)
+                    and not isinstance(rec.get("turn"), bool)), default=0)
+    lieux = lieu_par_tour(events, turn_max)
+    premier = next((t for t in range(1, turn_max + 1)
+                    if lieux.get(t) in creatures_noeud), None)
+    if premier is None:
+        return None
+    return {"chemin": "prose", "tour": premier}
+
+
+def combats_vus(run_dir: Path) -> dict:
+    """Combats vus sur TOUTE la nuit (#340/(d)) — un combat par partie où
+    une créature était en scène, ventilé par chemin emprunté :
+    `start_combat` / `attack` / `jets` / `prose`. `prose_seule_nommes`
+    liste nommément (partie, tour) le pire cas — un combat joué sans aucun
+    appel au moteur — jamais un total anonyme."""
+    par_chemin = {"start_combat": 0, "attack": 0, "jets": 0, "prose": 0}
+    par_partie: dict[str, str] = {}
+    prose_seule_nommes: list[str] = []
+    for p in sorted(run_dir.glob("partie-*")):
+        if not p.is_dir():
+            continue
+        c = combat_partie(p)
+        if c is None:
+            continue
+        par_chemin[c["chemin"]] += 1
+        par_partie[p.name] = c["chemin"]
+        if c["chemin"] == "prose":
+            prose_seule_nommes.append(f"{p.name}, tour {c['tour']}")
+    return {"total": sum(par_chemin.values()), "par_chemin": par_chemin,
+            "par_partie": par_partie, "prose_seule_nommes": prose_seule_nommes}
+
+
 def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
                       limite_session: str) -> dict:
     """Calcule `rapport-nuit.md` (§ « Livrer » 2 de #276) — étend `calculer`
@@ -563,6 +832,7 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "processus_sortis_joueur": m["processus_sortis_joueur"],
         "processus_sortis_mj": m["processus_sortis_mj"],
         "resets": compter_resets(run_dir),
+        "combats_vus": combats_vus(run_dir),
     }
 
 
@@ -614,6 +884,21 @@ def formater_rapport_markdown(r: dict) -> str:
                   f"mj {r['processus_sortis_mj']}")
     lignes.append(f"- Resets (#330, D-264) : {r['resets']['joues']} joués, "
                   f"{r['resets']['verts']} verts (4/4)")
+    cv = r["combats_vus"]
+    pc = cv["par_chemin"]
+    lignes.append(
+        f"- Combats vus (#340) : {cv['total']} (start_combat {pc['start_combat']} "
+        f"· attack seul {pc['attack']} · jets seuls {pc['jets']} · "
+        f"prose seule {pc['prose']})")
+    _LIBELLE_CHEMIN = {"start_combat": "start_combat", "attack": "attack seul",
+                       "jets": "jets seuls", "prose": "prose seule"}
+    if cv["par_partie"]:
+        for nom, chemin in sorted(cv["par_partie"].items()):
+            lignes.append(f"  - {nom} : {_LIBELLE_CHEMIN[chemin]}")
+    if cv["prose_seule_nommes"]:
+        lignes.append("  - prose seule (pire cas, nommés) :")
+        for nom in cv["prose_seule_nommes"]:
+            lignes.append(f"    - {nom}")
     lignes.append("- Tours joués (moyenne) par nœud atteint (#306) :")
     if r["tours_par_noeud"]:
         for noeud, t in sorted(r["tours_par_noeud"].items()):
