@@ -17,7 +17,12 @@
       "Bash(git commit -n*)",
       "Bash(git push --no-verify*)",
       "Bash(git push --force*)",
-      "Bash(git push -f*)"
+      "Bash(git push -f*)",
+      "Bash(git config * core.hooksPath*)",
+      "Bash(git -c core.hooksPath*)",
+      "Bash(git -c *hooksPath*)",
+      "Bash(export GIT_CONFIG_*)",
+      "Bash(GIT_CONFIG_*=*)"
     ]
   }
 }
