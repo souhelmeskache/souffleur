@@ -49,6 +49,7 @@ METRIQUES_PY="$REPO_ROOT/tools/banc/metriques_nuit.py"
 EXTRAIRE_PROSE_PY="$REPO_ROOT/tools/banc/extraire_prose.py"
 ARBITRER_PROSE_PY="$REPO_ROOT/tools/banc/arbitrer_prose.py"
 DETECTER_FIN_PY="$REPO_ROOT/tools/banc/detecter_fin.py"
+CLOTURER_SEANCE_PY="$REPO_ROOT/tools/banc/cloturer_seance.py"
 VERIFIER_RESET_PY="$REPO_ROOT/tools/banc/verifier_reset.py"
 
 # Frontière bash ⊥ Windows (#270) : source la conversion partagée avec
@@ -956,6 +957,13 @@ detecter_fin_partie() {
   sortie="$(python "$DETECTER_FIN_PY" "$save_dir_win" 2>/dev/null)"
   FIN_COURANTE="$(printf '%s\n' "$sortie" | grep '^fin:' | sed 's/^fin: *//')"
   NOEUD_ATTEINT_COURANT="$(printf '%s\n' "$sortie" | grep '^noeud:' | sed 's/^noeud: *//')"
+  # F0.3 (Issue #331) : sur fin_module/frontiere, écrit le record `seance`
+  # de clôture via l'API de production (jamais un écrit direct de fichier —
+  # voir tools/banc/cloturer_seance.py). Idempotent, donc appelé à chaque
+  # relecture sans coût de duplication ; muet (>/dev/null) — la mesure de
+  # progression du banc reste FIN_COURANTE/NOEUD_ATTEINT_COURANT ci-dessus,
+  # jamais bloquée par ce geste annexe.
+  python "$CLOTURER_SEANCE_PY" "$save_dir_win" >/dev/null 2>&1 || true
   [ -n "$FIN_COURANTE" ] || FIN_COURANTE="non"
   [ -n "$NOEUD_ATTEINT_COURANT" ] || NOEUD_ATTEINT_COURANT="(aucun)"
 }
