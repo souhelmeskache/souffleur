@@ -137,6 +137,11 @@ def write_partition(partition, out_dir: Path) -> Path:
                             # comme les autres rubriques du node.
                             **({"rendu_md": n.rendu_md}
                                if getattr(n, "rendu_md", "") else {}),
+                            # D-275 §6 (Issue #339) : la partition DÉCLARE
+                            # ses combats — zéro-dangling (slug résout à un
+                            # record classe creature) gardé par validate_form
+                            **({"combats": n.combats}
+                               if getattr(n, "combats", []) else {}),
                             "anchors": n.anchors})
         (out_dir / "nodes" / f"{n.id}.md").write_text(fm + n.corps_md + "\n",
                                                       encoding="utf-8")
@@ -258,7 +263,9 @@ def write_partition(partition, out_dir: Path) -> Path:
                    **({"charniere_sortie": True}
                       if getattr(n, "charniere_sortie", None) else {}),
                    **({"scenario": True}
-                      if n.altitude == "scenario" else {})}
+                      if n.altitude == "scenario" else {}),
+                   **({"combats": [c["creature"] for c in n.combats]}
+                      if getattr(n, "combats", []) else {})}
                   for n in partition.nodes],
         "records": [{"id": r.id, "classe": r.classe,
                      "transverse": bool(getattr(r, "transverse", None)),
