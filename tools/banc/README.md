@@ -266,6 +266,25 @@ se prouve sur lui-même avant de mesurer le jeu ») →
 passé au `.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd
 -Parties 8 -Director ab`) → affiche le chemin de `nuit.md` produit.
 
+### Dossier de nuit vs dossier de fumée/journée (#309)
+
+`nuit.sh` écrit dans `bench/nuit-AAAAMMJJ/` **seulement** quand `-FinA` est
+posée (nuit réelle — `nuit.cmd` la pose par défaut, `-FinA 06:00`) ; **sans**
+`-FinA` (run borné par `-Parties` seul, typiquement un run de fumée/journée
+manuel), le défaut bascule sur `bench/fumee-AAAAMMJJ/` — jamais
+`bench/nuit-AAAAMMJJ/`. `-RunDir` explicite reste prioritaire dans tous les
+cas (tests, run de fumée interne à `nuit.cmd`, #313).
+
+Constat #309 (05/09) : six runs de fumée joués manuellement en journée dans
+`bench/nuit-20260905/` avaient fait `nuit.cmd` du soir croire à une
+**continuation** de nuit interrompue (`partie-01` déjà présente) — la règle
+« heure déjà atteinte pendant une continuation » (§ `-FinA` ci-dessous)
+s'était alors appliquée à des parties qui n'avaient jamais été une nuit,
+arrêtant la nuit du soir au premier contrôle, sans jouer un tour. Cette
+séparation par dossier, plus le REFUS nommé (§ `-FinA`, règle 2) sur toute
+continuation dont l'heure de fin est déjà passée, ferment les deux moitiés
+du défaut.
+
 ### Run de fumée obligatoire avant chaque nuit (#313)
 
 Avant de lancer la nuit elle-même, `nuit.cmd` lance d'abord
@@ -499,9 +518,15 @@ n'exigeront pas de réécrire ce script.
   2. **Pendant la nuit, sur un relancement en CONTINUATION** (`partie-01`
      déjà présente dans le `-RunDir`) : **jamais** de bascule au lendemain —
      HH:MM déjà atteinte pour aujourd'hui (par n'importe quelle marge) fait
-     s'arrêter la nuit **tout de suite** (exit 130) avant la partie
-     suivante, par le même chemin que STOP. Une continuation ne recule
-     jamais son heure de fin d'un jour entier.
+     **REFUSER le lancement nommément** (exit **1**, `REFUS : ce dossier
+     (...) contient déjà N partie(s) et -FinA HH:MM est déjà passée pour
+     aujourd'hui -- lance dans un dossier frais (-RunDir)`, avant toute
+     écriture) — plutôt que le comportement d'avant #309 : un arrêt par le
+     chemin STOP (exit 130, `nuit.md`/`rapport-nuit.md` écrits) qui, sans
+     avoir joué le moindre tour, était indiscernable d'un arrêt normal de
+     fin de nuit (constat #309 du 05/09 : passé inaperçu jusqu'au
+     lendemain). Une continuation ne recule jamais son heure de fin d'un
+     jour entier.
 - `-DryRun` : crée toute l'arborescence (copies de save + fixture) et les
   `resume-run.md`/`nuit.md`, mais ne lance AUCUN agent — sert au test de
   forme (`tests/nuit_dryrun_test.py`) et à vérifier un montage sans

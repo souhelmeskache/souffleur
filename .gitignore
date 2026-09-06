@@ -30,6 +30,11 @@ bench/banc-fumee/
 # par partie peuvent citer le module sacrificiel joué, rien ne se versionne ---
 bench/nuit-*/
 
+# --- run de fumée/journée (#309) : dossier par défaut de nuit.sh sans -FinA,
+# séparé de bench/nuit-*/ pour ne plus polluer la continuation d'une vraie
+# nuit -- mêmes raisons que bench/nuit-*/ ci-dessus ---
+bench/fumee-*/
+
 # --- verrou de création du workspace herdr dédié au banc (#298) : mkdir
 # atomique, transitoire (retiré en fin d'appel), jamais du matériau ---
 bench/.verrou-workspace-banc/
