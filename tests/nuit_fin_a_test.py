@@ -132,14 +132,16 @@ def main() -> int:
         assert "dépôt Issue #201 : non posté (-DryRun)" in nuit_md, nuit_md
         print("3) -FinA future, arrêt normal : rapport-nuit.md écrit, statut dépôt cité dans nuit.md")
 
-        # --- 4. arrêt ENTRE DEUX PARTIES : run déjà entamé (continuation),
-        # -FinA déjà atteinte au second appel -> exit 130, rapport-nuit.md
-        # écrit, PAS de partie-02, JAMAIS un rollover au lendemain (2e revue
-        # REFUS 03/09 : « une heure déjà atteinte pendant la nuit arrête la
-        # nuit ; au lancement seulement, une heure passée bascule au
-        # lendemain » — une continuation n'est jamais « au lancement »).
-        # Écart FIXE (5 min, pas une comparaison à l'horloge courante au
-        # moment précis de l'exécution) : robuste, jamais une course.
+        # --- 4. REFUS NOMMÉ (Issue #309, plus un arrêt silencieux au premier
+        # contrôle) : run déjà entamé (continuation), -FinA déjà atteinte au
+        # second appel -> exit 1, REFUS explicite sur stderr, PAS de
+        # partie-02, JAMAIS un rollover au lendemain, et surtout AUCUN
+        # nuit.md/rapport-nuit.md écrit qui ferait ressembler ce refus à un
+        # arrêt normal de fin de nuit (constat #309 du 05/09 : un tel arrêt
+        # silencieux, indiscernable d'un arrêt normal, était passé inaperçu
+        # jusqu'au lendemain matin). Écart FIXE (5 min, pas une comparaison à
+        # l'horloge courante au moment précis de l'exécution) : robuste,
+        # jamais une course.
         run_dir_cont = tmp / "run-continuation"
         p1 = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "1", "-Save", slug,
@@ -149,23 +151,30 @@ def main() -> int:
         assert p1.returncode == 0, f"premier appel : {p1.returncode}\n{p1.stderr}"
         assert (run_dir_cont / "partie-01").is_dir()
 
+        # rapport-nuit.md existe déjà à ce stade -- le PREMIER appel (budget
+        # -Parties 1, sans -FinA) a déjà fini sa propre nuit normalement.
+        # Le second appel (continuation) doit REFUSER avant de le retoucher.
+        rapport_avant = (run_dir_cont / "rapport-nuit.md").read_text(encoding="utf-8")
+
         heure_passee2 = (datetime.now() - timedelta(minutes=5)).strftime("%H:%M")
         p2 = subprocess.run(
             [BASH, str(NUIT_SH), "-Parties", "3", "-Save", slug,
              "-RunDir", str(run_dir_cont), "-DryRun", "-FinA", heure_passee2],
             capture_output=True, text=True, timeout=60, env=env,
         )
-        assert p2.returncode == 130, (
-            f"continuation, -FinA déjà atteinte (5 min) : attendu 130, reçu {p2.returncode}\n"
+        assert p2.returncode == 1, (
+            f"continuation, -FinA déjà atteinte (5 min) : attendu 1 (REFUS), reçu {p2.returncode}\n"
             f"stdout={p2.stdout}\nstderr={p2.stderr}"
         )
-        assert not (run_dir_cont / "partie-02").exists(), "aucune partie-02 -- arrêt avant"
-        contenu = (run_dir_cont / "nuit.md").read_text(encoding="utf-8")
-        assert "heure de fin atteinte" in contenu and heure_passee2 in contenu, contenu
-        rapport_cont = (run_dir_cont / "rapport-nuit.md").read_text(encoding="utf-8")
-        assert "heure de fin atteinte" in rapport_cont, rapport_cont
-        print("4) run déjà entamé + -FinA déjà atteinte au relancement : arrêt AVANT "
-              "partie-02 (exit 130), jamais un rollover au lendemain")
+        assert "REFUS" in p2.stderr and "dossier frais" in p2.stderr, p2.stderr
+        assert not (run_dir_cont / "partie-02").exists(), "aucune partie-02 -- refusé avant"
+        rapport_apres = (run_dir_cont / "rapport-nuit.md").read_text(encoding="utf-8")
+        assert rapport_apres == rapport_avant, (
+            "rapport-nuit.md ne doit pas être retouché par un REFUS -- "
+            "un REFUS n'est jamais un arrêt normal de nuit"
+        )
+        print("4) run déjà entamé + -FinA déjà atteinte au relancement : REFUS nommé "
+              "(exit 1) avant partie-02, jamais un rollover au lendemain")
 
         # --- 5. arrêt AU TOUR SUIVANT (partie en cours) : -LancementCmd
         # "true" (lancement réussi, aucun agent réel), -FinA atteinte pendant

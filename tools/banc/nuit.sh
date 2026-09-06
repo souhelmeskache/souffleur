@@ -201,9 +201,28 @@ if [ -n "${SAVES_DIR:-}" ] && [ -z "${NUIT_CONSERVER_SAVES_DIR:-}" ]; then
 fi
 
 # --- 1. Arborescence du run ----------------------------------------------
-
+#
+# bench/nuit-<date>/ est réservé à la vraie nuit (Issue #309, constat du
+# 05/09 : six runs de fumée joués en journée dans ce même dossier ont fait
+# `nuit.cmd` du soir croire à une CONTINUATION de nuit interrompue —
+# §1bis ci-dessous applique alors sa règle « heure déjà atteinte -> arrêt
+# immédiat » à des parties qui n'ont jamais été une nuit). -FinA est le
+# signal structurel qui distingue les deux usages : une vraie nuit le porte
+# toujours (nuit.cmd le pose par défaut, `-FinA 06:00`, Souhel #279) ; un run
+# de fumée/journée borné par -Parties seul (sans -FinA) ne dépasse jamais son
+# budget de parties, sans notion d'heure de fin. Sans -FinA, le défaut
+# bascule donc sur bench/fumee-<date>/ — jamais bench/nuit-<date>/ — pour
+# qu'un run de fumée manuel ne puisse plus polluer le dossier que la
+# continuation de nuit relit. -RunDir explicite (tests, run de fumée interne
+# de nuit.cmd, #313) reste prioritaire sur cette règle dans tous les cas.
 DATE_JOUR="$(date '+%Y%m%d')"
-RUN_DIR="${RUN_DIR_OVERRIDE:-$REPO_ROOT/bench/nuit-$DATE_JOUR}"
+if [ -n "$RUN_DIR_OVERRIDE" ]; then
+  RUN_DIR="$RUN_DIR_OVERRIDE"
+elif [ -n "$FIN_A" ]; then
+  RUN_DIR="$REPO_ROOT/bench/nuit-$DATE_JOUR"
+else
+  RUN_DIR="$REPO_ROOT/bench/fumee-$DATE_JOUR"
+fi
 mkdir -p "$RUN_DIR"
 NUIT_MD="$RUN_DIR/nuit.md"
 
@@ -334,9 +353,12 @@ done
 # 2. PENDANT LA NUIT (relancement en CONTINUATION, $START_INDEX > 1,
 #    partie-01 déjà là) : JAMAIS de bascule au lendemain -- HH:MM déjà
 #    atteinte pour $DATE_JOUR (par n'importe quelle marge, même minime) fait
-#    s'arrêter la nuit tout de suite (fin_a_atteinte vrai dès le prochain
-#    contrôle), par le chemin normal (même code que STOP). Une continuation
-#    ne recule jamais son heure de fin d'un jour entier.
+#    REFUSER le lancement nommément (ci-dessous) plutôt que de laisser la
+#    nuit s'arrêter au premier contrôle sans avoir joué un tour (Issue #309,
+#    constat du 05/09 : ce arrêt silencieux, indiscernable d'un arrêt normal
+#    de fin de nuit dans nuit.md/rapport-nuit.md, avait fait perdre une nuit
+#    entière sans que l'opérateur ne le remarque avant le lendemain matin).
+#    Une continuation ne recule jamais son heure de fin d'un jour entier.
 FIN_A_EPOCH=""
 if [ -n "$FIN_A" ]; then
   FIN_A_EPOCH_JOUR="$(date -d "${DATE_JOUR:0:4}-${DATE_JOUR:4:2}-${DATE_JOUR:6:2} $FIN_A:00" +%s 2>/dev/null)"
@@ -349,7 +371,8 @@ if [ -n "$FIN_A" ]; then
   elif [ "$START_INDEX" -eq 1 ]; then
     FIN_A_EPOCH=$((FIN_A_EPOCH_JOUR + 86400))             # nuit fraîche, déjà passée -> demain
   else
-    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"                        # continuation, déjà atteinte -> arrêt
+    echo "REFUS : ce dossier ($RUN_DIR) contient déjà $((START_INDEX - 1)) partie(s) et -FinA $FIN_A est déjà passée pour aujourd'hui -- lance dans un dossier frais (-RunDir) plutôt que de reprendre celui-ci." >&2
+    exit 1
   fi
 fi
 
@@ -492,6 +515,43 @@ arreter_sonde_ecran() {
 journal_ecran_role() {
   local partie_dir="$1" role="$2"
   tail -n 30 "$partie_dir/ecran-$role.log" 2>/dev/null
+}
+
+# Remplissage de fenêtre (I-469 §F0.4, Issue #332) — lecture MÉCANIQUE du
+# pourcentage de contexte que Claude Code affiche sur l'écran, jamais une
+# estimation : les motifs couverts ici (« NN% ... context », « context
+# left/used ... NN% ») n'ont PAS été confirmés contre un écran réel à la
+# date de cette lane (aucun run de nuit n'a tourné pendant son
+# développement) — voir la PR pour le détail et la capture demandée par
+# l'Issue. Un texte qui ne matche aucun motif rend une chaîne vide ;
+# `journaliser_fenetre` journalise alors "non lisible", jamais un chiffre
+# deviné.
+lire_pct_fenetre() {
+  local texte="$1"
+  printf '%s' "$texte" \
+    | grep -oiE 'context[^%]{0,40}[0-9]{1,3} *%|[0-9]{1,3} *% *(of )?context' \
+    | grep -oE '[0-9]{1,3}' | tail -1
+}
+
+# Journalise le remplissage de fenêtre du rôle $3 au tour $4 dans
+# `events.jsonl` de la save jouée ($2) — même fichier que le paquet (F0.4a),
+# lecture fraîche du pane $5 (`herdr pane read`, jamais la dernière ligne de
+# la sonde #305 qui peut dater de 10s). `pct` reste la chaîne "non lisible"
+# (jamais un entier) si le motif n'apparaît pas sur cet écran.
+journaliser_fenetre() {
+  local partie_dir="$1" save_dest="$2" role="$3" nn="$4" pane="$5"
+  local texte pct events
+  texte="$(herdr pane read "$pane" --lines 30 2>/dev/null)"
+  pct="$(lire_pct_fenetre "$texte")"
+  events="$save_dest/memory/events.jsonl"
+  mkdir -p "$(dirname "$events")"
+  if [[ "$pct" =~ ^[0-9]+$ ]]; then
+    printf '{"type": "fenetre", "turn": %d, "role": "%s", "pct": %d}\n' \
+      "$((10#$nn))" "$role" "$pct" >> "$events"
+  else
+    printf '{"type": "fenetre", "turn": %d, "role": "%s", "pct": "non lisible"}\n' \
+      "$((10#$nn))" "$role" >> "$events"
+  fi
 }
 
 fermer_panes() {
@@ -1351,6 +1411,11 @@ jouer_partie() {
       detecter_fin_partie "$save_dest"
       break
     fi
+
+    # Remplissage de fenêtre MJ (I-469 §F0.4, Issue #332) — journalisé APRÈS
+    # que tour-$nn.md soit confirmé (r=0 ci-dessus), donc pour CHAQUE tour
+    # joué avec succès, tour 1 inclus.
+    journaliser_fenetre "$partie_dir" "$save_dest" "mj" "$nn" "$PANE_MJ_COURANT"
 
     # Arbitrage MÉCANIQUE de prose-NN.md entre les deux voies du gabarit
     # (Issue #295) : voie extraction (PRIMAIRE, section « Prose du

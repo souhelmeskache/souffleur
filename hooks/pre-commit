@@ -21,6 +21,14 @@ PY=.venv/Scripts/python.exe
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
+# Premiere garde du hook, avant toute suite (I-324) : refuse tout commit qui
+# ferait entrer un identifiant du corpus de campagne reel (slug/nom d'un
+# record sous corpus_dir()) dans l'historique -- voir hooks/verifier-materiau-reel.py.
+if ! "$PY" hooks/verifier-materiau-reel.py; then
+    echo "COMMIT REFUSE -- materiau de campagne reel detecte (voir ci-dessus)." >&2
+    exit 1
+fi
+
 staged="$(git diff --cached --name-only --diff-filter=ACMR)"
 
 if [ -z "$staged" ]; then

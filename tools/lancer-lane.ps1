@@ -167,6 +167,7 @@ function Resolve-ExternalCommand {
 
 $GhExe = Resolve-ExternalCommand -Name 'gh' -FallbackPaths @('C:\Program Files\GitHub CLI\gh.exe')
 $HerdrExe = Resolve-ExternalCommand -Name 'herdr' -FallbackPaths @("$env:LOCALAPPDATA\Programs\Herdr\bin\herdr.exe")
+$PyExe = Resolve-ExternalCommand -Name 'python' -FallbackPaths @((Join-Path $PSScriptRoot '..\.venv\Scripts\python.exe'))
 
 # --- 0bis. Envoi du prompt sans interprétation shell (I-385) --------------
 #
@@ -459,7 +460,14 @@ if ($EstRevue) {
                 'Bash(git commit -n*)',
                 'Bash(git push --no-verify*)',
                 'Bash(git push --force*)',
-                'Bash(git push -f*)'
+                'Bash(git push -f*)',
+                # Issue #335 : contourner le hook par sa configuration
+                # (core.hooksPath) est le même geste que --no-verify.
+                'Bash(git config * core.hooksPath*)',
+                'Bash(git -c core.hooksPath*)',
+                'Bash(git -c *hooksPath*)',
+                'Bash(export GIT_CONFIG_*)',
+                'Bash(GIT_CONFIG_*=*)'
             )
         }
     }
@@ -567,6 +575,19 @@ $texteCadrage
 "@
 }
 
+# --- 3ter. Garde "materiau reel" sur le corps de l'Issue (I-324) ----------
+#
+# Meme garde qu'en pre-commit (hooks/verifier-materiau-reel.py), mais en
+# amont : le corps d'Issue (+ cadrage) est injecte VERBATIM dans le prompt
+# de la lane un peu plus bas (Build-LanePrompt) -- un slug reel qui s'y
+# trouve deja finit tot ou tard dans un commit de la lane (#317 -> #320).
+$guardScript = Join-Path $RepoRoot 'hooks\verifier-materiau-reel.py'
+$verifMateriau = $bodyPourGabarit | & $PyExe $guardScript --text 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Issue #$Issue : materiau de campagne reel detecte dans le corps/cadrage -- refus de lancer.`n$verifMateriau"
+    exit 1
+}
+
 # --- 4. Gabarit de prompt -------------------------------------------------
 
 function Build-LanePrompt {
@@ -627,6 +648,10 @@ $Body
 - Petite PR ciblée vers ``main`` (verrouillée côté serveur : PR + CI obligatoires) — pas de commit direct sur ``main``.
 - CI verte attendue avant de considérer la lane terminée.
 - **Jamais ``--no-verify``** sur aucune commande git, en aucune circonstance.
+  Contourner un hook par sa configuration (``git config core.hooksPath``,
+  ``git -c core.hooksPath=``, variables ``GIT_CONFIG_*``) est le même geste
+  et reste tout aussi interdit — un hook qui dure se lance en tâche de fond
+  détachée et s'attend, il ne se contourne jamais.
 - **En cas de conflit avec ``main`` : ``git merge origin/main`` dans la
   branche de lane, jamais ``git rebase``.** Le force-push est refusé partout
   dans le circuit, et un rebase laisse la PR irréparable.
@@ -787,7 +812,14 @@ $settingsLocal = [ordered]@{
             'Bash(git commit -n*)',
             'Bash(git push --no-verify*)',
             'Bash(git push --force*)',
-            'Bash(git push -f*)'
+            'Bash(git push -f*)',
+            # Issue #335 : contourner le hook par sa configuration
+            # (core.hooksPath) est le même geste que --no-verify.
+            'Bash(git config * core.hooksPath*)',
+            'Bash(git -c core.hooksPath*)',
+            'Bash(git -c *hooksPath*)',
+            'Bash(export GIT_CONFIG_*)',
+            'Bash(GIT_CONFIG_*=*)'
         )
     }
 }
