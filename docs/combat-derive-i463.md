@@ -78,3 +78,54 @@ séparée.
 
 Test d'élément : [`tests/test-element-attaque-i463.py`](../tests/test-element-attaque-i463.py)
 (fixtures 100 % synthétiques, D-109/D-206).
+
+## 4. Lecture du bloc projeté — un seul chemin (I-463 volet #316(a), Issue #317)
+
+Mesuré au banc (nuit 06/09, partie 02, tours 13 et 23) : la projection
+(`coderain/converter/projection.py::project_into_save`, §2 « records →
+characters registry ») écrit le bloc de stats d'un record de module
+(`ca`, `pv`, `attaque_bonus`, `degats`, immunités...) en **JSON dans le
+CORPS** de l'entrée `characters.md` — ses `attrs` ne portent que
+`{"importance": "4"}` pour une créature. Une créature entièrement connue du
+module se bouchait quand même (6 `bouchage_enregistre` mesurés sur une
+créature dont CA/attaque_bonus/degats étaient déjà écrits) : `attack`
+lisait `e.attrs`, jamais le corps, et ne retombait sur `get_record()` que
+si l'entrée n'existait pas du tout — ce qui n'était pas le cas ici.
+
+`mcp_server._creature_stats(store, slug)` est le **chemin de lecture
+unique** d'un bloc de stats non-joueur, dans cet ordre :
+
+1. entrée `characters.md` de ce slug — le bloc JSON du **corps** est
+   parsé (`json.JSONDecoder().raw_decode`, tolère du texte transverse
+   ajouté après le JSON — projection.py §2 y ajoute parfois des lignes
+   `- clé: valeur`), puis les `attrs` de l'entrée sont fusionnés PAR-DESSUS
+   (compat : les fixtures qui écrivent `ca`/`pv`/... directement en attrs,
+   comme `tests/test-element-attaque-i463.py`, continuent de fonctionner
+   à l'identique) ;
+2. à défaut d'entrée : `coderain.converter.aval.get_record()` sur la
+   partition du module courant (`_module_partition()`) ;
+3. à défaut des deux : `None` — c'est TOUJOURS l'appelant qui prononce le
+   refus (jamais un défaut fabriqué ici, D-274 §1).
+
+Deux appelants, zéro lecture dupliquée :
+
+- **`attack`** (`_attack_fiche`) — la fiche `npc` d'une attaque appelle
+  `_creature_stats` puis lit `ca`/`attaque_bonus`/`degats`/`pv` dessus,
+  exactement comme avant, mais désormais sur l'union corps+attrs ;
+- **`start_combat`** (`coderain/mcp/jets_combat.py`) — tout membre
+  d'`encounter` sans `monster_template_slug` est résolu via son
+  `entity_id` : `_creature_stats` fournit les chiffres,
+  `monster_bridge.encounter_member_from_record` construit le membre et
+  installe le template 'brute' (`brute:<slug>`). Le record absent est un
+  refus explicite AVANT toute ouverture de combat
+  (`{"error": "unknown encounter member ..."}`), jamais un tour ouvert
+  sans comportement pour ce membre. Un membre qui porte déjà
+  `monster_template_slug` traverse inchangé (zéro coût de lecture pour
+  l'usage historique, voir `tests/test_rules_engine.py`).
+
+Tests : [`tests/test-element-lecture-fiche-projetee-i317.py`](../tests/test-element-lecture-fiche-projetee-i317.py)
+(lecture du corps JSON sans bouchage + repli `get_record()` quand
+l'entrée manque), [`tests/test-start-combat-membre-slug-i317.py`](../tests/test-start-combat-membre-slug-i317.py)
+(membre d'encounter résolu par slug, refus explicite sur slug inconnu),
+[`tests/test-rejeu-tours-blood-man-i317.py`](../tests/test-rejeu-tours-blood-man-i317.py)
+(rejeu structurel des tours 13/23 mesurés, fixture synthétique D-109).
