@@ -407,6 +407,27 @@ def pires_craquements(run_dir: Path, n: int = 3) -> list[str]:
     return pointeurs
 
 
+def compter_resets(run_dir: Path) -> dict:
+    """Compte les verdicts de reset (#330, D-264) : chaque `reset-NN.md`
+    (écrit par `tools/banc/verifier_reset.py`, appelé par `nuit.sh` juste
+    après le tour N+1 d'un `-Reset N`) porte une ligne `Verdict global :
+    VERT (4/4)` ou `ROUGE (n/4)` en fin de fichier -- lue mécaniquement,
+    jamais un jugement. Rend `{"joues": <total>, "verts": <VERT (4/4)>}`."""
+    joues = verts = 0
+    for p in sorted(run_dir.glob("partie-*")):
+        if not p.is_dir():
+            continue
+        for f in sorted(p.glob("reset-*.md")):
+            joues += 1
+            try:
+                contenu = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if re.search(r"^Verdict global : VERT \(4/4\)$", contenu, re.MULTILINE):
+                verts += 1
+    return {"joues": joues, "verts": verts}
+
+
 def lire_module_info(run_dir: Path) -> dict | None:
     """Lit `module.json` + compte lieux/PNJ dans la save de la première
     partie du run qui en porte un (#281) — chaque partie copie fraîchement
@@ -460,6 +481,7 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "timeouts_mj": m["timeouts_mj"],
         "processus_sortis_joueur": m["processus_sortis_joueur"],
         "processus_sortis_mj": m["processus_sortis_mj"],
+        "resets": compter_resets(run_dir),
     }
 
 
@@ -500,6 +522,8 @@ def formater_rapport_markdown(r: dict) -> str:
                   f"mj {r['timeouts_mj']}")
     lignes.append(f"- Processus sortis par rôle (#305) : joueur {r['processus_sortis_joueur']} / "
                   f"mj {r['processus_sortis_mj']}")
+    lignes.append(f"- Resets (#330, D-264) : {r['resets']['joues']} joués, "
+                  f"{r['resets']['verts']} verts (4/4)")
     lignes.append("- Tours joués (moyenne) par nœud atteint (#306) :")
     if r["tours_par_noeud"]:
         for noeud, t in sorted(r["tours_par_noeud"].items()):
