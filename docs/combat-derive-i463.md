@@ -127,5 +127,5 @@ Tests : [`tests/test-element-lecture-fiche-projetee-i317.py`](../tests/test-elem
 (lecture du corps JSON sans bouchage + repli `get_record()` quand
 l'entrée manque), [`tests/test-start-combat-membre-slug-i317.py`](../tests/test-start-combat-membre-slug-i317.py)
 (membre d'encounter résolu par slug, refus explicite sur slug inconnu),
-[`tests/test-rejeu-tours-blood-man-i317.py`](../tests/test-rejeu-tours-blood-man-i317.py)
+[`tests/test-rejeu-tours-creature-projetee-i317.py`](../tests/test-rejeu-tours-creature-projetee-i317.py)
 (rejeu structurel des tours 13/23 mesurés, fixture synthétique D-109).

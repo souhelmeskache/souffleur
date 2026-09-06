@@ -18,8 +18,8 @@ Couvre :
   B. repli sur le record de module (`get_record`) quand l'entrée
      `characters.md` n'existe PAS du tout.
 
-Fixtures 100% synthétiques (D-109) : chiffres repris de l'Issue #317
-(ca=10, pv=26, attaque_bonus=+3, degats="4 (1d6+1)"), nom et slug fictifs.
+Fixtures 100% synthétiques (D-109) : nom, slug ET chiffres fictifs — aucune
+valeur du record réel cité au constat de l'Issue #317 n'est reprise ici.
 
 Verdicts mécaniques (D-134), moule I-382.
 """
@@ -59,10 +59,10 @@ store.upsert_entry("items.md", Entry(
     attrs={"degats": "1d8+3", "stat": "strength", "status": "held by you"},
     body="Objet synthétique de test."))
 
-CREATURE_SLUG = "reflet-ensanglante-banc"
-CREATURE_STATS = {"nom": "Reflet ensanglanté (banc)", "ca": 10, "pv": 26,
-                  "vitesse": "30 ft.", "attaque_bonus": 3,
-                  "degats": "4 (1d6+1)", "immunites_degats": "poison"}
+CREATURE_SLUG = "vigie-des-brumes-banc"
+CREATURE_STATS = {"nom": "Vigie des brumes (banc)", "ca": 14, "pv": 33,
+                  "vitesse": "30 ft.", "attaque_bonus": 5,
+                  "degats": "7 (2d6) froid", "immunites_degats": "froid"}
 # Même écriture que projection.py:101/104 : body = JSON des stats, attrs =
 # {"importance": "4"} SEUL (rec["meta"].get("classe") == "creature").
 store.upsert_entry("characters.md", Entry(
@@ -99,8 +99,8 @@ with ElementMold("lecture-fiche-projetee-i317", budget_seconds=10.0) as mold:
     fiche = mcp_server._attack_fiche(store, CREATURE_SLUG)
     mold.check(
         "A1-fiche-lue-depuis-le-corps-json",
-        fiche.get("ac") == 10 and fiche.get("attack_bonus") == 3
-        and fiche.get("damage") == "4 (1d6+1)" and fiche.get("hp_max") == 26
+        fiche.get("ac") == 14 and fiche.get("attack_bonus") == 5
+        and fiche.get("damage") == "7 (2d6) froid" and fiche.get("hp_max") == 33
         and "provisoire_ids" not in fiche,
         f"_attack_fiche({CREATURE_SLUG!r}) -> {fiche!r}")
 

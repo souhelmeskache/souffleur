@@ -21,8 +21,8 @@ Couvre :
 Needs dnd5e-engine==0.3.0 (requirements.txt) ; saute bruyamment si absent,
 même convention que `test_rules_engine.py`/`test_monster_bridge.py`.
 
-Fixtures 100% synthétiques (D-109) : chiffres repris de l'Issue #317
-(ca=10, pv=26, attaque_bonus=+3, degats="4 (1d6+1)"), nom et slug fictifs.
+Fixtures 100% synthétiques (D-109) : nom, slug ET chiffres fictifs — aucune
+valeur du record réel cité au constat de l'Issue #317 n'est reprise ici.
 """
 from __future__ import annotations
 
@@ -58,9 +58,9 @@ slug = lib.saves.create(
     premise="Banc synthétique I-317, D-109 — aucun matériau réel.")
 store = lib.store(slug)
 
-CREATURE_SLUG = "reflet-ensanglante-banc"
-CREATURE_STATS = {"nom": "Reflet ensanglanté (banc)", "ca": 10, "pv": 26,
-                  "attaque_bonus": 3, "degats": "4 (1d6+1)"}
+CREATURE_SLUG = "vigie-des-brumes-banc"
+CREATURE_STATS = {"nom": "Vigie des brumes (banc)", "ca": 14, "pv": 33,
+                  "attaque_bonus": 5, "degats": "7 (2d6) froid"}
 store.upsert_entry("characters.md", Entry(
     title=str(CREATURE_STATS["nom"]), slug=CREATURE_SLUG, importance=4,
     attrs={"importance": "4"},
@@ -80,7 +80,7 @@ KAEL = {"entity_id": "pj:kael", "name": "Kael", "initiative": 15,
 
 async def encounter_par_slug():
     encounter = [{"entity_id": CREATURE_SLUG, "entity_type": "Monster",
-                  "name": "Reflet ensanglanté (banc)", "initiative": 8,
+                  "name": "Vigie des brumes (banc)", "initiative": 8,
                   "zone_id": "z1"}]
     st = await mcp_server.start_combat(
         session_id="i317-slug", party=[KAEL], encounter=encounter,

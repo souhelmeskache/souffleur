@@ -492,7 +492,9 @@ def _echo_checks(events: list[str]) -> list[str]:
 # de l'entrée `characters.md`, pas dans ses attrs (seul `importance` y vit
 # pour une créature). `_attack_fiche` ne lisait que `e.attrs` : une créature
 # entièrement connue par le module se bouchait quand même (6 bouchages
-# mesurés sur "Blood Man", CA/attaque_bonus/degats déjà écrits).
+# mesurés sur une créature du corpus dont CA/attaque_bonus/degats étaient
+# déjà écrits — voir le constat de l'Issue #317, nom hors périmètre de ce
+# dépôt, D-109/D-206).
 #
 # `_creature_stats` est le SEUL chemin de lecture d'un bloc de stats
 # non-joueur (I-463 : « en un seul lieu ») — `attack` (via `_attack_fiche`) et
@@ -622,7 +624,7 @@ def _resolve_encounter_member(store, member: dict) -> dict:
     try:
         built = encounter_member_from_record(
             stats, record_id=slug, entity_id=entity_id or slug,
-            zone_id=member.get("zone_id"),
+            zone_id=member.get("zone_id") or "",
             initiative=member.get("initiative", 10),
             entity_type=member.get("entity_type", "Monster"),
             hp_current=member.get("hp_current"))

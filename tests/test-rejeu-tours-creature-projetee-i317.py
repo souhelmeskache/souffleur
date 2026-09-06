@@ -1,18 +1,19 @@
 """Issue #317 — rejeu de mesure, critère (c) : « rejeu des tours 13 et 23 de
-`bench/nuit-20260906/partie-02` (les appels d'outils y sont journalisés) :
+bench/nuit-20260906/partie-02 (les appels d'outils y sont journalisés) :
 zéro bouchage ». Le journal réel de cette partie vit dans `bench/nuit-*/`
 (gitignoré, matériau de banc — D-109/D-206) et n'est jamais commité ; ce
 script en rejoue la STRUCTURE mesurée avec des fixtures 100% synthétiques,
-même discipline que `bench/rejeu-letalite-i463-tours21-27.py` (nom et slug
-fictifs, seuls les champs mécaniques `ca`/`pv`/`attaque_bonus`/`degats`
-publiés dans le constat de l'Issue #317 sont repris).
+même discipline que `bench/rejeu-letalite-i463-tours21-27.py` (nom, slug ET
+chiffres fictifs — aucune valeur du record réel cité au constat de l'Issue
+n'est reprise ici : seule la STRUCTURE des deux tours compte, pas les
+chiffres).
 
-Constat : au tour 13, `start_combat` s'ouvrait sans comportement pour la
-créature (aucun `monster_template_slug` résolu — #316(a)) ; au tour 23,
-`attack` bouchait CA (deux fois), bonus d'attaque (+4 puis +3) et dégâts
-(1d8+3 au lieu de 1d6+1) — 6 bouchages `bouchage_enregistre` au total pour
-une créature dont tout était déjà connu, projeté en JSON dans le corps de
-son entrée `characters.md` (converter/projection.py).
+Constat (paraphrasé, sans nom/chiffres réels) : au tour 13, `start_combat`
+s'ouvrait sans comportement pour une créature du module (aucun
+`monster_template_slug` résolu — #316(a)) ; au tour 23, `attack` bouchait
+CA, bonus d'attaque et dégâts — 6 bouchages `bouchage_enregistre` au total
+pour une créature dont tout était déjà connu, projeté en JSON dans le corps
+de son entrée `characters.md` (converter/projection.py).
 
 Rejeu ici :
   - tour 13 (structure) : `start_combat` avec la créature passée par slug
@@ -47,7 +48,7 @@ from coderain.memory import Entry, Library
 
 import mcp_server
 
-root = os.path.join(tempfile.gettempdir(), "se_rejeu_tours_blood_man_i317")
+root = os.path.join(tempfile.gettempdir(), "se_rejeu_tours_creature_projetee_i317")
 if os.path.exists(root):
     shutil.rmtree(root)
 lib = Library(root)
@@ -55,15 +56,15 @@ slug = lib.saves.create(
     "RejeuToursI317", mode="rpg",
     premise="Rejeu de mesure I-317 (#316(a)), D-109/D-206 — structure des "
             "tours 13/23 de bench/nuit-20260906/partie-02, fixture "
-            "synthétique dérivée des chiffres publiés dans l'Issue #317.")
+            "entièrement synthétique.")
 store = lib.store(slug)
 assert store.mode() == "rpg" and store.rpg_enabled()
 
-# Chiffres publiés dans le constat de l'Issue #317 (ca=10, pv=26,
-# attaque_bonus=+3, degats=4 (1d6+1)) ; nom/slug fictifs (D-109).
-CREATURE_SLUG = "reflet-ensanglante-banc"
-CREATURE_STATS = {"nom": "Reflet ensanglanté (banc)", "ca": 10, "pv": 26,
-                  "attaque_bonus": 3, "degats": "4 (1d6+1)"}
+# Nom, slug ET chiffres inventés (D-109) — ne reprennent AUCUNE valeur du
+# record réel cité au constat de l'Issue #317.
+CREATURE_SLUG = "vigie-des-brumes-banc"
+CREATURE_STATS = {"nom": "Vigie des brumes (banc)", "ca": 14, "pv": 33,
+                  "attaque_bonus": 5, "degats": "7 (2d6) froid"}
 store.upsert_entry("items.md", Entry(
     title="Épée factice", slug="epee-factice", importance=2,
     attrs={"degats": "1d8+3", "stat": "strength", "status": "held by you"},
@@ -101,9 +102,6 @@ def _set_player(*, seed):
     return rpg
 
 
-nb_bouchages = 0
-
-
 def _nb_bouchages() -> int:
     from coderain import bouchage as bouchage_mod
     return bouchage_mod.nb_scenario(store.rpg_state())
@@ -135,13 +133,13 @@ joueur_attaque = mcp_server.attack(attacker="player", target=CREATURE_SLUG)
 assert "error" not in joueur_attaque, f"tour 23 (joueur) : refus -> {joueur_attaque!r}"
 assert "provisoire" not in joueur_attaque, (
     f"tour 23 (joueur) : bouchage inattendu -> {joueur_attaque!r}")
-assert joueur_attaque["target_ac"] == 10, joueur_attaque
+assert joueur_attaque["target_ac"] == 14, joueur_attaque
 
 creature_attaque = mcp_server.attack(attacker=CREATURE_SLUG, target="player")
 assert "error" not in creature_attaque, f"tour 23 (créature) : refus -> {creature_attaque!r}"
 assert "provisoire" not in creature_attaque, (
     f"tour 23 (créature) : bouchage inattendu -> {creature_attaque!r}")
-assert creature_attaque["attack_bonus"] == 3, creature_attaque
+assert creature_attaque["attack_bonus"] == 5, creature_attaque
 
 apres = _nb_bouchages()
 assert apres == avant == 0, (
@@ -151,5 +149,5 @@ assert apres == avant == 0, (
 print("tour 23 (rejeu) : attack(joueur<->créature) résout dans les deux sens, "
       f"zéro bouchage (compteur scénario={apres}, constat pré-#317 : 6)")
 
-print("\nREJEU-TOURS-BLOOD-MAN-I317 (structure tours 13/23, "
+print("\nREJEU-TOURS-CREATURE-PROJETEE-I317 (structure tours 13/23, "
       "bench/nuit-20260906/partie-02) : OK")
