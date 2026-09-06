@@ -257,9 +257,27 @@ async def start_combat(session_id: str, party: list[dict],
     (I-205), il revient aussi sur chaque monster_turn tant que le combat
     dure. Pont minimal pour mapper un record de module vers un comportement
     jouable : coderain.rules_engine.monster_bridge.
+
+    Un membre d'`encounter` sans `monster_template_slug` est résolu par son
+    `entity_id` — même chemin de lecture que `attack` (`characters.md`, à
+    défaut record de module) — et construit par `encounter_member_from_record`
+    (Issue #317) : le record absent est un refus explicite, `{"error": ...}`,
+    avant toute ouverture de combat, jamais un membre sans comportement.
     """
+    store = None
+    resolved = []
+    for member in encounter:
+        if member.get("monster_template_slug"):
+            resolved.append(member)
+            continue
+        if store is None:
+            store = mcp_server._require_store()
+        m = mcp_server._resolve_encounter_member(store, member)
+        if m.get("error"):
+            return {"error": m["error"]}
+        resolved.append(m)
     result = await mcp_server.get_bridge().start_combat(
-        session_id=session_id, party=party, encounter=encounter,
+        session_id=session_id, party=party, encounter=resolved,
         rng_seed=rng_seed, zones=zones)
     mcp_server._record_combat_events(result.get("events", []))
     return result
