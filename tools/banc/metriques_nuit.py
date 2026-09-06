@@ -141,6 +141,44 @@ def compter_combats(events: list[dict]) -> dict:
     return {"sous_systeme": sous_systeme, "hors_sous_systeme": hors}
 
 
+def lire_paquets_tokens(events: list[dict]) -> list[int]:
+    """Jetons estimés (`tokens_est`) de chaque paquet journalisé ce run
+    (I-469 §F0.4, Issue #332) — `mcp_server._log_paquet`, entrées `type:
+    paquet` de `events.jsonl` (`assemble_context_to_file`/`paquet_narrateur`).
+    Une entrée sans `tokens_est` entier n'est jamais devinée : ignorée."""
+    out = []
+    for rec in events:
+        if rec.get("type") != "paquet":
+            continue
+        v = rec.get("tokens_est")
+        if isinstance(v, int) and not isinstance(v, bool):
+            out.append(v)
+    return out
+
+
+def fenetre_mj_tour1_dernier(events: list[dict]) -> tuple[int | None, int | None]:
+    """Remplissage de fenêtre MJ (%) au tour 1 et au dernier tour journalisé
+    (I-469 §F0.4, Issue #332) — entrées `type: fenetre, role: mj` de
+    `events.jsonl` (`nuit.sh::journaliser_fenetre`), triées par `turn`. Un
+    `pct` non entier (« non lisible ») ne compte tout simplement pas comme un
+    tour lisible ; `None` si aucune entrée MJ n'a de `pct` lisible."""
+    releves = []
+    for rec in events:
+        if rec.get("type") != "fenetre" or rec.get("role") != "mj":
+            continue
+        pct = rec.get("pct")
+        turn = rec.get("turn")
+        if isinstance(pct, int) and not isinstance(pct, bool) \
+                and isinstance(turn, int) and not isinstance(turn, bool):
+            releves.append((turn, pct))
+    if not releves:
+        return None, None
+    releves.sort(key=lambda t: t[0])
+    tour1 = next((pct for turn, pct in releves if turn == 1), None)
+    dernier = releves[-1][1]
+    return tour1, dernier
+
+
 def tours_sans_craquement(partie_dir: Path) -> int:
     """Nombre de `prose-NN.md` écrits dans le dossier d'une partie — le
     compte de tours effectivement joués avant que la partie ne s'arrête
@@ -272,6 +310,10 @@ def calculer(run_dir: Path) -> dict:
     combats = compter_combats(events_tous)
     timeouts = compter_timeouts_par_role(run_dir)
     processus_sortis = compter_processus_sortis_par_role(run_dir)
+    # Paquet (I-469 §F0.4, #332) — jetons estimés, tous les paquets de la
+    # nuit confondus (pas encore ventilé par partie ; voir
+    # `paquet_fenetre_par_partie` pour la colonne par partie de rapport-nuit).
+    paquets_tokens = lire_paquets_tokens(events_tous)
     return {
         "parties_lancees": len(parties_dirs),
         "parties_finies": finies,
@@ -289,6 +331,8 @@ def calculer(run_dir: Path) -> dict:
         "processus_sortis_joueur": processus_sortis["joueur"],
         "processus_sortis_mj": processus_sortis["mj"],
         "tours_par_noeud": tours_par_noeud(parties_dirs),
+        "paquet_median": round(statistics.median(paquets_tokens)) if paquets_tokens else None,
+        "paquet_max": max(paquets_tokens) if paquets_tokens else None,
     }
 
 
@@ -362,9 +406,39 @@ def lire_director_modele(partie_dir: Path) -> str | None:
     return m.group(1) if m else None
 
 
+def mesures_partie(partie_dir: Path) -> dict:
+    """Paquet médian/max (jetons estimés) + fenêtre MJ tour 1/dernier tour
+    pour UNE partie (I-469 §F0.4, Issue #332) — tranche la contradiction
+    « 83% au tour 1 » (Haiku, lu à l'écran) ⊥ « 53k » (I-467) par un chiffre
+    lu dans `events.jsonl`/l'écran, jamais une hypothèse. `None`/`0` quand la
+    partie n'a aucune entrée du type correspondant (run d'avant cette lane)."""
+    events = lire_events(partie_dir / "save" / "memory" / "events.jsonl")
+    tokens = lire_paquets_tokens(events)
+    tour1, dernier = fenetre_mj_tour1_dernier(events)
+    return {
+        "paquet_median": round(statistics.median(tokens)) if tokens else None,
+        "paquet_max": max(tokens) if tokens else None,
+        "fenetre_tour1": tour1,
+        "fenetre_dernier": dernier,
+    }
+
+
+def paquet_fenetre_par_partie(run_dir: Path) -> dict[str, dict]:
+    """`mesures_partie` pour chaque `partie-NN/` du run, clé = nom du
+    dossier (#332 — colonnes du rapport « par partie »)."""
+    out: dict[str, dict] = {}
+    for p in sorted(run_dir.glob("partie-*")):
+        if p.is_dir():
+            out[p.name] = mesures_partie(p)
+    return out
+
+
 def stats_ab_director(run_dir: Path) -> dict[str, dict]:
-    """Par modèle Director castée (haiku/sonnet) : tours moyens joués et
-    craquements de classe `director` imputés à ce modèle."""
+    """Par modèle Director castée (haiku/sonnet) : tours moyens joués,
+    craquements de classe `director` imputés à ce modèle, et paquet médian
+    (jetons estimés, toutes les parties castées à ce modèle confondues) —
+    la ligne de synthèse A/B qui tranche #332 quand les deux modèles ont
+    joué dans ce run."""
     par_modele: dict[str, dict] = {}
     for p in sorted(run_dir.glob("partie-*")):
         if not p.is_dir():
@@ -372,16 +446,20 @@ def stats_ab_director(run_dir: Path) -> dict[str, dict]:
         modele = lire_director_modele(p)
         if not modele:
             continue
-        d = par_modele.setdefault(modele, {"tours": [], "craquements_director": 0})
+        d = par_modele.setdefault(
+            modele, {"tours": [], "craquements_director": 0, "tokens": []})
         d["tours"].append(tours_sans_craquement(p))
         for f in lister_craquements(p):
             if extraire_classe_craquement(f) == "director":
                 d["craquements_director"] += 1
+        d["tokens"].extend(lire_paquets_tokens(
+            lire_events(p / "save" / "memory" / "events.jsonl")))
     out: dict[str, dict] = {}
     for modele, d in par_modele.items():
         out[modele] = {
             "tours_moyen": round(statistics.mean(d["tours"]), 1) if d["tours"] else 0,
             "craquements_director": d["craquements_director"],
+            "paquet_median": round(statistics.median(d["tokens"])) if d["tokens"] else None,
         }
     return out
 
@@ -454,6 +532,9 @@ def calculer_rapport(run_dir: Path, raison_arret: str, duree_totale_s: int,
         "tours_max": max(tours_par_partie) if tours_par_partie else 0,
         "craquements_par_classe": craquements_par_classe(run_dir),
         "ab_director": stats_ab_director(run_dir),
+        "paquet_fenetre_par_partie": paquet_fenetre_par_partie(run_dir),
+        "paquet_median": m["paquet_median"],
+        "paquet_max": m["paquet_max"],
         "limite_session": limite_session,
         "pires_craquements": pires_craquements(run_dir),
         "timeouts_joueur": m["timeouts_joueur"],
@@ -492,8 +573,17 @@ def formater_rapport_markdown(r: dict) -> str:
     lignes.append("- A/B Director (haiku ⊥ sonnet) :")
     if r["ab_director"]:
         for modele, d in sorted(r["ab_director"].items()):
+            paquet = ("non mesuré" if d["paquet_median"] is None
+                      else f"{d['paquet_median']} jetons")
             lignes.append(f"  - {modele} : tours moyens {d['tours_moyen']}, "
-                           f"craquements imputés au Director {d['craquements_director']}")
+                           f"craquements imputés au Director {d['craquements_director']}, "
+                           f"paquet médian {paquet}")
+        if len(r["ab_director"]) >= 2:
+            modeles = sorted(r["ab_director"].items())
+            (m1, d1), (m2, d2) = modeles[0], modeles[1]
+            if d1["paquet_median"] is not None and d2["paquet_median"] is not None:
+                lignes.append(f"  - synthèse : paquet médian {m1} {d1['paquet_median']} "
+                              f"jetons ⊥ {m2} {d2['paquet_median']} jetons (#332)")
     else:
         lignes.append("  - (aucune partie castée)")
     lignes.append(f"- Timeouts par rôle (#299) : joueur {r['timeouts_joueur']} / "
@@ -507,7 +597,19 @@ def formater_rapport_markdown(r: dict) -> str:
     else:
         lignes.append("  - (aucun)")
     lignes.append(f"- Limite de session touchée : {r['limite_session']}")
-    lignes.append(f"- Budget consommé : durée {r['duree_totale_s']}s (jetons non mesurés)")
+    paquet_global = ("non mesuré" if r["paquet_median"] is None
+                     else f"médian {r['paquet_median']} / max {r['paquet_max']} jetons")
+    lignes.append(f"- Budget consommé : durée {r['duree_totale_s']}s, paquet {paquet_global}")
+    lignes.append("- Paquet / fenêtre MJ par partie (I-469 §F0.4, #332) :")
+    if r["paquet_fenetre_par_partie"]:
+        for nom, mp in sorted(r["paquet_fenetre_par_partie"].items()):
+            paquet = ("non mesuré" if mp["paquet_median"] is None
+                      else f"médian {mp['paquet_median']} / max {mp['paquet_max']} jetons")
+            t1 = "non lisible" if mp["fenetre_tour1"] is None else f"{mp['fenetre_tour1']}%"
+            td = "non lisible" if mp["fenetre_dernier"] is None else f"{mp['fenetre_dernier']}%"
+            lignes.append(f"  - {nom} : paquet {paquet} ; fenêtre mj tour 1 {t1} / dernier tour {td}")
+    else:
+        lignes.append("  - (aucune partie)")
     lignes.append("- Pires craquements (jusqu'à 3, ordre : plus récent d'abord) :")
     if r["pires_craquements"]:
         for chemin in r["pires_craquements"]:
