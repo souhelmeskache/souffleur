@@ -1,8 +1,8 @@
 # tools/banc/ — scripts de veille du banc
 
 - `nuit.sh` / `nuit.cmd` / `verifier-avant-nuit.sh` / `metriques_nuit.py` /
-  `detecter_fin.py` : **banc de nuit N1** (#201, D-276 ; #260 ; #306) — voir
-  section dédiée ci-dessous.
+  `detecter_fin.py` / `cloturer_seance.py` : **banc de nuit N1** (#201, D-276 ;
+  #260 ; #306 ; #331) — voir section dédiée ci-dessous.
 - `fermer-workspace-banc.sh <label>` / `verifier-workspace-banc-vide.sh` :
   workspace herdr dédié au banc (#298) — voir § « Workspace dédié au banc »
   ci-dessous.
@@ -794,6 +794,15 @@ alternance, contenus distincts sur disque, aucun croisement).
   que ce soit un échec — et porte quand même `noeud_atteint: para-NN`, LA
   mesure de progression (à toute sortie de partie : tours_max, craquement,
   ou fin — voir `ecrire_resume_run`).
+- **La clôture de séance (F0.3, Issue #331) suit la même détection, sans
+  LLM** : `tools/banc/cloturer_seance.py`, appelé juste après
+  `detecter_fin_partie` à chaque relecture, écrit dans la save (via l'API de
+  production `coderain/validator.py::cloturer_seance` — jamais un écrit
+  direct de fichier) le record `seance` de clôture sur `fin_module`
+  (raison="terminal") ou `frontiere` (raison="frontiere") : numéro,
+  tour_debut/tour_fin, dernier nœud franchi, ce qui reste en_suspens
+  (visée + débouchés ouverts, mécaniquement lus). Idempotent — appelé à
+  chaque tour sans dupliquer le record une fois la séance close.
 - **Pas de protocole de tour 1 « froid »** : les gabarits gelés
   (`banc-mj.md`/`banc-joueur.md`, D-276 §4) supposent une reprise, pas un
   démarrage à vide. `nuit.sh` comble ce trou en envoyant le premier « go »

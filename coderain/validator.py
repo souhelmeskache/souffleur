@@ -825,6 +825,117 @@ def location_refusal_events(store, rejected: list[dict],
     return events
 
 
+# --- séance (F0.3, Issue #331) : clôture + reprise --------------------------
+
+SEANCE_RAISONS = {"terminal", "frontiere", "arret_joueur"}
+
+
+def _en_suspens_mecanique(store, dernier_noeud: str) -> list[str]:
+    """F0.3 (Issue #331) : ce que l'état SAIT mécaniquement au dernier nœud
+    FRANCHI — jamais de prose libre. Deux sources aujourd'hui : la visée de
+    la scène (`objectif_md`, non résolue puisque la partie s'est arrêtée là)
+    et les débouchés/liens encore ouverts depuis ce nœud (même geste que
+    `_sorties_noeud_courant`, mais lu au nœud FRANCHI passé en argument —
+    jamais une resupposition sur `current_location`, qui peut différer sur
+    `frontiere` : un `location` refusé n'a jamais bougé la position). Les
+    horloges dramatiques (I-093, brique ultérieure) n'existent pas encore
+    dans l'état : rien à lire, rien à lister — cette liste s'étendra avec
+    elles sans changer la forme du record."""
+    out: list[str] = []
+    partition_dir = _partition_dir_for(store)
+    if partition_dir is None or not dernier_noeud:
+        return out
+    try:
+        from .converter.aval import get_node
+        meta = get_node(partition_dir, dernier_noeud)["meta"]
+    except (OSError, ValueError, KeyError):
+        return out
+    objectif = str(meta.get("objectif_md", "")).strip()
+    if objectif:
+        out.append(f"visée non résolue : {objectif}")
+    ids = [str(l["cible_id"]) for l in (meta.get("liens") or []) if l.get("cible_id")]
+    ids += [str(d["cible_id"]) for d in (meta.get("debouches") or []) if d.get("cible_id")]
+    seen: set = set()
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            out.append(f"débouché ouvert : {i}")
+    return out
+
+
+def cloturer_seance(store, raison: str, dernier_noeud: str,
+                    tour_fin: int | None = None) -> dict | None:
+    """F0.3 (Issue #331), point (b) : écrit le record `seance` de clôture —
+    appelée par `tools/banc/cloturer_seance.py` quand `detecter_fin.py`
+    constate `fin_module` (raison="terminal") ou `frontiere`
+    (raison="frontiere"). Guichet unique d'écriture (même discipline que
+    `location_refusal_events` ci-dessus) : jamais un écrit direct de
+    fichier, toujours `store.set_world_state`. `rpg.frontiere` N'EST PAS
+    effacé ici (D-282 règle 2 le laisse posé) — voir
+    `consommer_frontiere_ouverture`, qui le fait à l'ouverture de la séance
+    SUIVANTE, pas avant (Issue #331 (b)).
+
+    Idempotent — un appel répété (le banc relit l'état à chaque tour tant
+    que la partie ne s'arrête pas) sur une séance déjà close pour ce
+    `tour_fin` ne duplique rien, rend None."""
+    if raison not in SEANCE_RAISONS:
+        raise ValueError(f"raison de clôture inconnue : {raison!r}")
+    state = store.world_state()
+    tour_fin = len(store.turns()) if tour_fin is None else tour_fin
+    seances = state.get("seances")
+    if not isinstance(seances, list):
+        seances = state["seances"] = []
+    if seances and seances[-1].get("tour_fin") == tour_fin:
+        return None   # déjà close pour ce tour (idempotence)
+    numero = len(seances) + 1
+    tour_debut = (seances[-1]["tour_fin"] + 1) if seances else 1
+    record = {
+        "numero": numero,
+        "tour_debut": tour_debut,
+        "tour_fin": tour_fin,
+        "raison": raison,
+        "dernier_noeud_franchi": dernier_noeud,
+        "en_suspens": _en_suspens_mecanique(store, dernier_noeud),
+    }
+    seances.append(record)
+    store.set_world_state(state)
+    return record
+
+
+def seance_reprise(state: dict, tour_courant: int) -> dict | None:
+    """F0.3 (Issue #331), point (c) : la dernière séance close, SEULEMENT au
+    premier tour qui la suit (`tour_courant == tour_fin + 1`) — jamais avant
+    (la séance n'est pas encore close), jamais après (la section disparaît
+    dès le tour suivant, D-282 §« volatile » — rien d'horodaté dans une
+    section stable, revue de #326). Lu par `assembleur_position.py` pour la
+    section « Reprise de séance » et par `consommer_frontiere_ouverture`
+    ci-dessous — la même garde pour les deux."""
+    seances = state.get("seances")
+    if not isinstance(seances, list) or not seances:
+        return None
+    last = seances[-1]
+    if tour_courant != last.get("tour_fin", -1) + 1:
+        return None
+    return last
+
+
+def consommer_frontiere_ouverture(store, state: dict, tour_courant: int) -> None:
+    """F0.3 (Issue #331), point (b) : `rpg.frontiere` reste posé jusqu'à
+    l'ouverture de la séance SUIVANTE (jamais effacé à la clôture même,
+    voir `cloturer_seance`) — consommé ici, au premier tour qui suit une
+    clôture `frontiere` (même garde que `seance_reprise`). Appelée depuis
+    `assembleur_position.assemble()`, LE point d'entrée Director (jamais
+    depuis `build_sections`, réutilisé tel quel par le paquet du narrateur —
+    `mcp_server.py::paquet_narrateur` — qui n'écrit jamais l'état)."""
+    reprise = seance_reprise(state, tour_courant)
+    if reprise is None or reprise.get("raison") != "frontiere":
+        return
+    rpg = state.get("rpg")
+    if isinstance(rpg, dict) and "frontiere" in rpg:
+        del rpg["frontiere"]
+        store.set_world_state(state)
+
+
 def apply_world(store, env: dict) -> list[str]:
     """Apply the validated world-level deltas (clock / flags / player location).
     Runs regardless of the RPG toggle — the world exists in every mode. Returns
