@@ -141,7 +141,11 @@ def apply_envelope(envelope: str, rpg_on: bool = True) -> list[str]:
     # Degraded path — engine unavailable. Plays, but writes no canon events.
     stats = list(rpg_mod.cfg_get(mcp_server._rpg_cfg, "stats"))
     clean, rejected = mcp_server.validator_mod.validate(env, store, stats=stats)
-    events = [f"validator: dropped {r['delta']} — {r['reason']}" for r in rejected]
+    # D-282 règle 1 (Issue #311) — même split que le chemin engine ci-dessus.
+    events = [f"validator: dropped {r['delta']} — {r['reason']}"
+             for r in rejected if r["delta"] != "location"]
+    events += mcp_server.validator_mod.location_refusal_events(
+        store, rejected, log_turn=len(store.turns()) + 1)
     events += mcp_server.validator_mod.apply_world(store, clean)
     deltas = clean.get("deltas") or {}
     for slug in deltas.get("reveal", []):

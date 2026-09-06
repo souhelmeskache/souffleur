@@ -76,13 +76,23 @@ assert any("type change" in r["reason"] for r in r8)
 print("5) flags keep their type once set; new flags accepted")
 
 # ---- 6) apply_world: clock/flags/location + events ----
+# D-282 (Issue #311) : `store` porte ICI aucune partition — `location` est
+# désormais REFUSÉ à validate() (texte libre hors partition, D-282 règle 1 ;
+# voir tests/test-guichet-position-d282-i311.py pour la couverture complète
+# node id/lieu enregistré/monde vide). `apply_world` lui-même reste testé
+# directement sur un `clean` construit à la main : il n'a jamais validé quoi
+# que ce soit (split déjà en place, `location_refusal_events` porte le refus).
 env9 = {"v": 1, "deltas": {"time_advance": {"days": 1, "phase": "evening",
                                             "weather": "rain"},
                            "flag_set": {"bridge_out": True},
                            "location": "Blackwood Tavern"}}
 c9, r9 = V.validate(env9, store)
-assert not r9
-ev = V.apply_world(store, c9)
+assert any(r["delta"] == "location" for r in r9), r9
+assert "location" not in c9.get("deltas", {}), c9
+ev = V.apply_world(store, {"deltas": {
+    "time_advance": {"days": 1, "phase": "evening", "weather": "rain"},
+    "flag_set": {"bridge_out": True},
+    "location": "blackwood-tavern"}})
 st = store.world_state()
 assert st["time"]["day"] == 2 and st["time"]["weather"] == "rain"
 assert st["flags"]["bridge_out"] is True
@@ -90,7 +100,9 @@ assert st["player"]["location"] == "blackwood-tavern"          # slugified
 assert any(e.startswith("time →") for e in ev)
 assert any(e.startswith("location →") for e in ev)
 assert "rain" in store.clock_str()
-print("6) apply_world: clock+weather+flag+location committed; clock_str shows weather")
+print("6) location refusée hors partition (D-282) ; apply_world lui-même "
+     "toujours pur (clock+weather+flag+location committed; clock_str "
+     "shows weather)")
 
 # ---- 7) lazy migration: an old-shape state.json gains the W1 keys on read ----
 old = lib.store(lib.create_story("Old", "An old save."))
