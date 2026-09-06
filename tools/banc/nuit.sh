@@ -653,12 +653,16 @@ agent_est_bloque() {
 }
 
 # "1" si un des deux panes de la partie affiche un texte de limite de
-# session/usage, vide sinon.
+# session/usage, vide sinon. Nuit N2 (2026-09-05, 23:07) : Claude Code
+# affiche un AVERTISSEMENT « You've used 90% of your session limit · resets
+# 11:10pm » qui n'est pas la limite — le banc a coupé toute la nuit trois
+# minutes avant la réinitialisation. Les lignes « used N% of your … limit »
+# sont donc écartées avant le test.
 limite_session_detectee() {
   local p
   for p in "$PANE_MJ_COURANT" "$PANE_JOUEUR_COURANT"; do
     [ -n "$p" ] || continue
-    if herdr pane read "$p" --lines 60 2>/dev/null | grep -qiE 'session limit|usage limit'; then
+    if herdr pane read "$p" --lines 60 2>/dev/null | grep -viE 'used [0-9]+% of your' | grep -qiE 'session limit|usage limit'; then
       echo 1; return 0
     fi
   done
@@ -829,7 +833,7 @@ ecrire_resume_run() {
   {
     echo "# resume-run — partie $pnn"
     echo
-    echo "casting: joueur=haiku(low) director=$modele(medium) narrateur=haiku"
+    echo "casting: joueur=haiku(low) director=$modele(medium) narrateur=haiku profil=${PROFIL_COURANT:-guerrier}"
     # paire (#282) : numéro de la paire Director/joueur qui a joué cette
     # partie — "01" en séquentiel (une seule paire) ; suffixe réel du
     # dossier bench/nuit-AAAAMMJJ/partie-NN/ le cas échéant en parallèle.
@@ -1040,8 +1044,15 @@ jouer_partie() {
   rm -rf "$save_dest"
   cp -r "$SAVE_SRC_DIR" "$save_dest"
 
-  echo "=== partie $pnn : fixture personnage (#257) ==="
-  if ! python "$FIXTURE_PY" "$save_dest" > "$partie_dir/fixture.log" 2>&1; then
+  # Profil de personnage tournant selon le numéro ABSOLU de partie (nuit
+  # 2026-09-06 : un seul profil « guerrier » jusque-là — toutes les parties
+  # rejouaient le même personnage). Relu dans resume-run.md (casting).
+  # `--force` : la save de départ porte déjà le guerrier (Mika Thorne) —
+  # sans lui, la fixture refuse d'installer un autre profil (mesuré 06/09).
+  local profils=(guerrier eclaireur erudit)
+  PROFIL_COURANT="${profils[$(( (partie_num - 1) % ${#profils[@]} ))]}"
+  echo "=== partie $pnn : fixture personnage (#257, profil=$PROFIL_COURANT) ==="
+  if ! python "$FIXTURE_PY" "$save_dest" --profil "$PROFIL_COURANT" --force > "$partie_dir/fixture.log" 2>&1; then
     raison="fixture"
     ecrire_craquement "$partie_dir" "00" "fixture" "$(cat "$partie_dir/fixture.log")"
     craquements+=("craquement-fixture-00.md")
