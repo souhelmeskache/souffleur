@@ -247,10 +247,33 @@ de code, une PR ouverte est l'état normal du dépôt, #297, seconde moitié
 de #292) ; envoi à blanc des deux gabarits rendus vers un
 agent inexistant — #263,
 `tools/banc/verifier-envoi-gabarits.ps1` — REFUS si l'un des deux casse
-l'échappement de l'envoi plutôt que de rendre `agent_not_found`) →
+l'échappement de l'envoi plutôt que de rendre `agent_not_found`) → **run de
+fumée obligatoire** (#313, décision Souhel 06/09, I-468 point 3 : « le banc
+se prouve sur lui-même avant de mesurer le jeu ») →
 `tools/banc/nuit.sh -Director sonnet -FinA 06:00` (défauts — un argument
 passé au `.cmd` les remplace intégralement, ex. `.\tools\banc\nuit.cmd
 -Parties 8 -Director ab`) → affiche le chemin de `nuit.md` produit.
+
+### Run de fumée obligatoire avant chaque nuit (#313)
+
+Avant de lancer la nuit elle-même, `nuit.cmd` lance d'abord
+`tools/banc/nuit.sh -Parties 1 -Paires 1 -Director sonnet -Tours 3 -RunDir
+<dossier temporaire dédié>` — une paire Director/joueur réelle, 3 tours,
+**jamais** dans `bench/nuit-AAAAMMJJ/` (ce dossier reste celui de la vraie
+nuit, cf. #309). Le verdict (`tools/banc/verifier-fumee-avant-nuit.sh`,
+purement mécanique, aucun LLM) exige les 3 `prose-NN.md` de `partie-01/` non
+vides et aucun `craquement-*.md` : si le run craque (timeout, sortie de
+processus, prose absente) ou ne produit pas les 3 tours, la nuit **ne se
+lance pas** — le motif est écrit dans
+`bench/nuit-AAAAMMJJ/.arret-nuit/raison` (même dossier/convention que
+`ARRET_DIR` de `nuit.sh` en mode `-Paires > 1`) et `nuit.cmd` sort en
+erreur.
+
+Limite assumée, mesurée N0→N2-bis : ce garde n'attrape que ce qui casse dès
+le tour 1 (N0 : zéro tour ; N1 : Haiku au tour 1) — il n'aurait attrapé ni
+le faux positif de limite de session (#312), ni un no-op de fixture, ni une
+saturation Haiku tardive (tour 14+). Coût : ~3 tours de jetons et ~6 min par
+soir.
 
 **Le matin** : ouvrir un fil et dire « lis la nuit » — Claude relit
 `bench/nuit-AAAAMMJJ/nuit.md` et les `resume-run.md` de chaque partie.
