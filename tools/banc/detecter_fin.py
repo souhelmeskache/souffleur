@@ -1,5 +1,5 @@
 """tools/banc/detecter_fin.py — détection MÉCANIQUE de la fin d'une partie
-de nuit (Issue #306).
+de nuit (Issue #306 ; frontière D-282, Issue #311).
 
 `nuit.sh` ne connaissait jusqu'ici qu'un seul proxy de fin : le joueur mort
 (`rpg.player.conditions` contient `"dead"`). Une partie qui n'atteint jamais
@@ -12,6 +12,11 @@ séparée — `coderain/validator.py::current_location` + le pointeur
 `module.json` → partition → `nodes/<id>.md`) et statue, toujours sans LLM,
 sans jugement narratif :
 
+- **frontiere** (D-282 règle 2, Issue #311) : l'état porte
+  `rpg.frontiere` — LA garde (`coderain/validator.py::location_refusal_events`)
+  a refusé un `location` hors partition (texte libre) ; la mesure #311 l'a
+  constaté sur `bench/nuit-20260906/partie-04` — 120 tours sur un slug de
+  prose, jamais un id de nœud/lieu de la partition ;
 - **mort** : `rpg.player.conditions` contient `"dead"` (proxy historique,
   inchangé) ;
 - **fin_module** : le nœud courant a `liens: []`, porte une
@@ -24,10 +29,17 @@ sans jugement narratif :
   (`eligible()` de `assembleur_position.py` refuserait aussi ce chemin), le
   nœud est introuvable, ou il porte encore des liens/n'a pas de charnière.
 
-`noeud` (l'id du nœud courant, ou None si aucune position lisible) est
-toujours rendu, fin atteinte ou non — c'est la mesure de PROGRESSION que
-`nuit.sh` écrit dans chaque `resume-run.md` (#306), quelle que soit la
-raison de sortie (tours_max, craquement, FinA).
+`noeud` (D-282 règle 5, Issue #311) : le dernier nœud FRANCHI (un débouché
+ou un lien suivi — un `location` VALIDÉ de `memory/events.jsonl` qui vise un
+id de nœud de la partition), **jamais la position courante** — une save
+dont le premier `location` a été refusé (frontière posée au tour 1) n'a
+FRANCHI aucun nœud, quelle que soit la valeur tentée. Sans franchissement
+lisible (aucun `memory/events.jsonl`, ou aucun `location` vers un nœud
+dedans), replie sur `_NOEUD_ENTREE` (l'entrée du module — la position de
+départ, jamais franchie mais jamais vide non plus). Rendu à toute sortie,
+fin atteinte ou non — c'est la mesure de PROGRESSION que `nuit.sh` écrit
+dans chaque `resume-run.md` (#306), quelle que soit la raison de sortie
+(tours_max, craquement, FinA).
 
 Usage :
     python tools/banc/detecter_fin.py <save_dir>
@@ -37,7 +49,7 @@ rend simplement `fin: non` / `noeud: (aucun)`, jamais une erreur qui
 craquerait la partie). Sur stdout, deux lignes en forme fixe (parseur
 tolérant `grep`/`sed`, même convention que `resume-run.md`) :
 
-    fin: non|mort|fin_module
+    fin: non|mort|fin_module|frontiere
     noeud: <id>|(aucun)
 """
 from __future__ import annotations
@@ -83,31 +95,68 @@ def _partition_dir(save_dir: Path) -> Path | None:
     return Path(partition) if partition else None
 
 
+def _dernier_noeud_franchi(save_dir: Path, partition_dir: Path | None) -> str | None:
+    """D-282 règle 5 (Issue #311) : le dernier `location` VALIDÉ de
+    `memory/events.jsonl` qui vise un id de nœud de la partition (un
+    débouché ou un lien suivi) — un `location` vers un lieu enregistré
+    (record classe `lieu`, pas un fichier `nodes/*.md`) n'est pas un
+    franchissement de nœud. None si le journal est absent/muet — jamais une
+    erreur qui craquerait la mesure."""
+    if partition_dir is None:
+        return None
+    path = save_dir / "memory" / "events.jsonl"
+    if not path.exists():
+        return None
+    dernier = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        loc = ((rec.get("env") or {}).get("deltas") or {}).get("location")
+        if loc and (partition_dir / "nodes" / f"{loc}.md").exists():
+            dernier = str(loc)
+    return dernier
+
+
 def evaluer(save_dir: str | Path) -> dict:
-    """Rend `{"fin": "non"|"mort"|"fin_module", "noeud": str | None}`."""
+    """Rend `{"fin": "non"|"mort"|"fin_module"|"frontiere", "noeud": str | None}`."""
     save_dir = Path(save_dir)
     state = _lire_json(save_dir / "state.json")
+    partition_dir = _partition_dir(save_dir)
+
+    noeud = _dernier_noeud_franchi(save_dir, partition_dir) or _NOEUD_ENTREE
 
     conds = ((state.get("rpg") or {}).get("player") or {}).get("conditions") or []
-    location = validator_mod.current_location(state) or None
-
     if "dead" in conds:
-        return {"fin": "mort", "noeud": location}
+        return {"fin": "mort", "noeud": noeud}
+
+    location = validator_mod.current_location(state) or None
+    if location and partition_dir is not None:
+        # fin_module PRIME sur un `rpg.frontiere` posé plus tôt (revue PR
+        # #326) : le drapeau n'est jamais effacé une fois posé (D-282 règle
+        # 2 ne le demande pas), donc une save qui s'est corrigée APRÈS un
+        # refus et a fini par atteindre le nœud terminal ne doit pas rester
+        # bloquée sur `frontiere` — la position COURANTE, plus récente que
+        # le drapeau, tranche. En pratique `nuit.sh` arrête déjà la boucle
+        # du banc dès le premier `frontiere` (aucun tour ne se rejoue après),
+        # ce test défend la lecture directe de `evaluer()` sur une save qui
+        # a continué hors de ce chemin (session interactive, reprise).
+        meta = _read_json_front(partition_dir / "nodes" / f"{location}.md")
+        liens = meta.get("liens") or []
+        charniere = meta.get("charniere_sortie")
+        if location != _NOEUD_ENTREE and not liens and charniere:
+            return {"fin": "fin_module", "noeud": noeud}
+
+    if (state.get("rpg") or {}).get("frontiere"):
+        return {"fin": "frontiere", "noeud": noeud}
 
     if not location:
-        return {"fin": "non", "noeud": None}
+        return {"fin": "non", "noeud": noeud if partition_dir else None}
 
-    partition_dir = _partition_dir(save_dir)
-    if partition_dir is None:
-        return {"fin": "non", "noeud": location}
-
-    meta = _read_json_front(partition_dir / "nodes" / f"{location}.md")
-    liens = meta.get("liens") or []
-    charniere = meta.get("charniere_sortie")
-    if location != _NOEUD_ENTREE and not liens and charniere:
-        return {"fin": "fin_module", "noeud": location}
-
-    return {"fin": "non", "noeud": location}
+    return {"fin": "non", "noeud": noeud}
 
 
 def main(argv: list[str]) -> int:

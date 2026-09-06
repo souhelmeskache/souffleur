@@ -798,8 +798,14 @@ class Engine:
         when applying before that turn is appended (the quad pipeline does)."""
         stats = list(sidecar_mod.cfg_get(self.cfg.rpg, "stats"))
         clean, rejected = validator_mod.validate(env, self.store, stats=stats)
+        # D-282 règle 1 (Issue #311) : un `location` refusé porte sa propre
+        # réponse enrichie (position courante + sorties + raison) via
+        # `location_refusal_events` — pas le message générique ci-dessous,
+        # qui resterait muet sur la frontière posée.
         events = [f"validator: dropped {r['delta']} — {r['reason']}"
-                  for r in rejected]
+                  for r in rejected if r["delta"] != "location"]
+        events += validator_mod.location_refusal_events(
+            self.store, rejected, log_turn=log_turn)
         events += validator_mod.apply_world(self.store, clean)
         events += self._apply_reveals(clean)
         events += self._apply_quest_canon(clean)

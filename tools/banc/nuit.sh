@@ -777,16 +777,22 @@ attendre_fichier() {
   return 0
 }
 
-# Détection MÉCANIQUE de fin de partie (#306) — remplace l'ancien proxy
-# joueur-mort-seul : vrai désormais si (a) joueur mort (`rpg.player.conditions`
-# contient "dead", proxy historique inchangé), OU (b) le nœud courant de la
-# save (même lecture que coderain/assembleur_position.py — position +
-# module.json → partition → nodes/<id>.md) est un nœud TERMINAL de la
-# partition (`liens: []` + `charniere_sortie` présente, id != "avant-propos").
-# Voir tools/banc/detecter_fin.py — aucun LLM, aucun jugement narratif (hors
-# périmètre #260/#306 : "aucun LLM dans le script"). Rend deux GLOBALES,
-# relues par l'appelant (une fonction bash ne peut pas rendre deux valeurs) :
-# - FIN_COURANTE : "non"|"mort"|"fin_module".
+# Détection MÉCANIQUE de fin de partie (#306 ; frontière D-282, #311) —
+# remplace l'ancien proxy joueur-mort-seul : vrai désormais si (a) joueur
+# mort (`rpg.player.conditions` contient "dead", proxy historique inchangé),
+# (b) le nœud courant de la save (même lecture que
+# coderain/assembleur_position.py — position + module.json → partition →
+# nodes/<id>.md) est un nœud TERMINAL de la partition (`liens: []` +
+# `charniere_sortie` présente, id != "avant-propos"), OU (c) le guichet
+# (`coderain/validator.py::location_refusal_events`) a posé `rpg.frontiere` —
+# un `location` hors partition (texte libre) refusé, D-282 règle 1/2 : ici on
+# s'arrête au signal (la clôture de séance en jeu, I-093, reste une brique
+# séparée — ceci n'arrête que la BOUCLE MÉCANIQUE du banc, pas la partie
+# elle-même). Voir tools/banc/detecter_fin.py — aucun LLM, aucun jugement
+# narratif (hors périmètre #260/#306 : "aucun LLM dans le script"). Rend deux
+# GLOBALES, relues par l'appelant (une fonction bash ne peut pas rendre deux
+# valeurs) :
+# - FIN_COURANTE : "non"|"mort"|"fin_module"|"frontiere".
 # - NOEUD_ATTEINT_COURANT : id du nœud courant, ou "(aucun)" si aucune
 #   position lisible — LA mesure de progression écrite dans resume-run.md à
 #   chaque sortie (tours_max, craquement, fin de partie), pas seulement fin
@@ -1210,13 +1216,15 @@ jouer_partie() {
     tours_joues=$tour
     echo "=== partie $pnn tour $nn joué $(date '+%H:%M:%S')"
 
-    # Détection MÉCANIQUE de fin (#306) : mort du joueur OU nœud terminal de
-    # la partition (liens: [] + charniere_sortie, id != avant-propos) — voir
-    # detecter_fin_partie ci-dessus. NOEUD_ATTEINT_COURANT est relu même
-    # quand FIN_COURANTE reste "non" (mesure de progression, écrite dans
-    # resume-run.md à toute sortie, pas seulement fin atteinte).
+    # Détection MÉCANIQUE de fin (#306 ; frontière D-282, #311) : mort du
+    # joueur, nœud terminal de la partition (liens: [] + charniere_sortie,
+    # id != avant-propos), OU rpg.frontiere posé (location refusé hors
+    # partition) — voir detecter_fin_partie ci-dessus. NOEUD_ATTEINT_COURANT
+    # est relu même quand FIN_COURANTE reste "non" (mesure de progression,
+    # écrite dans resume-run.md à toute sortie, pas seulement fin atteinte).
     detecter_fin_partie "$save_dest"
-    if [ "$FIN_COURANTE" = "mort" ] || [ "$FIN_COURANTE" = "fin_module" ]; then
+    if [ "$FIN_COURANTE" = "mort" ] || [ "$FIN_COURANTE" = "fin_module" ] \
+       || [ "$FIN_COURANTE" = "frontiere" ]; then
       fin_atteinte="O"
       raison="$FIN_COURANTE"
       break

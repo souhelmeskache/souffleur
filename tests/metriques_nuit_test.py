@@ -64,13 +64,21 @@ def main() -> int:
         # --- 4. calculer() sur une arborescence de run synthétique ----------
         # #306 : partie-01 a atteint un nœud terminal (raison_arret:
         # fin_module, noeud_final) ; partie-02 a épuisé -Tours sans fin,
-        # portant quand même noeud_atteint (mesure de progression).
+        # portant quand même noeud_atteint (mesure de progression) ; #311 :
+        # partie-03 a vu la garde de position poser rpg.frontiere (nuit.sh
+        # arrête la boucle du banc au signal, fin_atteinte: O, noeud_final).
         run_dir = tmp / "nuit-20260101"
         for pnn, n_prose, fin, raison, noeud_champ, noeud, evs in (
             ("01", 3, "O", "fin_module", "noeud_final", "para-60",
              [{"turn": 1, "type": "bouchage_enregistre"}]),
             ("02", 5, "N", "tours_max", "noeud_atteint", "para-12",
              [{"turn": 1, "type": "attack", "error": "x"}]),
+            # D-282 (Issue #311) : partie-03 a vu son premier `location`
+            # refusé (frontière posée) — `nuit.sh` arrête la boucle du banc
+            # au signal (fin_atteinte: O, comme mort/fin_module) ;
+            # sous-ensemble disjoint de complètes/mortes, compté à part dans
+            # `parties_frontiere`.
+            ("03", 1, "O", "frontiere", "noeud_final", "avant-propos", []),
         ):
             partie_dir = run_dir / f"partie-{pnn}"
             (partie_dir / "save" / "memory").mkdir(parents=True)
@@ -84,21 +92,25 @@ def main() -> int:
                 "\n".join(json.dumps(e) for e in evs) + "\n", encoding="utf-8")
 
         m = metriques_nuit.calculer(run_dir)
-        assert m["parties_lancees"] == 2, m
-        assert m["parties_finies"] == 1, m
+        assert m["parties_lancees"] == 3, m
+        assert m["parties_finies"] == 2, m  # fin_module + frontiere
         assert m["parties_completes"] == 1, m
         assert m["parties_mortes"] == 0, m
-        assert m["tours_median"] == 4, m  # médiane de [3, 5]
+        assert m["parties_frontiere"] == 1, m
+        assert m["tours_median"] == 3, m  # médiane de [3, 5, 1]
         assert m["bouchages"] == 1, m
         assert m["refus_outil"] == 1, m
-        assert m["tours_par_noeud"] == {"para-60": 3, "para-12": 5}, m
+        assert m["tours_par_noeud"] == {
+            "para-60": 3, "para-12": 5, "avant-propos": 1}, m
         print("4) calculer() sur arborescence synthétique : "
               f"{m['parties_finies']}/{m['parties_lancees']} finies, "
               f"{m['parties_completes']} complète(s) (#306), "
+              f"{m['parties_frontiere']} frontière (#311), "
               f"médiane {m['tours_median']}")
 
         rendu = metriques_nuit.formater_markdown(m)
-        assert "1 / 2" in rendu, rendu
+        assert "2 / 3" in rendu, rendu
+        assert "1 / 0 / 1" in rendu, rendu  # complètes / mortes / frontière
         assert "para-60" in rendu and "para-12" in rendu, rendu
         print("5) formater_markdown() : rendu Markdown cohérent avec calculer()")
     finally:

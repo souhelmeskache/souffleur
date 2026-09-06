@@ -28,9 +28,18 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 `engine.py::_augment_rpg`/`_augment_style` composaient ce
                 contenu APRÈS elles avant ce correctif, cassant le préfixe
                 cachable pour rien — `docs/mesure-d260-boucle-neuve.md`)
-  6. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
+  6. VOLATILE — position (D-282, Issue #311) : les trois axes (scène/lieu/
+                temps, chacun pouvant être vide) + ids sortants du nœud
+                courant + drapeau terminal (`liens: []` + `charniere_sortie`)
+                — la même lecture que `tools/banc/detecter_fin.py`, jamais
+                une resélection séparée. VOLATILE et non stable (revue PR
+                #326) : porte l'horloge, qui avance sur un `time_advance`
+                SANS transition de node — rangée avec les sections
+                volatiles ci-dessous, JAMAIS avant, pour ne jamais couper
+                le préfixe stable en deux
+  7. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
                 contre l'état courant) — jamais `event_rules_block()` entier
-  7. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
+  8. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
                 lane c, Issue #131 : `memory/scenario-courant.md` — jamais les
                 scènes brutes d'un scénario fermé, `summarizer.fermer_scenario`
                 le vide à la fermeture)
@@ -143,6 +152,54 @@ def _current_node_section(partition_dir: Path, store: MemoryStore,
     title = entry.title if entry is not None else location
     return Section("stable", f"Scène courante — {title}",
                    "\n\n".join(parts))
+
+
+def _position_section(partition_dir: Path, store: MemoryStore,
+                      location: str) -> Section:
+    """D-282 (Issue #311, point 3) : le paquet du Director porte, À CHAQUE
+    TOUR, la position sur ses trois axes (scène/lieu/temps — chacun peut
+    être vide, D-282 §1) + les ids sortants du nœud courant (liens +
+    débouchés) + le drapeau terminal (`liens: []` + `charniere_sortie`) —
+    jamais une recomposition que le Director referait lui-même depuis
+    `module_get_node`. `location` n'est JAMAIS du texte libre (la garde du
+    guichet, `validator.py::_valid_location`, D-282 règle 1) : soit un id de
+    `nodes[]` (axe scène), soit un id de `records[]` classe `lieu` (axe
+    lieu) — jamais les deux à la fois, ce delta restant SINGULIER (brique 1,
+    l'extension de `prerequis_etat` aux trois axes, hors périmètre)."""
+    try:
+        from .converter.aval import load_partition
+        idx = load_partition(partition_dir)
+    except (OSError, ValueError, KeyError):
+        idx = {}
+    node_ids = {str(n.get("id")) for n in idx.get("nodes", [])}
+    lieu_ids = {str(r.get("id")) for r in idx.get("records", [])
+               if r.get("classe") == "lieu"}
+    scene = location if location in node_ids else ""
+    lieu = location if location in lieu_ids else ""
+    temps = store.clock_str()
+    meta = _read_json_front(Path(partition_dir) / f"nodes/{scene}.md") if scene else {}
+    sorties = [str(l["cible_id"]) for l in (meta.get("liens") or [])
+              if l.get("cible_id")]
+    sorties += [str(d["cible_id"]) for d in (meta.get("debouches") or [])
+               if d.get("cible_id")]
+    terminal = bool(scene) and not (meta.get("liens") or []) \
+        and bool(meta.get("charniere_sortie"))
+    lignes = [
+        f"Scène : {scene or '(aucune)'}",
+        f"Lieu : {lieu or '(aucun)'}",
+        f"Temps : {temps or '(aucun)'}",
+        "Sorties possibles (décor — jamais un menu) : "
+        + (", ".join(sorties) if sorties else "(aucune)"),
+        f"Nœud terminal (liens: [] + charnière de sortie) : "
+        f"{'oui' if terminal else 'non'}",
+    ]
+    # VOLATILE, jamais stable (revue PR #326) : `temps` porte l'horloge
+    # (`store.clock_str()`), qui avance sur un `time_advance` SANS transition
+    # de node — une section stable ne doit jamais varier entre deux tours
+    # sans transition (exigence de préfixe cachable, voir docstring de
+    # module) ; l'horloge partage déjà cette contrainte dans
+    # `_world_and_queue_section` ci-dessous, pour la même raison.
+    return Section("volatile", "Position (D-282)", "\n".join(lignes))
 
 
 def rendu_md_for(partition_dir: str | Path, location: str) -> str:
@@ -312,6 +369,12 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     if response_length.strip():
         sections.append(Section("stable", "STYLE DIRECTIVES",
                                 f"- {response_length.strip()}"))
+    # VOLATILE (revue PR #326) : porte l'horloge (`temps`), qui avance sans
+    # transition de node — rangée avec les sections volatiles ci-dessous,
+    # JAMAIS avant, pour ne jamais couper le préfixe stable en deux (les
+    # sections stables doivent rester un bloc de tête contigu, seule forme
+    # qu'un fournisseur peut effectivement mettre en cache).
+    sections.append(_position_section(partition_dir, store, location))
     sections.append(_rule_verdicts_section(store, history, player_input))
     sections.append(_world_and_queue_section(store))
     if char_sheet.strip():

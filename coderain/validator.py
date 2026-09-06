@@ -17,7 +17,9 @@ RPG is off, exactly as before).
 from __future__ import annotations
 
 import copy
+import json
 import unicodedata
+from pathlib import Path
 
 ENVELOPE_VERSION = 1
 
@@ -252,10 +254,14 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
                 out[key] = got
         elif key == "location":
             loc = _slug(value)
-            if loc:
-                out[key] = loc
-            else:
+            if not loc:
                 _reject(rejected, key, value, "must be a location name/slug")
+            else:
+                ok, reason = _valid_location(loc, store)
+                if ok:
+                    out[key] = loc
+                else:
+                    _reject(rejected, key, value, reason)
         elif key == "reveal":
             got = _valid_reveal(value, store, rejected)
             if got:
@@ -694,6 +700,129 @@ def guard_world_state(state: dict) -> dict:
         if gold is not None and gold < 0:
             player["gold"] = 0
     return state
+
+
+def _partition_dir_for(store) -> Path | None:
+    """Même résolution que `Engine._partition_dir` / `mcp_server._module_partition`
+    / `tools/banc/detecter_fin.py::_partition_dir` (D-260, Issue #128) : le
+    pointeur save -> partition vit dans `module.json`, jamais une convention
+    de chemin devinée. Chaque lecteur en garde sa propre copie (même
+    convention que les trois autres) — `store` seul ne porte pas ce chemin."""
+    p = getattr(store, "dir", None)
+    if p is None:
+        return None
+    ptr = Path(p) / "module.json"
+    if not ptr.exists():
+        return None
+    try:
+        data = json.loads(ptr.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    partition = data.get("partition")
+    return Path(partition) if partition else None
+
+
+def _partition_index_for(store) -> dict | None:
+    """L'index de la partition chargée (`index.json` : nodes/records/...) ou
+    None sans partition/monde vide (#281) — jamais une exception qui
+    craquerait le tour."""
+    partition_dir = _partition_dir_for(store)
+    if partition_dir is None:
+        return None
+    try:
+        from .converter.aval import load_partition
+        return load_partition(partition_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _valid_location(loc: str, store) -> tuple[bool, str]:
+    """D-282 règle 1 (Issue #311) — LA GARDE : un delta `location` n'accepte
+    qu'une valeur qui EST, dans la partition chargée, un id de `nodes[]`
+    (la scène) ou un id de `records[]` de classe `lieu` (un lieu enregistré)
+    — jamais du texte libre. Le troisième axe de D-282 (le temps) porte déjà
+    son propre delta (`time_advance`) : ce guichet ne l'accepte pas ici,
+    l'extension à `prerequis_etat` restant hors périmètre de cette lane.
+    Sans partition chargée (monde vide, #281) : refus explicite, jamais un
+    passage silencieux."""
+    idx = _partition_index_for(store)
+    if idx is None:
+        return False, ("aucune partition chargée — position hors texte "
+                       "libre impossible à valider (D-282 règle 1)")
+    if loc in {str(n.get("id")) for n in idx.get("nodes", [])}:
+        return True, ""
+    if loc in {str(r.get("id")) for r in idx.get("records", [])
+              if r.get("classe") == "lieu"}:
+        return True, ""
+    return False, (f"{loc!r} n'est ni un id de nœud de la partition ni un "
+                   "lieu enregistré (D-282 règle 1) — jamais du texte libre")
+
+
+def _sorties_noeud_courant(store, state: dict) -> list[str]:
+    """Ids sortants (liens + débouchés) du nœud COURANT — servis dans la
+    réponse de refus (D-282 règle 1) comme dans le paquet du Director.
+    Liste vide sans nœud courant lisible (position vide, lieu plutôt que
+    nœud, ou pas de partition)."""
+    partition_dir = _partition_dir_for(store)
+    node_id = current_location(state)
+    if partition_dir is None or not node_id:
+        return []
+    try:
+        from .converter.aval import get_node
+        meta = get_node(partition_dir, node_id)["meta"]
+    except (OSError, ValueError, KeyError):
+        return []
+    ids = [str(l["cible_id"]) for l in (meta.get("liens") or [])
+          if l.get("cible_id")]
+    ids += [str(d["cible_id"]) for d in (meta.get("debouches") or [])
+           if d.get("cible_id")]
+    seen: set = set()
+    out = []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out
+
+
+def location_refusal_events(store, rejected: list[dict],
+                            log_turn: int | None = None) -> list[str]:
+    """D-282 règles 1/2 (Issue #311) : quand `validate()` a refusé un delta
+    `location` (position hors partition), CETTE fonction écrit ce que
+    `validate()` (pure, sans effet de bord) ne peut pas — même split que
+    `apply_world`/`_apply_reveals` :
+
+    - pose le drapeau de FRONTIÈRE dans l'état (`rpg.frontiere = {tour,
+      valeur_tentee}`), lu par `tools/banc/detecter_fin.py` comme fin de
+      partie `frontiere` ;
+    - trace le refus dans `memory/events.jsonl` (`type: position_refusee`,
+      valeur tentée + raison) — jamais silencieux ;
+    - rend la réponse humaine : position courante + ids sortants du nœud
+      courant + la raison (ce que le Director reçoit en retour).
+
+    Appelée par `Engine.apply_envelope`, LE guichet unique — jamais un
+    second point d'écriture."""
+    refus = [r for r in rejected if r.get("delta") == "location"]
+    if not refus:
+        return []
+    state = store.world_state()
+    tour = len(store.turns()) if log_turn is None else log_turn
+    courant = current_location(state) or "(aucune)"
+    sorties = _sorties_noeud_courant(store, state)
+    events: list[str] = []
+    rpg = state.get("rpg")
+    if not isinstance(rpg, dict):
+        rpg = state["rpg"] = {}
+    for r in refus:
+        rpg["frontiere"] = {"tour": tour, "valeur_tentee": r["value"]}
+        store.append_event_log({"turn": tour, "type": "position_refusee",
+                                "valeur_tentee": r["value"],
+                                "raison": r["reason"]})
+        events.append(
+            f"position refusée: {r['value']!r} — {r['reason']} "
+            f"(position courante: {courant}; sorties possibles: {sorties})")
+    store.set_world_state(state)
+    return events
 
 
 def apply_world(store, env: dict) -> list[str]:
