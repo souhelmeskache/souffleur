@@ -267,6 +267,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="dérive la vue moteur dans le save (D-179)")
     pj.add_argument("partition")
     pj.add_argument("--root", default=str(ROOT))
+    mf = sub.add_parser("mesure-f14",
+                        help="F1.4 (#342): débouchés/prérequis des nœuds "
+                             "scénario + signaux d'axe non déclarés")
+    mf.add_argument("partition")
+    mf.add_argument("--md", default=None,
+                    help="écrit aussi le rendu Markdown chiffres-seuls "
+                         "dans ce fichier")
     a = ap.parse_args(argv)
 
     if a.cmd in ("convert", "all"):
@@ -302,6 +309,19 @@ def main(argv: list[str] | None = None) -> int:
                              ensure_ascii=False, indent=1))
         if a.cmd == "install":
             return 0
+
+    if a.cmd == "mesure-f14":
+        from . import mesure_f14
+        report = mesure_f14.build_report(Path(a.partition))
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        if a.md:
+            Path(a.md).write_text(
+                mesure_f14.render_md(report,
+                                     partition_slug=Path(a.partition).name,
+                                     date=datetime.now(timezone.utc)
+                                     .date().isoformat()),
+                encoding="utf-8")
+        return 0
 
     if a.cmd == "doctor" or a.cmd == "all":
         from .install import doctor as do_doctor
