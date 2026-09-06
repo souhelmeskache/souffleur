@@ -43,6 +43,12 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 lane c, Issue #131 : `memory/scenario-courant.md` — jamais les
                 scènes brutes d'un scénario fermé, `summarizer.fermer_scenario`
                 le vide à la fermeture)
+  9. VOLATILE — reprise de séance (F0.3, Issue #331) : SEULEMENT au premier
+                tour qui suit une clôture de séance (`validator.seance_reprise`)
+                — numéro de la séance précédente, raison de clôture, dernier
+                nœud franchi, en_suspens ; absente sinon. Servie au Director
+                seul (`role_section=True`), jamais au paquet du narrateur
+                (`mcp_server.py::paquet_narrateur`, `role_section=False`).
 
 Le hors-position ne se charge pas d'avance : le Director le demande via
 `recall_queries` de son enveloppe (soupape déjà existante).
@@ -317,6 +323,26 @@ def _world_and_queue_section(store: MemoryStore) -> Section:
                    "\n".join(lines))
 
 
+def _reprise_section(store: MemoryStore, tour_courant: int) -> Section | None:
+    """F0.3 (Issue #331), point (c) : section VOLATILE, absente sauf au
+    premier tour qui suit une clôture de séance (`validator.seance_reprise`)
+    — jamais une reconstruction narrative, seulement les champs mécaniques
+    du record (D-282 §« volatile » : rien d'horodaté dans une section
+    stable, leçon de la revue de #326)."""
+    reprise = validator_mod.seance_reprise(store.world_state(), tour_courant)
+    if reprise is None:
+        return None
+    en_suspens = reprise.get("en_suspens") or []
+    lignes = [
+        f"Séance précédente : n°{reprise['numero']}",
+        f"Raison de clôture : {reprise['raison']}",
+        f"Dernier nœud franchi : {reprise['dernier_noeud_franchi']}",
+        "En suspens : " + ("; ".join(en_suspens) if en_suspens
+                           else "(rien de mécaniquement en attente)"),
+    ]
+    return Section("volatile", "Reprise de séance", "\n".join(lignes))
+
+
 def build_sections(partition_dir: str | Path, store: MemoryStore,
                    location: str, history: list[dict], player_input: str,
                    scenes_tail: int = 4, char_sheet: str = "",
@@ -380,6 +406,10 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     if char_sheet.strip():
         sections.append(Section("volatile", "Fiche de personnage",
                                 char_sheet.strip()))
+    if role_section:
+        reprise = _reprise_section(store, len(store.turns()))
+        if reprise is not None:
+            sections.append(reprise)
     return sections
 
 
@@ -416,6 +446,11 @@ def assemble(partition_dir: str | Path, store: MemoryStore, state: dict,
     `MemoryStore.assemble()` — le point d'appel choisit l'un ou l'autre
     selon `eligible()`, sans toucher au contrat du Director."""
     location = validator_mod.current_location(state)
+    # F0.3 (Issue #331) : ce point d'entrée EST le paquet du Director (jamais
+    # `build_sections` seul, réutilisé tel quel par le paquet du narrateur) —
+    # le seul endroit qui consomme `rpg.frontiere` à l'ouverture de la
+    # séance suivante (D-282 règle 2 le laisse posé jusque-là).
+    validator_mod.consommer_frontiere_ouverture(store, state, len(store.turns()))
     sections = build_sections(partition_dir, store, location, history,
                               player_input, scenes_tail, char_sheet, rpg_on,
                               secrets, rpg_rules, response_length)

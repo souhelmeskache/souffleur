@@ -49,6 +49,7 @@ METRIQUES_PY="$REPO_ROOT/tools/banc/metriques_nuit.py"
 EXTRAIRE_PROSE_PY="$REPO_ROOT/tools/banc/extraire_prose.py"
 ARBITRER_PROSE_PY="$REPO_ROOT/tools/banc/arbitrer_prose.py"
 DETECTER_FIN_PY="$REPO_ROOT/tools/banc/detecter_fin.py"
+CLOTURER_SEANCE_PY="$REPO_ROOT/tools/banc/cloturer_seance.py"
 VERIFIER_RESET_PY="$REPO_ROOT/tools/banc/verifier_reset.py"
 
 # Frontière bash ⊥ Windows (#270) : source la conversion partagée avec
@@ -491,6 +492,43 @@ arreter_sonde_ecran() {
 journal_ecran_role() {
   local partie_dir="$1" role="$2"
   tail -n 30 "$partie_dir/ecran-$role.log" 2>/dev/null
+}
+
+# Remplissage de fenêtre (I-469 §F0.4, Issue #332) — lecture MÉCANIQUE du
+# pourcentage de contexte que Claude Code affiche sur l'écran, jamais une
+# estimation : les motifs couverts ici (« NN% ... context », « context
+# left/used ... NN% ») n'ont PAS été confirmés contre un écran réel à la
+# date de cette lane (aucun run de nuit n'a tourné pendant son
+# développement) — voir la PR pour le détail et la capture demandée par
+# l'Issue. Un texte qui ne matche aucun motif rend une chaîne vide ;
+# `journaliser_fenetre` journalise alors "non lisible", jamais un chiffre
+# deviné.
+lire_pct_fenetre() {
+  local texte="$1"
+  printf '%s' "$texte" \
+    | grep -oiE 'context[^%]{0,40}[0-9]{1,3} *%|[0-9]{1,3} *% *(of )?context' \
+    | grep -oE '[0-9]{1,3}' | tail -1
+}
+
+# Journalise le remplissage de fenêtre du rôle $3 au tour $4 dans
+# `events.jsonl` de la save jouée ($2) — même fichier que le paquet (F0.4a),
+# lecture fraîche du pane $5 (`herdr pane read`, jamais la dernière ligne de
+# la sonde #305 qui peut dater de 10s). `pct` reste la chaîne "non lisible"
+# (jamais un entier) si le motif n'apparaît pas sur cet écran.
+journaliser_fenetre() {
+  local partie_dir="$1" save_dest="$2" role="$3" nn="$4" pane="$5"
+  local texte pct events
+  texte="$(herdr pane read "$pane" --lines 30 2>/dev/null)"
+  pct="$(lire_pct_fenetre "$texte")"
+  events="$save_dest/memory/events.jsonl"
+  mkdir -p "$(dirname "$events")"
+  if [[ "$pct" =~ ^[0-9]+$ ]]; then
+    printf '{"type": "fenetre", "turn": %d, "role": "%s", "pct": %d}\n' \
+      "$((10#$nn))" "$role" "$pct" >> "$events"
+  else
+    printf '{"type": "fenetre", "turn": %d, "role": "%s", "pct": "non lisible"}\n' \
+      "$((10#$nn))" "$role" >> "$events"
+  fi
 }
 
 fermer_panes() {
@@ -956,6 +994,13 @@ detecter_fin_partie() {
   sortie="$(python "$DETECTER_FIN_PY" "$save_dir_win" 2>/dev/null)"
   FIN_COURANTE="$(printf '%s\n' "$sortie" | grep '^fin:' | sed 's/^fin: *//')"
   NOEUD_ATTEINT_COURANT="$(printf '%s\n' "$sortie" | grep '^noeud:' | sed 's/^noeud: *//')"
+  # F0.3 (Issue #331) : sur fin_module/frontiere, écrit le record `seance`
+  # de clôture via l'API de production (jamais un écrit direct de fichier —
+  # voir tools/banc/cloturer_seance.py). Idempotent, donc appelé à chaque
+  # relecture sans coût de duplication ; muet (>/dev/null) — la mesure de
+  # progression du banc reste FIN_COURANTE/NOEUD_ATTEINT_COURANT ci-dessus,
+  # jamais bloquée par ce geste annexe.
+  python "$CLOTURER_SEANCE_PY" "$save_dir_win" >/dev/null 2>&1 || true
   [ -n "$FIN_COURANTE" ] || FIN_COURANTE="non"
   [ -n "$NOEUD_ATTEINT_COURANT" ] || NOEUD_ATTEINT_COURANT="(aucun)"
 }
@@ -1343,6 +1388,11 @@ jouer_partie() {
       detecter_fin_partie "$save_dest"
       break
     fi
+
+    # Remplissage de fenêtre MJ (I-469 §F0.4, Issue #332) — journalisé APRÈS
+    # que tour-$nn.md soit confirmé (r=0 ci-dessus), donc pour CHAQUE tour
+    # joué avec succès, tour 1 inclus.
+    journaliser_fenetre "$partie_dir" "$save_dest" "mj" "$nn" "$PANE_MJ_COURANT"
 
     # Arbitrage MÉCANIQUE de prose-NN.md entre les deux voies du gabarit
     # (Issue #295) : voie extraction (PRIMAIRE, section « Prose du

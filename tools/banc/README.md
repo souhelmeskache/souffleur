@@ -1,8 +1,8 @@
 # tools/banc/ — scripts de veille du banc
 
 - `nuit.sh` / `nuit.cmd` / `verifier-avant-nuit.sh` / `metriques_nuit.py` /
-  `detecter_fin.py` : **banc de nuit N1** (#201, D-276 ; #260 ; #306) — voir
-  section dédiée ci-dessous.
+  `detecter_fin.py` / `cloturer_seance.py` : **banc de nuit N1** (#201, D-276 ;
+  #260 ; #306 ; #331) — voir section dédiée ci-dessous.
 - `fermer-workspace-banc.sh <label>` / `verifier-workspace-banc-vide.sh` :
   workspace herdr dédié au banc (#298) — voir § « Workspace dédié au banc »
   ci-dessous.
@@ -472,6 +472,20 @@ n'exigeront pas de réécrire ce script.
   05/09 16:43-17:00 — les deux runs qui ont survécu étaient les deux qui
   tournaient sous une sonde équivalente (deux observations ne prouvent
   rien, mais la sonde est gratuite).
+- **Remplissage de fenêtre MJ (I-469 §F0.4, Issue #332)** : après CHAQUE
+  tour joué avec succès, `nuit.sh::journaliser_fenetre` relit le pane MJ
+  (`herdr pane read`, frais — pas la dernière ligne de la sonde ci-dessus,
+  qui peut dater de 10s) et journalise le pourcentage de remplissage que
+  Claude Code affiche dans `events.jsonl` de la save jouée : `{"type":
+  "fenetre", "turn": N, "role": "mj", "pct": NN}`. Motif de lecture
+  (`lire_pct_fenetre`) NON CONFIRMÉ contre un écran réel à la date de sa
+  lane — testé sur un écran synthétique seulement (`tests/`
+  `nuit_fenetre_contexte_i469_test.py`) ; un texte sans motif lisible
+  journalise `"pct": "non lisible"`, jamais un chiffre deviné. Tranche, avec
+  la taille du paquet servi (`mcp_server._log_paquet`, même
+  `events.jsonl`, `type: paquet`), la contradiction « 83% au tour 1 » ⊥
+  « 53k jetons » (I-467) par un chiffre lu — colonnes correspondantes dans
+  `rapport-nuit.md` (`metriques_nuit.py::paquet_fenetre_par_partie`).
 - `-FinA HH:MM` (#276, heure locale du poste, défaut `06:00` dans
   `nuit.cmd`, pas de défaut dans `nuit.sh` seul) : plus aucune partie ne
   démarre après cette heure ; une partie en cours s'arrête proprement au
@@ -886,6 +900,15 @@ aucun agent réel -- même discipline que le reste de `-DryRun`.
   que ce soit un échec — et porte quand même `noeud_atteint: para-NN`, LA
   mesure de progression (à toute sortie de partie : tours_max, craquement,
   ou fin — voir `ecrire_resume_run`).
+- **La clôture de séance (F0.3, Issue #331) suit la même détection, sans
+  LLM** : `tools/banc/cloturer_seance.py`, appelé juste après
+  `detecter_fin_partie` à chaque relecture, écrit dans la save (via l'API de
+  production `coderain/validator.py::cloturer_seance` — jamais un écrit
+  direct de fichier) le record `seance` de clôture sur `fin_module`
+  (raison="terminal") ou `frontiere` (raison="frontiere") : numéro,
+  tour_debut/tour_fin, dernier nœud franchi, ce qui reste en_suspens
+  (visée + débouchés ouverts, mécaniquement lus). Idempotent — appelé à
+  chaque tour sans dupliquer le record une fois la séance close.
 - **Pas de protocole de tour 1 « froid »** : les gabarits gelés
   (`banc-mj.md`/`banc-joueur.md`, D-276 §4) supposent une reprise, pas un
   démarrage à vide. `nuit.sh` comble ce trou en envoyant le premier « go »
