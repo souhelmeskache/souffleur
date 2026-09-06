@@ -284,6 +284,22 @@ def validate_form(partition, partition_dir=None) -> list[str]:
         if sec_id and sec_id not in secret_ids:
             errors.append(f"record {r.id}: secret_lie_id inconnu {sec_id} — "
                           "zéro dangling (D-252.2)")
+
+    # 14) D-275 §6 (Issue #339, découpe (b) de #316) — la partition DÉCLARE
+    # ses combats (node.combats) ; le régime se dérive à froid du record
+    # `creature` cité (aval.extract_combats), jamais improvisé ici. Le seul
+    # garde de forme : une créature déclarée sans bloc de stats projeté
+    # (aucun record classe creature du même slug) est un refus NOMMÉ
+    # (nœud, slug), jamais un bouchage.
+    creature_ids = {r.id for r in partition.records if r.classe == "creature"}
+    for n in partition.nodes:
+        for decl in getattr(n, "combats", []) or []:
+            if decl["creature"] not in creature_ids:
+                errors.append(
+                    f"combat: node {n.id} déclare la créature "
+                    f"{decl['creature']!r} sans bloc de stats projeté "
+                    "(D-275 §6)")
+
     return errors
 
 

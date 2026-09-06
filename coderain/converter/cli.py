@@ -30,11 +30,13 @@ CORPUS = Path(os.environ.get(
 from coderain.converter import s1_local                      # noqa: E402
 from coderain.converter import validate_fidelity             # noqa: E402
 from coderain.converter import validate_form                 # noqa: E402
-from coderain.converter.aval import extract_checks, write_checks  # noqa: E402
+from coderain.converter.aval import (extract_checks, extract_combats,  # noqa: E402
+                                     write_checks)
 from coderain.converter.emit import write_partition          # noqa: E402
 from coderain.converter.exceptions import build, render_md, write_report  # noqa: E402
 from coderain.converter.ruletables import RuleTables         # noqa: E402
-from coderain.converter.schemas import Manifest, Partition, Record  # noqa: E402
+from coderain.converter.schemas import (Manifest, Partition,  # noqa: E402
+                                        Record, COMBAT_REGIME_HORS_VOCABULAIRE)
 from coderain.converter.validate_form import adventure_exceptions  # noqa: E402
 
 
@@ -129,6 +131,33 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
 
     checks = extract_checks(text, units)
 
+    # D-275 §6 (Issue #339, découpe (b) de #316) : la partition DÉCLARE ses
+    # combats — judgment fourni par combats-auteur.json ({node_id, creature,
+    # declencheur_md}), même tier que records-auteur.json (Record.tokens_
+    # initial est le pendant côté record : "où" ; ceci est "quand/pourquoi").
+    # Le régime n'est jamais lu depuis ce fichier — il se dérive à froid
+    # (aval.extract_combats) du record `creature` cité, jamais improvisé.
+    combats_rule_exceptions: list[str] = []
+    for candidate in (CORPUS / "combats-auteur.json",
+                      src.parent / "combats-auteur.json"):
+        if candidate.exists():
+            by_id = {n.id: n for n in partition.nodes}
+            for entry in json.loads(candidate.read_text(encoding="utf-8")):
+                nid = str(entry.get("node_id", ""))
+                node = by_id.get(nid)
+                if node is None:
+                    combats_rule_exceptions.append(
+                        f"combats-auteur: node cible inconnu {nid}")
+                    continue
+                try:
+                    node.attach_combats([{
+                        "creature": entry["creature"],
+                        "declencheur_md": entry["declencheur_md"]}])
+                except (KeyError, ValueError) as e:
+                    combats_rule_exceptions.append(
+                        f"combats-auteur {nid}: {e}")
+            break
+
     # adventure stage (D-178): judgment supplied as aventure-auteur.json in
     # the corpus home — trajectoire + perturbations structurées, world
     # conditions with their triggers, and the exit converted into a hinge
@@ -205,7 +234,8 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
             break
 
     write_partition(partition, out_dir)
-    write_checks(out_dir, checks)
+    combats = extract_combats(partition)
+    write_checks(out_dir, checks, combats)
     from .directeur import generate as gen_director
     gen_director(out_dir)
 
@@ -213,7 +243,7 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
     # ré-inclut déjà av.warnings
     seen: set[str] = set()
     merged_adventure_exceptions = []
-    for line in (adventure_rule_exceptions
+    for line in (adventure_rule_exceptions + combats_rule_exceptions
                  + adventure_exceptions(partition)):
         if line not in seen:
             seen.add(line)
@@ -240,6 +270,14 @@ def cmd_convert(src: Path, out_dir: Path, titre: str | None = None,
                                                             checks.values()),
            "tables": len(partition.tables),
            "out": str(out_dir)}
+    # D-275 §6 (Issue #339) — compte seul, jamais le contenu (D-109)
+    noeuds_declares = {c["noeud"] for c in combats}
+    res["combats"] = {
+        "noeuds_declares": len(noeuds_declares),
+        "noeuds_non_declares": len(partition.nodes) - len(noeuds_declares),
+        "hors_vocabulaire": sum(1 for c in combats
+                                if c["regime"] == COMBAT_REGIME_HORS_VOCABULAIRE),
+    }
     if gamebook_mesures is not None:
         res["route_gamebook"] = gamebook_mesures
     return res

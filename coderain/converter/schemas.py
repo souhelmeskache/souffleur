@@ -18,6 +18,14 @@ NODE_TYPES = ("chapitre", "section", "scene", "read_aloud")
 ALTITUDES = ("scene", "scenario", "adventure")
 ETAGE_GLOBAL = "adventure"      # déclaré dans le manifest
 RECORD_CLASSES = ("creature", "pnj", "objet", "lieu", "faction", "sort")
+# D-275 §6 (Issue #339, découpe (b) de #316) — vocabulaire fermé, sous-
+# ensemble de `docs/couverture-moteur.md` §4 pertinent à la RÉSOLUTION
+# créature d'un combat déclaré (par quel canal le moteur lit ses stats).
+# Jamais de valeur inventée : tout ce qui ne dérive pas exactement d'une de
+# ces trois branches (aval.extract_combats) devient "hors-vocabulaire".
+COMBAT_REGIMES = ("monster.srd_direct", "monster.srd_variant",
+                  "monster.custom_brute")
+COMBAT_REGIME_HORS_VOCABULAIRE = "hors-vocabulaire"
 # D-252.3 : sorts inédits des appendices de campagne — ancre racine SRD 5.1 ›
 # Spellcasting (les huit écoles canoniques, orthographe française du poste).
 SORT_ECOLES = ("abjuration", "invocation", "divination", "enchantement",
@@ -207,7 +215,18 @@ class Node:
     imposée (« le joueur fait X puis Y ») est une couleur travestie en
     script — refusée à la construction, jamais silencieusement acceptée.
     Le SERVICE de ce champ au Director/Angle est hors périmètre de ce socle
-    (issue « service au tour » séparée)."""
+    (issue « service au tour » séparée).
+
+    combats (D-275 §6, Issue #339 — découpe (b) de #316) : la partition
+    DÉCLARE ses combats — {creature (slug), declencheur_md (texte court qui
+    met la créature en scène)} par entrée. Le régime (vocabulaire fermé
+    `docs/couverture-moteur.md` §4, `COMBAT_REGIMES`) n'est PAS déclaré ici :
+    il se dérive à froid (`aval.extract_combats`) du record `creature` cité
+    — jamais une seconde source de vérité à maintenir en phase. Le
+    zéro-dangling (le slug cité résout à un record classe `creature`) est le
+    garde de `validate_form` (#105) : une créature déclarée sans bloc de
+    stats projeté est un refus de forme nommé (nœud, slug), jamais un
+    bouchage."""
 
     def __init__(self, nid: str, type_: str, titre: str, corps_md: str,
                  altitude: str, liens: list[dict] | None = None,
@@ -215,7 +234,7 @@ class Node:
                  charniere_sortie: dict | None = None,
                  objectif_md: str = "", debouches: list[dict] | None = None,
                  heritage: list[dict] | None = None,
-                 rendu_md: str = ""):
+                 rendu_md: str = "", combats: list[dict] | None = None):
         check_id(nid, "node")
         if type_ not in NODE_TYPES:
             raise ValueError(f"node {nid}: type {type_!r} not in {NODE_TYPES}")
@@ -244,6 +263,7 @@ class Node:
                     "'scenario' (fiche SCÉNARIO §1)")
             self._set_scenario(objectif_md, debouches, heritage)
         self.rendu_md = self._check_rendu_md(rendu_md, nid)
+        self.combats = self._check_combats(combats, nid)
         self.anchors = [(int(a), int(b)) for a, b in anchors]
 
     @staticmethod
@@ -265,6 +285,32 @@ class Node:
                 "— pose une séquence d'événements imposée, jamais une "
                 "couleur (D-065)")
         return rendu_md
+
+    @staticmethod
+    def _check_combats(combats: list[dict] | None, nid: str) -> list[dict]:
+        """D-275 §6 : chaque entrée cite la créature (slug) et un
+        declencheur_md non vide — forme exacte, pas de champ en trop
+        (même discipline que `Record._tokens`). Le régime n'est jamais
+        déclaré ici (dérivé à froid, aval.py) et le zéro-dangling (le slug
+        résout à un record `creature`) est le garde de `validate_form`."""
+        out = []
+        for i, c in enumerate(combats or []):
+            what = f"node {nid} combats[{i}]"
+            if not isinstance(c, dict) or set(c) != {"creature", "declencheur_md"}:
+                raise ValueError(f"{what}: forme exacte exigée "
+                                 "{creature, declencheur_md}, got "
+                                 f"{sorted(c) if isinstance(c, dict) else c!r}")
+            creature = c["creature"]
+            if not isinstance(creature, str) or not _SLUG_RE.match(creature):
+                raise ValueError(f"{what}: creature doit être un slug kebab "
+                                 f"minuscule, got {creature!r}")
+            declencheur = c["declencheur_md"]
+            if not isinstance(declencheur, str) or not declencheur.strip():
+                raise ValueError(f"{what}: declencheur_md requis (texte court "
+                                 "qui met la créature en scène)")
+            out.append({"creature": creature,
+                        "declencheur_md": declencheur.strip()})
+        return out
 
     def _set_scenario(self, objectif_md, debouches, heritage) -> None:
         seen: set[str] = set()
@@ -297,6 +343,13 @@ class Node:
         self._set_scenario(objectif_md, debouches, heritage)
         if rendu_md:
             self.rendu_md = self._check_rendu_md(rendu_md, self.id)
+
+    def attach_combats(self, entries: list[dict]) -> None:
+        """Application à froid par l'adaptateur (`combats-auteur.json`,
+        cli.py) — mêmes gardes de forme qu'au constructeur (D-275 §6) ;
+        additive (une conversion ré-appliquant ce fichier ne perd jamais
+        une déclaration déjà posée)."""
+        self.combats = self.combats + self._check_combats(entries, self.id)
 
 
 class Record:

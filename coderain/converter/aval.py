@@ -23,6 +23,8 @@ import json
 import re
 from pathlib import Path
 
+from .schemas import COMBAT_REGIME_HORS_VOCABULAIRE, COMBAT_REGIMES
+
 ABILITIES_5E = ("strength", "dexterity", "constitution",
                 "intelligence", "wisdom", "charisma")
 
@@ -153,12 +155,53 @@ def extract_checks(text: str, units) -> dict[str, list[dict]]:
     return out
 
 
-def write_checks(partition_dir: Path, checks: dict) -> Path:
+def _regime_combat(record) -> str:
+    """Régime de résolution CRÉATURE (D-275 §6, vocabulaire fermé
+    `docs/couverture-moteur.md` §4) — dérivé, JAMAIS déclaré : les trois
+    branches viennent des seuls faits déjà validés à la construction du
+    record (`Record.ancre_srd`/`delta_vs_ancre`). `record` absent (aucun
+    bloc de stats projeté du même slug) tombe hors-vocabulaire au même
+    titre qu'une branche imprévue — pas de valeur inventée."""
+    if record is None:
+        return COMBAT_REGIME_HORS_VOCABULAIRE
+    if record.ancre_srd is None:
+        regime = "monster.custom_brute"
+    elif getattr(record, "delta_vs_ancre", None):
+        regime = "monster.srd_variant"
+    else:
+        regime = "monster.srd_direct"
+    return regime if regime in COMBAT_REGIMES else COMBAT_REGIME_HORS_VOCABULAIRE
+
+
+def extract_combats(partition) -> list[dict]:
+    """{noeud, creature, declencheur, regime} — la partition DÉCLARE ses
+    combats (D-275 §6, Issue #339 découpe (b) de #316). Chaque déclaration
+    vient de `node.combats` (facts posés à la conversion, cf. schemas.Node)
+    ; le régime se dérive à froid du record `creature` cité — une créature
+    déclarée sans bloc de stats projeté (aucun record classe `creature` du
+    même slug) reste listée, régime `hors-vocabulaire`, et c'est
+    `validate_form` (#105) qui la nomme en refus, jamais ce module."""
+    creatures = {r.id: r for r in partition.records if r.classe == "creature"}
+    combats: list[dict] = []
+    for n in partition.nodes:
+        for decl in getattr(n, "combats", []) or []:
+            combats.append({
+                "noeud": n.id,
+                "creature": decl["creature"],
+                "declencheur": decl["declencheur_md"],
+                "regime": _regime_combat(creatures.get(decl["creature"])),
+            })
+    return combats
+
+
+def write_checks(partition_dir: Path, checks: dict,
+                 combats: list[dict] | None = None) -> Path:
     payload = {
         "note": ("jets extraits mécaniquement; le save porteur porte les six "
                  "caractéristiques 5e comme stats → jet natif d20+mod vs DC"),
         "abilities": list(ABILITIES_5E),
         "checks": checks,
+        "combats": combats or [],
     }
     path = Path(partition_dir) / "mapping-regles.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
