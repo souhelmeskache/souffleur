@@ -156,6 +156,20 @@ def main() -> int:
         print("9) dernier nœud franchi ignore un `location` vers un lieu "
              "(pas un id de nœud) entre deux franchissements")
 
+        # --- 10bis. fin_module PRIME sur un `rpg.frontiere` resté posé
+        # (revue PR #326) : le drapeau n'est jamais effacé (D-282 règle 2) --
+        # une save refusée au tour 1 (frontière posée) qui s'est ensuite
+        # corrigée et a atteint le nœud terminal ne doit PLUS rester bloquée
+        # sur `frontiere` -- la position COURANTE (plus récente) tranche.
+        save_front_corrigee = tmp / "save-frontiere-corrigee"
+        _ecrire_save(save_front_corrigee, partition_dir, "para-60",
+                    frontiere={"tour": 1, "valeur_tentee": "un-slug-de-prose"},
+                    franchissements=["para-60"])
+        r = detecter_fin.evaluer(save_front_corrigee)
+        assert r == {"fin": "fin_module", "noeud": "para-60"}, r
+        print("10bis) frontière posée au tour 1 puis save corrigée jusqu'au "
+             "terminal -> fin_module prime, jamais bloqué sur frontiere")
+
         # --- 10. CLI : deux lignes en forme fixe ----------------------------
         import subprocess
         proc = subprocess.run(

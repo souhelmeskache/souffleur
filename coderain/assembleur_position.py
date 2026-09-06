@@ -14,14 +14,9 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
   3. STABLE   — le node courant : corps + objectif_md + ses débouchés/liens
                 comme POTENTIELS (garde D-179 : jamais un menu ni un
                 déclencheur automatique)
-  4. STABLE   — position (D-282, Issue #311) : les trois axes (scène/lieu/
-                temps, chacun pouvant être vide) + ids sortants du nœud
-                courant + drapeau terminal (`liens: []` + `charniere_sortie`)
-                — la même lecture que `tools/banc/detecter_fin.py`, jamais
-                une resélection séparée
-  5. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
+  4. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
                 porteur est présent (routage `hidden` conservé, D-019)
-  6. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
+  5. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
                 section « Level-ups and grants » sur déclencheur d'état,
                 `engine.py::_rpg_rules_served`, D-260 post-mesure (a), Issue
                 #162) + directive `response_length` (D-260 post-mesure, Issue
@@ -33,6 +28,15 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 `engine.py::_augment_rpg`/`_augment_style` composaient ce
                 contenu APRÈS elles avant ce correctif, cassant le préfixe
                 cachable pour rien — `docs/mesure-d260-boucle-neuve.md`)
+  6. VOLATILE — position (D-282, Issue #311) : les trois axes (scène/lieu/
+                temps, chacun pouvant être vide) + ids sortants du nœud
+                courant + drapeau terminal (`liens: []` + `charniere_sortie`)
+                — la même lecture que `tools/banc/detecter_fin.py`, jamais
+                une resélection séparée. VOLATILE et non stable (revue PR
+                #326) : porte l'horloge, qui avance sur un `time_advance`
+                SANS transition de node — rangée avec les sections
+                volatiles ci-dessous, JAMAIS avant, pour ne jamais couper
+                le préfixe stable en deux
   7. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
                 contre l'état courant) — jamais `event_rules_block()` entier
   8. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
@@ -43,7 +47,7 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
 Le hors-position ne se charge pas d'avance : le Director le demande via
 `recall_queries` de son enveloppe (soupape déjà existante).
 
-Stabilité de préfixe (exigence cache) : les sections 1-6 sont byte-stables
+Stabilité de préfixe (exigence cache) : les sections 1-5 sont byte-stables
 entre deux tours SANS transition de node ET sans changement de config
 (rpg-rules.md, response_length) — aucun timestamp, compteur, id de requête,
 tri non déterministe. `stable_prefix()` isole ce sous-ensemble (toute section
@@ -189,7 +193,13 @@ def _position_section(partition_dir: Path, store: MemoryStore,
         f"Nœud terminal (liens: [] + charnière de sortie) : "
         f"{'oui' if terminal else 'non'}",
     ]
-    return Section("stable", "Position (D-282)", "\n".join(lignes))
+    # VOLATILE, jamais stable (revue PR #326) : `temps` porte l'horloge
+    # (`store.clock_str()`), qui avance sur un `time_advance` SANS transition
+    # de node — une section stable ne doit jamais varier entre deux tours
+    # sans transition (exigence de préfixe cachable, voir docstring de
+    # module) ; l'horloge partage déjà cette contrainte dans
+    # `_world_and_queue_section` ci-dessous, pour la même raison.
+    return Section("volatile", "Position (D-282)", "\n".join(lignes))
 
 
 def rendu_md_for(partition_dir: str | Path, location: str) -> str:
@@ -352,7 +362,6 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
         sections.append(Section("stable",
                                 "Brief de direction (directeur.md)", brief))
     sections.append(_current_node_section(partition_dir, store, location))
-    sections.append(_position_section(partition_dir, store, location))
     sections.append(_presence_section(partition_dir, store, location, secrets))
     if rpg_rules.strip():
         sections.append(Section("stable", "RPG MODULE (mechanics ON)",
@@ -360,6 +369,12 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     if response_length.strip():
         sections.append(Section("stable", "STYLE DIRECTIVES",
                                 f"- {response_length.strip()}"))
+    # VOLATILE (revue PR #326) : porte l'horloge (`temps`), qui avance sans
+    # transition de node — rangée avec les sections volatiles ci-dessous,
+    # JAMAIS avant, pour ne jamais couper le préfixe stable en deux (les
+    # sections stables doivent rester un bloc de tête contigu, seule forme
+    # qu'un fournisseur peut effectivement mettre en cache).
+    sections.append(_position_section(partition_dir, store, location))
     sections.append(_rule_verdicts_section(store, history, player_input))
     sections.append(_world_and_queue_section(store))
     if char_sheet.strip():

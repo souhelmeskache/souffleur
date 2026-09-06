@@ -10,9 +10,10 @@ Métriques rendues (fonction `calculer`) :
 - `parties_completes` / `parties_mortes` / `parties_frontiere` : trois
   sous-ensembles DISJOINTS de `parties_finies`, lus dans `raison_arret`
   (`fin_module` / `mort` / `frontiere` — D-282, Issue #311 : la garde du
-  guichet a refusé un `location` hors partition). `frontiere` reste à 0 tant
-  que `nuit.sh` ne pose pas encore cette valeur (clôture de séance, I-093,
-  hors périmètre #311) — même réserve que `refus_outil` ci-dessous.
+  guichet a refusé un `location` hors partition, `nuit.sh` arrête la BOUCLE
+  DU BANC au signal, `fin_atteinte: O`). Ceci n'arrête que la mesure
+  mécanique du banc — la clôture de séance EN JEU (I-093) reste une brique
+  séparée, hors périmètre #311.
 - `refus_outil` : entrées `events.jsonl` de type `attack`/`roll_check`
   portant une clé `error`. **Aujourd'hui aucun writer du moteur ne journalise
   ces refus dans `events.jsonl`** (`attack`/`roll_check` rendent
@@ -258,10 +259,9 @@ def calculer(run_dir: Path) -> dict:
                  if lire_resume_run(p).get("raison_arret", "") == "mort")
     # frontiere (D-282, Issue #311) : la garde du guichet a refusé un
     # `location` hors partition — troisième sous-ensemble disjoint des deux
-    # ci-dessus. `nuit.sh` ne pose pas encore `raison_arret: frontiere`
-    # (clôture de séance, I-093, hors périmètre #311) : ce compteur reste à 0
-    # tant que ça n'a pas changé côté script, même réserve que `refus_outil`
-    # ci-dessus — écrit pour rester correct dès que ça change.
+    # ci-dessus. `nuit.sh` arrête la boucle du banc au signal (fin_atteinte:
+    # O, raison_arret: frontiere) — même geste mécanique que mort/fin_module,
+    # la clôture de séance EN JEU (I-093) restant une brique séparée.
     frontieres = sum(1 for p in parties_dirs
                      if lire_resume_run(p).get("raison_arret", "") == "frontiere")
 

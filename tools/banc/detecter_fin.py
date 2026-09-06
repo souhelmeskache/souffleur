@@ -133,21 +133,28 @@ def evaluer(save_dir: str | Path) -> dict:
     if "dead" in conds:
         return {"fin": "mort", "noeud": noeud}
 
+    location = validator_mod.current_location(state) or None
+    if location and partition_dir is not None:
+        # fin_module PRIME sur un `rpg.frontiere` posé plus tôt (revue PR
+        # #326) : le drapeau n'est jamais effacé une fois posé (D-282 règle
+        # 2 ne le demande pas), donc une save qui s'est corrigée APRÈS un
+        # refus et a fini par atteindre le nœud terminal ne doit pas rester
+        # bloquée sur `frontiere` — la position COURANTE, plus récente que
+        # le drapeau, tranche. En pratique `nuit.sh` arrête déjà la boucle
+        # du banc dès le premier `frontiere` (aucun tour ne se rejoue après),
+        # ce test défend la lecture directe de `evaluer()` sur une save qui
+        # a continué hors de ce chemin (session interactive, reprise).
+        meta = _read_json_front(partition_dir / "nodes" / f"{location}.md")
+        liens = meta.get("liens") or []
+        charniere = meta.get("charniere_sortie")
+        if location != _NOEUD_ENTREE and not liens and charniere:
+            return {"fin": "fin_module", "noeud": noeud}
+
     if (state.get("rpg") or {}).get("frontiere"):
         return {"fin": "frontiere", "noeud": noeud}
 
-    location = validator_mod.current_location(state) or None
     if not location:
         return {"fin": "non", "noeud": noeud if partition_dir else None}
-
-    if partition_dir is None:
-        return {"fin": "non", "noeud": noeud}
-
-    meta = _read_json_front(partition_dir / "nodes" / f"{location}.md")
-    liens = meta.get("liens") or []
-    charniere = meta.get("charniere_sortie")
-    if location != _NOEUD_ENTREE and not liens and charniere:
-        return {"fin": "fin_module", "noeud": noeud}
 
     return {"fin": "non", "noeud": noeud}
 
