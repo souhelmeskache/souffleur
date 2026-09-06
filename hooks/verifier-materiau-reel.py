@@ -4,11 +4,11 @@ de lane -- qui ferait entrer un identifiant du corpus de campagne reel
 (`corpus_dir()`, `coderain/config.py`) dans l'historique versionne ou dans le
 prompt d'une lane.
 
-Origine : PR #320 (lane #317) refusee en revue -- le slug reel `blood-man`
+Origine : PR #320 (lane #317) refusee en revue -- un slug reel du corpus
 et le bloc de stats reel d'un record etaient deja entres dans le worktree
-via un `git commit` avant que la revue les attrape. Rien n'empechait cette
-entree en amont ; ce script est cette premiere ligne de defense, locale et
-rapide (voir I-324).
+via un `git commit` avant que la revue les attrape (voir Issue #324 pour le
+detail). Rien n'empechait cette entree en amont ; ce script est cette
+premiere ligne de defense, locale et rapide.
 
 Deux usages :
   - `hooks/verifier-materiau-reel.py`         -- garde pre-commit (a) : lit
@@ -109,11 +109,14 @@ def collect_real_terms(corpus_root: Path) -> dict[str, str]:
     return termes
 
 
-def check_haystacks(haystacks: list[tuple[str, str]],
+def check_haystacks(haystacks: list[tuple[str, list[tuple[int, str]]]],
                      termes: dict[str, str],
                      whitelist: set[str]) -> list[str]:
-    """Une entree par (etiquette, texte) a inspecter ligne par ligne.
-    Retourne les lignes de refus (vide = rien trouve)."""
+    """Une entree par (etiquette, [(numero, ligne), ...]) a inspecter.
+    L'etiquette est le CHEMIN du fichier touche pour un match de contenu (pas
+    une position dans un blob concatene de tout le diff) -- le refus nomme
+    ainsi le fichier ET la ligne, comme l'exige l'Issue #324. Retourne les
+    lignes de refus (vide = rien trouve)."""
     problemes = []
     for terme, source in sorted(termes.items()):
         if len(terme) < LONGUEUR_MIN_TERME or terme in whitelist:
@@ -122,8 +125,8 @@ def check_haystacks(haystacks: list[tuple[str, str]],
             r"(?<![a-z0-9])" + re.escape(terme) + r"(?![a-z0-9])",
             re.IGNORECASE,
         )
-        for etiquette, texte in haystacks:
-            for numero, ligne in enumerate(texte.splitlines(), start=1):
+        for etiquette, lignes in haystacks:
+            for numero, ligne in lignes:
                 if motif.search(ligne):
                     problemes.append(
                         f"{etiquette}:{numero}: identifiant reel « {terme} » "
@@ -132,20 +135,46 @@ def check_haystacks(haystacks: list[tuple[str, str]],
     return problemes
 
 
-def _diff_haystacks() -> list[tuple[str, str]]:
-    contenu = subprocess.run(
+# Repere le fichier NEUF ("+++ b/chemin") et le premier numero de ligne d'un
+# hunk ("@@ -a,b +c,d @@") dans un diff unifie -U0, pour retomber sur le vrai
+# numero de ligne dans le fichier plutot qu'une position dans un blob.
+_DIFF_FICHIER_RE = re.compile(r"^\+\+\+ (?:b/(.+)|/dev/null)$")
+_DIFF_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def _diff_haystacks() -> list[tuple[str, list[tuple[int, str]]]]:
+    diff = subprocess.run(
         ["git", "diff", "--cached", "-U0", "--diff-filter=ACMR"],
         cwd=REPO_ROOT, capture_output=True, text=True,
     ).stdout
-    ajouts = "\n".join(
-        ligne[1:] for ligne in contenu.splitlines()
-        if ligne.startswith("+") and not ligne.startswith("+++")
-    )
+
+    par_fichier: dict[str, list[tuple[int, str]]] = {}
+    fichier_courant: str | None = None
+    ligne_neuve = 0
+    for ligne in diff.splitlines():
+        m_fichier = _DIFF_FICHIER_RE.match(ligne)
+        if m_fichier:
+            fichier_courant = m_fichier.group(1)  # None si fichier supprime
+            continue
+        m_hunk = _DIFF_HUNK_RE.match(ligne)
+        if m_hunk:
+            ligne_neuve = int(m_hunk.group(1))
+            continue
+        if ligne.startswith("+") and not ligne.startswith("+++") and fichier_courant:
+            par_fichier.setdefault(fichier_courant, []).append((ligne_neuve, ligne[1:]))
+            ligne_neuve += 1
+
+    haystacks = list(par_fichier.items())
+
     noms = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
         cwd=REPO_ROOT, capture_output=True, text=True,
     ).stdout
-    return [("contenu ajoute", ajouts), ("nom de fichier indexe", noms)]
+    haystacks.append((
+        "nom de fichier indexe",
+        list(enumerate(noms.splitlines(), start=1)),
+    ))
+    return haystacks
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -166,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     whitelist = load_whitelist()
 
     if args.text:
-        haystacks = [("texte", sys.stdin.read())]
+        haystacks = [("texte", list(enumerate(sys.stdin.read().splitlines(), start=1)))]
     else:
         haystacks = _diff_haystacks()
 
