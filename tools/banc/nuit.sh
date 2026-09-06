@@ -201,9 +201,28 @@ if [ -n "${SAVES_DIR:-}" ] && [ -z "${NUIT_CONSERVER_SAVES_DIR:-}" ]; then
 fi
 
 # --- 1. Arborescence du run ----------------------------------------------
-
+#
+# bench/nuit-<date>/ est réservé à la vraie nuit (Issue #309, constat du
+# 05/09 : six runs de fumée joués en journée dans ce même dossier ont fait
+# `nuit.cmd` du soir croire à une CONTINUATION de nuit interrompue —
+# §1bis ci-dessous applique alors sa règle « heure déjà atteinte -> arrêt
+# immédiat » à des parties qui n'ont jamais été une nuit). -FinA est le
+# signal structurel qui distingue les deux usages : une vraie nuit le porte
+# toujours (nuit.cmd le pose par défaut, `-FinA 06:00`, Souhel #279) ; un run
+# de fumée/journée borné par -Parties seul (sans -FinA) ne dépasse jamais son
+# budget de parties, sans notion d'heure de fin. Sans -FinA, le défaut
+# bascule donc sur bench/fumee-<date>/ — jamais bench/nuit-<date>/ — pour
+# qu'un run de fumée manuel ne puisse plus polluer le dossier que la
+# continuation de nuit relit. -RunDir explicite (tests, run de fumée interne
+# de nuit.cmd, #313) reste prioritaire sur cette règle dans tous les cas.
 DATE_JOUR="$(date '+%Y%m%d')"
-RUN_DIR="${RUN_DIR_OVERRIDE:-$REPO_ROOT/bench/nuit-$DATE_JOUR}"
+if [ -n "$RUN_DIR_OVERRIDE" ]; then
+  RUN_DIR="$RUN_DIR_OVERRIDE"
+elif [ -n "$FIN_A" ]; then
+  RUN_DIR="$REPO_ROOT/bench/nuit-$DATE_JOUR"
+else
+  RUN_DIR="$REPO_ROOT/bench/fumee-$DATE_JOUR"
+fi
 mkdir -p "$RUN_DIR"
 NUIT_MD="$RUN_DIR/nuit.md"
 
@@ -334,9 +353,12 @@ done
 # 2. PENDANT LA NUIT (relancement en CONTINUATION, $START_INDEX > 1,
 #    partie-01 déjà là) : JAMAIS de bascule au lendemain -- HH:MM déjà
 #    atteinte pour $DATE_JOUR (par n'importe quelle marge, même minime) fait
-#    s'arrêter la nuit tout de suite (fin_a_atteinte vrai dès le prochain
-#    contrôle), par le chemin normal (même code que STOP). Une continuation
-#    ne recule jamais son heure de fin d'un jour entier.
+#    REFUSER le lancement nommément (ci-dessous) plutôt que de laisser la
+#    nuit s'arrêter au premier contrôle sans avoir joué un tour (Issue #309,
+#    constat du 05/09 : ce arrêt silencieux, indiscernable d'un arrêt normal
+#    de fin de nuit dans nuit.md/rapport-nuit.md, avait fait perdre une nuit
+#    entière sans que l'opérateur ne le remarque avant le lendemain matin).
+#    Une continuation ne recule jamais son heure de fin d'un jour entier.
 FIN_A_EPOCH=""
 if [ -n "$FIN_A" ]; then
   FIN_A_EPOCH_JOUR="$(date -d "${DATE_JOUR:0:4}-${DATE_JOUR:4:2}-${DATE_JOUR:6:2} $FIN_A:00" +%s 2>/dev/null)"
@@ -349,7 +371,8 @@ if [ -n "$FIN_A" ]; then
   elif [ "$START_INDEX" -eq 1 ]; then
     FIN_A_EPOCH=$((FIN_A_EPOCH_JOUR + 86400))             # nuit fraîche, déjà passée -> demain
   else
-    FIN_A_EPOCH="$FIN_A_EPOCH_JOUR"                        # continuation, déjà atteinte -> arrêt
+    echo "REFUS : ce dossier ($RUN_DIR) contient déjà $((START_INDEX - 1)) partie(s) et -FinA $FIN_A est déjà passée pour aujourd'hui -- lance dans un dossier frais (-RunDir) plutôt que de reprendre celui-ci." >&2
+    exit 1
   fi
 fi
 
