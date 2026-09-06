@@ -788,6 +788,98 @@ tour courant (scratch, jamais une source de vérité de la save). Test :
 `tests/turn_dir_etancheite_test.py` (deux saves synthétiques, écriture en
 alternance, contenus distincts sur disque, aucun croisement).
 
+### Reset de session Director (#330, D-264, brique 0 / F0.1)
+
+**Ce que ça prouve** : la doctrine (`docs/ARCHITECTURE.md` §1) dit que l'état
+vit à 100% dans la save, jamais dans la fenêtre de conversation du Director
+-- mais le MJ du banc est une session PERSISTANTE dont la fenêtre accumule
+d'un tour à l'autre. `-Reset N[,N...]` tue cette session au tour N et en
+relance une NEUVE (jamais `--resume`) avec le même gabarit `banc-mj.md`,
+sur la même save, avant le go du tour N+1 -- si le tour N+1 se joue
+correctement quand même, l'état vient bien de la save, pas de la mémoire.
+
+```
+tools/banc/nuit.sh -Parties 1 -Tours 40 -Reset 5,15,30
+```
+
+**Portée** : séquentiel uniquement (`-Paires 1`, REFUS nommé sinon -- fermer
+et relancer UNE session MJ n'a pas de sens dans le chemin `-Paires > 1`,
+agents suffixés par slot, #282). Chaque valeur de `N` doit être `< -Tours`
+(REFUS sinon -- il faut un tour N+1 à jouer). Plusieurs valeurs (`-Reset
+5,15,30`) posent PLUSIEURS resets dans LA MÊME partie (choix retenu, plus
+simple que de multiplier `-Parties` -- l'alternative « une partie par
+valeur » n'a pas été retenue).
+
+**Séquence d'un reset** (`nuit.sh::effectuer_reset`, appelée juste après
+l'écriture de l'état du tour N, jamais pendant) :
+
+1. Snapshot AVANT tout geste : `etat-avant-reset-NN.json` (copie de
+   `state.json`) et `etancheite-avant-reset-NN.md` (copie de
+   `etancheite.md`, si déjà présent) -- comparés au tour N+1 par
+   `tools/banc/verifier_reset.py`.
+2. Fermeture de la session MJ en vol : `/exit` (`herdr agent send-keys`,
+   jamais `agent prompt` depuis bash, #271), puis lecture du bandeau de
+   reprise Claude Code dans le pane (« Resume this session with: claude
+   --resume ID ») pour journaliser `session_avant` -- jamais une relance
+   avec cet id, à la différence de la reprise de processus sorti (#305).
+3. Lancement d'une session NEUVE, à froid, dans le MÊME pane : `herdr agent
+   start ... --model ... --effort medium --permission-mode acceptEdits`
+   (SANS `--resume`), puis envoi du gabarit `tools/prompts/banc-mj.md`
+   rendu (mêmes placeholders qu'au lancement initial) comme premier prompt
+   -- cette session neuve rejoue donc son § Test d'étanchéité harnais dès
+   son démarrage (le gabarit l'exige explicitement, y compris en reprise
+   mi-partie, #330), journalisant un `TEMOIN: <mot>` frais dans
+   `etancheite.md` (append, jamais un écrasement).
+4. `session_apres` : lu au mieux via `herdr agent get` (`session_id` si
+   rendu -- `"(inconnu)"` sinon, jamais fatal).
+5. Journalisation dans `<partie>/save/memory/events.jsonl` (la save elle-même,
+   pas un fichier du banc) : `{"type": "reset", "tour": N, "session_avant":
+   <id ou "(inconnu)">, "session_apres": <id ou "(inconnu)">}`.
+
+`effectuer_reset` n'envoie AUCUN go : c'est la boucle normale de tours (déjà
+en place) qui envoie le go du tour N+1 à la session neuve, une fois l'action
+du joueur connue -- rien n'est dupliqué. Un échec de la séquence (fermeture,
+lancement, ou envoi du gabarit) craque la partie
+(`craquement-reset-NN.md`), comme un timeout ou une prose absente --
+n'arrête pas la nuit.
+
+**Les 4 vérifications mécaniques** (`tools/banc/verifier_reset.py`, appelé
+juste après que le tour N+1 a été journalisé, jamais un jugement de prose,
+D-131/D-134) :
+
+1. **Position** : celle du tour N+1 est égale à celle du tour N, ou a
+   avancé par un débouché VALIDE de la partition (un `cible_id` listé dans
+   les `liens` du nœud du tour N, lus dans `nodes/<id>.md` comme
+   `detecter_fin.py`) -- jamais un retour à l'ouverture (`avant-propos`) si
+   le tour N ne l'était pas déjà.
+2. **Cliquet / visée courante conservés** : `rpg.cliquet` et
+   `rpg.visee_courante` de l'état identiques avant/après -- signal retenu
+   ici et documenté FAUTE d'un nom de champ déjà établi ailleurs dans le
+   moteur (aucune occurrence de « cliquet »/« visée » dans le code hors
+   vault avant cette lane) ; un moteur qui poserait ces drapeaux sous
+   d'autres clés devra adapter `verifier_cliquet_visee()`, pas le
+   contourner.
+3. **Aucune réintroduction de scène au tour N+1** : signal mécanique retenu
+   (Issue #330 § « à définir mécaniquement ») -- aucun événement
+   `scene_intro`, et aucun delta `location` égal au nœud d'entrée du module
+   (`avant-propos`), journalisé au tour N+1 dans `memory/events.jsonl`.
+4. **Mot-témoin absent** : le(s) mot-témoin(s) choisis par la session TUÉE
+   (lignes `TEMOIN: <mot>` de `etancheite-avant-reset-NN.md`, le snapshot
+   pris juste avant le reset) sont absents de `tour-N+1.md`,
+   `action-N+1.md` et `prose-N+1.md` -- la preuve qu'aucune mémoire de
+   fenêtre n'a survécu (la session neuve, cold-startée, ne peut littéralement
+   pas les connaître).
+
+Verdict écrit dans `<partie>/reset-NN.md` (4 lignes PASS/FAIL + verdict
+global `VERT (4/4)`/`ROUGE (n/4)`) -- une MESURE, jamais une garde : un
+`ROUGE` ne craque pas la partie. `rapport-nuit.md` porte la ligne « Resets
+(#330, D-264) : X joués, Y verts (4/4) » (`tools/banc/metriques_nuit.py::
+compter_resets`, lue mécaniquement dans les `reset-*.md`).
+
+**`-DryRun`** : affiche la séquence (fermeture, lancement neuf, go du tour
+suivant PAR LA BOUCLE NORMALE) pour chaque valeur de `-Reset`, sans lancer
+aucun agent réel -- même discipline que le reste de `-DryRun`.
+
 ### Ce que la nuit ne fait pas
 
 - **Pas d'analyse, pas de correction** — N2/N3 lisent `nuit.md` et les

@@ -13,9 +13,16 @@
 # Usage :
 #   tools/banc/nuit.sh [-Parties N] [-Paires N] [-Director haiku|sonnet|ab]
 #                       [-Tours 200] [-Save <slug>] [-TimeoutTour <minutes>]
-#                       [-FinA HH:MM] [-DryRun]
+#                       [-FinA HH:MM] [-Reset N[,N...]] [-DryRun]
 #   -Parties ou -FinA requis (au moins un des deux) -- sans -Parties, la nuit
 #   boucle sans plafond de parties, bornée par -FinA seule (Souhel #279).
+#
+# -Reset N[,N...] (#330, D-264, brique 0 / F0.1) : au(x) tour(s) N donné(s)
+# (séquentiel uniquement, -Paires 1), tue la session MJ en vol et en relance
+# une NEUVE (jamais --resume) avec le même gabarit banc-mj.md sur la même
+# save, avant le go du tour N+1 -- preuve que l'état vit à 100% dans la save
+# (docs/ARCHITECTURE.md §1), pas dans la fenêtre de conversation du Director.
+# Voir tools/banc/README.md § « Reset de session Director ».
 #
 # -Paires N (défaut 1, Issue #282) : N parties tournent SIMULTANÉMENT (N
 # paires Director/joueur, N copies de save, N `.turn/` étanches -- Issue
@@ -42,6 +49,7 @@ METRIQUES_PY="$REPO_ROOT/tools/banc/metriques_nuit.py"
 EXTRAIRE_PROSE_PY="$REPO_ROOT/tools/banc/extraire_prose.py"
 ARBITRER_PROSE_PY="$REPO_ROOT/tools/banc/arbitrer_prose.py"
 DETECTER_FIN_PY="$REPO_ROOT/tools/banc/detecter_fin.py"
+VERIFIER_RESET_PY="$REPO_ROOT/tools/banc/verifier_reset.py"
 
 # Frontière bash ⊥ Windows (#270) : source la conversion partagée avec
 # verifier-liste-blanche-nuit.sh — jamais un chemin `pwd` brut (`/c/Users/...`)
@@ -68,11 +76,15 @@ FIN_A=""
 DRYRUN=0
 RUN_DIR_OVERRIDE=""
 LANCEMENT_CMD_OVERRIDE=""
+RESET_ARG=""
 
 usage() {
   cat >&2 <<EOF
-Usage : $0 [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 200] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-DryRun] [-RunDir <chemin>]
+Usage : $0 [-Parties N] [-Paires N] [-Director haiku|sonnet|ab] [-Tours 200] [-Save <slug>] [-TimeoutTour <minutes>] [-FinA HH:MM] [-Reset N[,N...]] [-DryRun] [-RunDir <chemin>]
        -Parties ou -FinA requis (au moins un des deux).
+       -Reset N[,N...] (#330, D-264) : au(x) tour(s) N donné(s), tue la session
+       MJ en vol et en relance une NEUVE (pas --resume) sur la même save,
+       avant le go du tour N+1 -- séquentiel uniquement (-Paires 1).
 EOF
 }
 
@@ -85,6 +97,7 @@ while [ $# -gt 0 ]; do
     -Save) SAVE="${2:-}"; shift 2 ;;
     -TimeoutTour) TIMEOUT_TOUR_MIN="${2:-}"; shift 2 ;;
     -FinA) FIN_A="${2:-}"; shift 2 ;;
+    -Reset) RESET_ARG="${2:-}"; shift 2 ;;
     -DryRun) DRYRUN=1; shift ;;
     # -RunDir : usage interne / tests (tests/nuit_dryrun_test.py) — écrit le
     # run ailleurs que bench/nuit-AAAAMMJJ/, pour ne jamais toucher au vrai
@@ -135,6 +148,43 @@ if [ -n "$FIN_A" ] && ! [[ "$FIN_A" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
   echo "REFUS : -FinA doit être au format HH:MM, heure locale 00:00-23:59 (reçu '$FIN_A')." >&2
   exit 1
 fi
+
+# --- -Reset (#330, D-264) : liste de tours de reset, séquentiel uniquement -
+#
+# Refusé en parallèle (-Paires > 1) : la fermeture/relance neuve d'UNE
+# session MJ n'a pas de sens (ni de nom d'agent stable à cibler) dans le
+# chemin `-Paires > 1` (#282, agents suffixés par slot, plusieurs paires
+# concurrentes) -- hors périmètre de la brique 0 (#330 ne touche que le
+# chemin séquentiel historique).
+RESET_TOURS=()
+if [ -n "$RESET_ARG" ]; then
+  if [ "$PAIRES" -ne 1 ]; then
+    echo "REFUS : -Reset n'est supporté qu'en séquentiel (-Paires 1)." >&2
+    exit 1
+  fi
+  IFS=',' read -r -a _reset_bruts <<< "$RESET_ARG"
+  for _rt in "${_reset_bruts[@]}"; do
+    if ! [[ "$_rt" =~ ^[0-9]+$ ]] || [ "$_rt" -lt 1 ]; then
+      echo "REFUS : -Reset doit être une liste d'entiers >= 1 séparés par des virgules (reçu '$RESET_ARG')." >&2
+      exit 1
+    fi
+    if [ "$_rt" -ge "$TOURS" ]; then
+      echo "REFUS : -Reset $_rt >= -Tours $TOURS -- il doit rester au moins un tour N+1 à jouer après le reset." >&2
+      exit 1
+    fi
+    RESET_TOURS+=("$_rt")
+  done
+  unset _reset_bruts _rt
+fi
+
+# "1" si $1 (numéro de tour, décimal -- jamais interprété en octal malgré un
+# zéro en tête, #330) est un tour de reset demandé, vide sinon.
+tour_est_reset() {
+  local nn="$1" t
+  for t in "${RESET_TOURS[@]:-}"; do
+    [ "$t" = "$((10#$nn))" ] && { echo 1; return 0; }
+  done
+}
 
 # --- 0bis. Environnement propre (#271, nuit N0 02/09 : SAVES_DIR posée par
 # `herdr pane split --env` sur un pane de partie précédente survivait dans ce
@@ -705,6 +755,104 @@ limite_session_detectee() {
   done
 }
 
+# --- Reset de session Director (#330, D-264) --------------------------------
+#
+# Tue la session MJ ($agent_mj) en vol au tour $nn (l'état du tour vient
+# d'être écrit sur disque, jamais pendant une écriture) et en relance une
+# NEUVE -- un process `claude` lancé À FROID, jamais `--resume` -- avec le
+# MÊME gabarit `banc-mj.md`, sur la MÊME save. Preuve visée : l'état vit
+# 100% dans la save (docs/ARCHITECTURE.md §1), pas dans la fenêtre de
+# conversation du Director.
+#
+# Snapshots AVANT tout geste de reset (comparés au tour $nn+1 par
+# tools/banc/verifier_reset.py) :
+# - $partie_dir/etat-avant-reset-$nn.json : copie de state.json à l'instant
+#   du reset (position, cliquet, visée courante).
+# - $partie_dir/etancheite-avant-reset-$nn.md : copie de etancheite.md à cet
+#   instant -- porte le(s) mot-témoin(s) choisis par la session tuée
+#   (§ Test d'étanchéité harnais, tools/prompts/banc-mj.md), pour vérifier
+#   leur absence de tout ce que la session neuve écrit ensuite.
+#
+# N'envoie AUCUN go : la session neuve rend juste la main prête -- c'est
+# l'appelant (jouer_partie, boucle de tours, itération tour $nn+1) qui
+# enverra le go normal du tour suivant, une fois l'action du joueur connue,
+# par le chemin INCHANGÉ déjà en place (`herdr agent prompt "$agent_mj"
+# "$go_texte_mj"`).
+#
+# Rend 0 si la fermeture + le lancement neuf + l'envoi du gabarit ont
+# réussi, 1 sinon -- variables GLOBALES en sortie (même convention que
+# RELANCE_ENVOYEE/ID_SESSION_PROCESSUS, #299/#305) :
+# - RESET_SESSION_AVANT / RESET_SESSION_APRES : id de session lu dans le
+#   pane avant fermeture / après relance ("(inconnu)" si illisible -- jamais
+#   fatal, le reset lui-même n'en dépend pas).
+effectuer_reset() {
+  local partie_dir="$1" nn="$2" agent_mj="$3" modele="$4" save_dest="$5" session_tour="$6"
+  RESET_SESSION_AVANT="(inconnu)"
+  RESET_SESSION_APRES="(inconnu)"
+
+  cp "$save_dest/state.json" "$partie_dir/etat-avant-reset-$nn.json" 2>/dev/null
+  if [ -f "$partie_dir/etancheite.md" ]; then
+    cp "$partie_dir/etancheite.md" "$partie_dir/etancheite-avant-reset-$nn.md" 2>/dev/null
+  fi
+
+  if [ "$DRYRUN" -eq 1 ]; then
+    echo "[DryRun] RESET tour $nn : fermeture pane MJ ($agent_mj, session en vol -- pas --resume)"
+    echo "[DryRun] RESET tour $nn : lancement neuf (claude à froid, gabarit tools/prompts/banc-mj.md, même save)"
+    echo "[DryRun] RESET tour $nn : go du tour $((10#$nn + 1)) envoyé par la boucle normale à la session neuve"
+    RESET_SESSION_AVANT="(dry-run)"
+    RESET_SESSION_APRES="(dry-run)"
+    return 0
+  fi
+
+  echo "=== RESET tour $nn : fermeture de la session MJ ($agent_mj) ==="
+  envoyer_exit_agent "$agent_mj"
+  local n=0 texte=""
+  while [ "$n" -lt 15 ]; do
+    texte="$(herdr pane read "$PANE_MJ_COURANT" 2>/dev/null)"
+    if printf '%s' "$texte" | grep -q 'claude --resume'; then break; fi
+    n=$((n + 1))
+    sleep 2
+  done
+  RESET_SESSION_AVANT="$(printf '%s' "$texte" \
+    | grep -oE 'claude --resume [A-Za-z0-9._-]+' | tail -1 | sed 's/^claude --resume //')"
+  [ -n "$RESET_SESSION_AVANT" ] || RESET_SESSION_AVANT="(inconnu)"
+
+  echo "=== RESET tour $nn : lancement d'une session MJ neuve (session_avant=$RESET_SESSION_AVANT) ==="
+  local gabarit_rendu="$partie_dir/.gabarit-mj-reset-$nn.md"
+  sed -e "s/{{SAVE}}/save/g" -e "s/{{TOURS}}/$TOURS/g" \
+      -e "s/{{SESSION_TOUR}}/$session_tour/g" \
+      -e "s#{{JOURNAL_DIR}}#$partie_dir#g" \
+      "$REPO_ROOT/tools/prompts/banc-mj.md" > "$gabarit_rendu"
+
+  if ! herdr agent start "$agent_mj" --kind claude --pane "$PANE_MJ_COURANT" \
+       -- --model "$modele" --effort medium --permission-mode acceptEdits \
+       >/dev/null 2>&1; then
+    echo "RESET tour $nn : ÉCHEC — herdr agent start (session neuve)" >&2
+    return 1
+  fi
+  if ! herdr agent prompt "$agent_mj" "$(cat "$gabarit_rendu")" \
+       --wait --until working --timeout 15000 >/dev/null 2>&1; then
+    echo "RESET tour $nn : ÉCHEC — envoi du gabarit à la session neuve" >&2
+    return 1
+  fi
+
+  local get_json; get_json="$(herdr agent get "$agent_mj" 2>/dev/null)"
+  RESET_SESSION_APRES="$(printf '%s' "$get_json" \
+    | grep -oE '"session_id":"[^"]+"' | head -1 | sed -E 's/.*:"([^"]+)"/\1/')"
+  [ -n "$RESET_SESSION_APRES" ] || RESET_SESSION_APRES="(inconnu)"
+
+  python -c "
+import json, sys
+with open(sys.argv[1], 'a', encoding='utf-8') as f:
+    f.write(json.dumps({'type': 'reset', 'tour': int(sys.argv[2]),
+                         'session_avant': sys.argv[3], 'session_apres': sys.argv[4]}) + '\n')
+" "$(chemin_windows_depuis_bash "$save_dest/memory/events.jsonl")" "$((10#$nn))" \
+    "$RESET_SESSION_AVANT" "$RESET_SESSION_APRES"
+
+  echo "=== RESET tour $nn : OK (session_avant=$RESET_SESSION_AVANT session_apres=$RESET_SESSION_APRES) ==="
+  return 0
+}
+
 # Attend qu'un fichier existe et soit non vide. Rend 0 (produit), 3 (arrêt
 # demandé — sentinelle STOP/PAUSE, #271), 4 (timeout du tour, craquement
 # LOCAL à la partie), 5 (limite de session — arrêt de TOUTE la nuit, budget
@@ -1107,6 +1255,15 @@ jouer_partie() {
 
   if [ "$DRYRUN" -eq 1 ]; then
     echo "=== partie $pnn : -DryRun — aucun agent lancé ==="
+    # #330 (D-264) : même sans agent réel, la SÉQUENCE d'un reset (fermeture
+    # de la session MJ en vol, lancement neuf à froid, go du tour suivant
+    # par la boucle normale) s'affiche pour chaque valeur de -Reset — preuve
+    # de forme demandée par la lane, sans consommer de budget de session.
+    local _rt
+    for _rt in "${RESET_TOURS[@]:-}"; do
+      [ -n "$_rt" ] || continue
+      effectuer_reset "$partie_dir" "$(printf '%02d' "$_rt")" "$agent_mj" "$modele" "$save_dest" "nuit-$DATE_JOUR-p$pnn"
+    done
     ecrire_resume_run "$partie_dir" "$pnn" "$modele" 0 "N" "dry-run" $(( $(date +%s) - t0 )) "$paire" "(aucun)"
     return 0
   fi
@@ -1257,6 +1414,33 @@ jouer_partie() {
 
     tours_joues=$tour
     echo "=== partie $pnn tour $nn joué $(date '+%H:%M:%S')"
+
+    # --- Reset de session Director (#330, D-264) ------------------------
+    # Au tour N demandé par -Reset : tue la session MJ en vol et en relance
+    # une NEUVE (jamais --resume) sur la même save, AVANT le go du tour
+    # N+1 -- envoyé par la boucle normale ci-dessus (joueur puis MJ),
+    # jamais par effectuer_reset lui-même. Un échec de la séquence craque
+    # la partie (classe hors D-276 §4, comme timeout/prose-absente) plutôt
+    # que de continuer sur une session dont l'état est incertain.
+    if [ -n "$(tour_est_reset "$tour")" ]; then
+      if ! effectuer_reset "$partie_dir" "$nn" "$agent_mj" "$modele" "$save_dest" "$session_tour"; then
+        raison="craquement-reset"
+        ecrire_craquement "$partie_dir" "$nn" "reset" \
+          "échec de la séquence de reset (#330, D-264) -- fermeture ou lancement neuf de la session MJ."
+        craquements+=("craquement-reset-$nn.md")
+        detecter_fin_partie "$save_dest"
+        break
+      fi
+    fi
+    # Verdict des 4 vérifications mécaniques (#330) juste après le tour N+1
+    # d'un reset -- tools/banc/verifier_reset.py, purement mécanique (état +
+    # events.jsonl + fichiers du tour, jamais un jugement de prose, D-131/
+    # D-134). Écrit reset-NN.md (NN = le tour DE reset, pas N+1), jamais
+    # fatal à la partie : c'est une mesure, pas une garde.
+    if [ "$tour" -gt 1 ] && [ -n "$(tour_est_reset "$((tour - 1))")" ]; then
+      python "$VERIFIER_RESET_PY" "$partie_dir" "$((tour - 1))" >/dev/null 2>&1
+      echo "=== partie $pnn tour $nn — verdict reset $(printf '%02d' $((tour - 1))) écrit ==="
+    fi
 
     # Détection MÉCANIQUE de fin (#306 ; frontière D-282, #311) : mort du
     # joueur, nœud terminal de la partition (liens: [] + charniere_sortie,
