@@ -71,6 +71,10 @@ def main() -> int:
              [{"turn": 1, "type": "bouchage_enregistre"}]),
             ("02", 5, "N", "tours_max", "noeud_atteint", "para-12",
              [{"turn": 1, "type": "attack", "error": "x"}]),
+            # D-282 (Issue #311) : partie-03 a vu son premier `location`
+            # refusé (frontière posée) — sous-ensemble disjoint de complètes/
+            # mortes, compté à part dans `parties_frontiere`.
+            ("03", 1, "N", "frontiere", "noeud_atteint", "avant-propos", []),
         ):
             partie_dir = run_dir / f"partie-{pnn}"
             (partie_dir / "save" / "memory").mkdir(parents=True)
@@ -84,21 +88,25 @@ def main() -> int:
                 "\n".join(json.dumps(e) for e in evs) + "\n", encoding="utf-8")
 
         m = metriques_nuit.calculer(run_dir)
-        assert m["parties_lancees"] == 2, m
+        assert m["parties_lancees"] == 3, m
         assert m["parties_finies"] == 1, m
         assert m["parties_completes"] == 1, m
         assert m["parties_mortes"] == 0, m
-        assert m["tours_median"] == 4, m  # médiane de [3, 5]
+        assert m["parties_frontiere"] == 1, m
+        assert m["tours_median"] == 3, m  # médiane de [3, 5, 1]
         assert m["bouchages"] == 1, m
         assert m["refus_outil"] == 1, m
-        assert m["tours_par_noeud"] == {"para-60": 3, "para-12": 5}, m
+        assert m["tours_par_noeud"] == {
+            "para-60": 3, "para-12": 5, "avant-propos": 1}, m
         print("4) calculer() sur arborescence synthétique : "
               f"{m['parties_finies']}/{m['parties_lancees']} finies, "
               f"{m['parties_completes']} complète(s) (#306), "
+              f"{m['parties_frontiere']} frontière (#311), "
               f"médiane {m['tours_median']}")
 
         rendu = metriques_nuit.formater_markdown(m)
-        assert "1 / 2" in rendu, rendu
+        assert "1 / 3" in rendu, rendu
+        assert "1 / 0 / 1" in rendu, rendu  # complètes / mortes / frontière
         assert "para-60" in rendu and "para-12" in rendu, rendu
         print("5) formater_markdown() : rendu Markdown cohérent avec calculer()")
     finally:

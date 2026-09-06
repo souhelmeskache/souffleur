@@ -14,9 +14,14 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
   3. STABLE   — le node courant : corps + objectif_md + ses débouchés/liens
                 comme POTENTIELS (garde D-179 : jamais un menu ni un
                 déclencheur automatique)
-  4. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
+  4. STABLE   — position (D-282, Issue #311) : les trois axes (scène/lieu/
+                temps, chacun pouvant être vide) + ids sortants du nœud
+                courant + drapeau terminal (`liens: []` + `charniere_sortie`)
+                — la même lecture que `tools/banc/detecter_fin.py`, jamais
+                une resélection séparée
+  5. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
                 porteur est présent (routage `hidden` conservé, D-019)
-  5. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
+  6. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
                 section « Level-ups and grants » sur déclencheur d'état,
                 `engine.py::_rpg_rules_served`, D-260 post-mesure (a), Issue
                 #162) + directive `response_length` (D-260 post-mesure, Issue
@@ -28,9 +33,9 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 `engine.py::_augment_rpg`/`_augment_style` composaient ce
                 contenu APRÈS elles avant ce correctif, cassant le préfixe
                 cachable pour rien — `docs/mesure-d260-boucle-neuve.md`)
-  6. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
+  7. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
                 contre l'état courant) — jamais `event_rules_block()` entier
-  7. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
+  8. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
                 lane c, Issue #131 : `memory/scenario-courant.md` — jamais les
                 scènes brutes d'un scénario fermé, `summarizer.fermer_scenario`
                 le vide à la fermeture)
@@ -38,7 +43,7 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
 Le hors-position ne se charge pas d'avance : le Director le demande via
 `recall_queries` de son enveloppe (soupape déjà existante).
 
-Stabilité de préfixe (exigence cache) : les sections 1-5 sont byte-stables
+Stabilité de préfixe (exigence cache) : les sections 1-6 sont byte-stables
 entre deux tours SANS transition de node ET sans changement de config
 (rpg-rules.md, response_length) — aucun timestamp, compteur, id de requête,
 tri non déterministe. `stable_prefix()` isole ce sous-ensemble (toute section
@@ -143,6 +148,48 @@ def _current_node_section(partition_dir: Path, store: MemoryStore,
     title = entry.title if entry is not None else location
     return Section("stable", f"Scène courante — {title}",
                    "\n\n".join(parts))
+
+
+def _position_section(partition_dir: Path, store: MemoryStore,
+                      location: str) -> Section:
+    """D-282 (Issue #311, point 3) : le paquet du Director porte, À CHAQUE
+    TOUR, la position sur ses trois axes (scène/lieu/temps — chacun peut
+    être vide, D-282 §1) + les ids sortants du nœud courant (liens +
+    débouchés) + le drapeau terminal (`liens: []` + `charniere_sortie`) —
+    jamais une recomposition que le Director referait lui-même depuis
+    `module_get_node`. `location` n'est JAMAIS du texte libre (la garde du
+    guichet, `validator.py::_valid_location`, D-282 règle 1) : soit un id de
+    `nodes[]` (axe scène), soit un id de `records[]` classe `lieu` (axe
+    lieu) — jamais les deux à la fois, ce delta restant SINGULIER (brique 1,
+    l'extension de `prerequis_etat` aux trois axes, hors périmètre)."""
+    try:
+        from .converter.aval import load_partition
+        idx = load_partition(partition_dir)
+    except (OSError, ValueError, KeyError):
+        idx = {}
+    node_ids = {str(n.get("id")) for n in idx.get("nodes", [])}
+    lieu_ids = {str(r.get("id")) for r in idx.get("records", [])
+               if r.get("classe") == "lieu"}
+    scene = location if location in node_ids else ""
+    lieu = location if location in lieu_ids else ""
+    temps = store.clock_str()
+    meta = _read_json_front(Path(partition_dir) / f"nodes/{scene}.md") if scene else {}
+    sorties = [str(l["cible_id"]) for l in (meta.get("liens") or [])
+              if l.get("cible_id")]
+    sorties += [str(d["cible_id"]) for d in (meta.get("debouches") or [])
+               if d.get("cible_id")]
+    terminal = bool(scene) and not (meta.get("liens") or []) \
+        and bool(meta.get("charniere_sortie"))
+    lignes = [
+        f"Scène : {scene or '(aucune)'}",
+        f"Lieu : {lieu or '(aucun)'}",
+        f"Temps : {temps or '(aucun)'}",
+        "Sorties possibles (décor — jamais un menu) : "
+        + (", ".join(sorties) if sorties else "(aucune)"),
+        f"Nœud terminal (liens: [] + charnière de sortie) : "
+        f"{'oui' if terminal else 'non'}",
+    ]
+    return Section("stable", "Position (D-282)", "\n".join(lignes))
 
 
 def rendu_md_for(partition_dir: str | Path, location: str) -> str:
@@ -305,6 +352,7 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
         sections.append(Section("stable",
                                 "Brief de direction (directeur.md)", brief))
     sections.append(_current_node_section(partition_dir, store, location))
+    sections.append(_position_section(partition_dir, store, location))
     sections.append(_presence_section(partition_dir, store, location, secrets))
     if rpg_rules.strip():
         sections.append(Section("stable", "RPG MODULE (mechanics ON)",

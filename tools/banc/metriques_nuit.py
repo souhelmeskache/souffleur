@@ -7,6 +7,12 @@ Métriques rendues (fonction `calculer`) :
   `prose-NN.md` présents dans chaque dossier de partie).
 - `parties_finies` / `parties_lancees` : nombre de `resume-run.md` marquant
   `fin_atteinte: O`, sur le nombre total de dossiers `partie-*` du run.
+- `parties_completes` / `parties_mortes` / `parties_frontiere` : trois
+  sous-ensembles DISJOINTS de `parties_finies`, lus dans `raison_arret`
+  (`fin_module` / `mort` / `frontiere` — D-282, Issue #311 : la garde du
+  guichet a refusé un `location` hors partition). `frontiere` reste à 0 tant
+  que `nuit.sh` ne pose pas encore cette valeur (clôture de séance, I-093,
+  hors périmètre #311) — même réserve que `refus_outil` ci-dessous.
 - `refus_outil` : entrées `events.jsonl` de type `attack`/`roll_check`
   portant une clé `error`. **Aujourd'hui aucun writer du moteur ne journalise
   ces refus dans `events.jsonl`** (`attack`/`roll_check` rendent
@@ -250,6 +256,14 @@ def calculer(run_dir: Path) -> dict:
                      if lire_resume_run(p).get("raison_arret", "") == "fin_module")
     mortes = sum(1 for p in parties_dirs
                  if lire_resume_run(p).get("raison_arret", "") == "mort")
+    # frontiere (D-282, Issue #311) : la garde du guichet a refusé un
+    # `location` hors partition — troisième sous-ensemble disjoint des deux
+    # ci-dessus. `nuit.sh` ne pose pas encore `raison_arret: frontiere`
+    # (clôture de séance, I-093, hors périmètre #311) : ce compteur reste à 0
+    # tant que ça n'a pas changé côté script, même réserve que `refus_outil`
+    # ci-dessus — écrit pour rester correct dès que ça change.
+    frontieres = sum(1 for p in parties_dirs
+                     if lire_resume_run(p).get("raison_arret", "") == "frontiere")
 
     events_tous: list[dict] = []
     for p in parties_dirs:
@@ -263,6 +277,7 @@ def calculer(run_dir: Path) -> dict:
         "parties_finies": finies,
         "parties_completes": completes,
         "parties_mortes": mortes,
+        "parties_frontiere": frontieres,
         "paires": compter_paires(parties_dirs),
         "tours_median": statistics.median(tours_par_partie) if tours_par_partie else 0,
         "refus_outil": compter_refus_outil(events_tous),
@@ -281,8 +296,9 @@ def formater_markdown(m: dict) -> str:
     """Rend les métriques en lignes Markdown prêtes à coller dans `nuit.md`."""
     lignes = (
         f"- Parties finies / lancées : {m['parties_finies']} / {m['parties_lancees']}\n"
-        f"- Parties complètes (fin_module) / mortes (mort) : "
-        f"{m['parties_completes']} / {m['parties_mortes']} (#306)\n"
+        f"- Parties complètes (fin_module) / mortes (mort) / frontière "
+        f"(position hors partition, D-282) : {m['parties_completes']} / "
+        f"{m['parties_mortes']} / {m['parties_frontiere']} (#306, #311)\n"
         f"- Paires simultanées : {m['paires']}\n"
         f"- Tours sans craquement par partie (médiane) : {m['tours_median']}\n"
         f"- Refus d'outil (`attack`/`roll_check`, events.jsonl) : {m['refus_outil']}\n"
