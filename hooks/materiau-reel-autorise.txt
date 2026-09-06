@@ -1,0 +1,13 @@
+# Liste blanche de la garde "materiau reel" (I-324, hooks/verifier-materiau-reel.py).
+#
+# Un terme par ligne, en minuscules -- un identifiant reel du corpus
+# (slug de record ou champ id/nom/title) qui est AUSSI du vocabulaire
+# courant du domaine (classe de monstre generique, terme de regle, etc.),
+# au point de generer trop de faux positifs pour rester bloquant.
+#
+# Revue A LA MAIN uniquement, jamais generee automatiquement : chaque ligne
+# ajoutee ici doit etre justifiee (pourquoi ce terme n'identifie PAS a lui
+# seul du materiau de campagne reel) dans le commit qui l'ajoute.
+#
+# Vide au depart -- aucune tolerance accordee tant qu'un faux positif reel
+# n'a pas ete constate et discute.
