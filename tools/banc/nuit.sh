@@ -813,14 +813,16 @@ detecter_fin_partie() {
 }
 
 # Écrit resume-run.md pour une partie interrompue EN COURS DE TOUR par
-# STOP/PAUSE ou -FinA (#306) — jusqu'ici cette partie ne recevait AUCUN
-# resume-run.md (construire_table_parties la reportait "en cours /
-# interrompue", sans nœud), puisque le chemin `arreter_toute_la_nuit`
-# n'écrivait jamais resume-run.md avant de sortir tout le script. Appelée
-# juste avant `arreter_toute_la_nuit` dans chaque branche STOP/PAUSE/-FinA
-# de jouer_partie — `fermer_et_verifier_agents` doit déjà avoir tourné
-# (les panes sont fermés avant toute lecture de la save, jamais pendant
-# qu'un agent y écrit encore).
+# STOP/PAUSE, -FinA (#306) ou limite de session (#310) — jusqu'ici cette
+# partie ne recevait AUCUN resume-run.md (construire_table_parties la
+# reportait "en cours / interrompue", sans nœud, sans tours joués — constat
+# #310 : partie au tour 47 sans incident comptée "0 tours" à l'arrêt global
+# sur sortie 5), puisque le chemin `arreter_toute_la_nuit` n'écrivait jamais
+# resume-run.md avant de sortir tout le script. Appelée juste avant
+# `arreter_toute_la_nuit` dans chaque branche STOP/PAUSE/-FinA/limite de
+# session de jouer_partie — `fermer_et_verifier_agents` doit déjà avoir
+# tourné (les panes sont fermés avant toute lecture de la save, jamais
+# pendant qu'un agent y écrit encore).
 enregistrer_interruption_partie() {
   local partie_dir="$1" pnn="$2" modele="$3" tours_joues="$4" paire="$5" \
         save_dest="$6" raison="$7" t0="$8"
@@ -1133,7 +1135,7 @@ jouer_partie() {
         "$modele_joueur" "$effort_joueur" "$go_texte_joueur"; r=$?
       if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "arret-demande" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
       if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "fin-a-atteinte" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
-      if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
+      if [ "$r" -eq 5 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "limite-session" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
       if [ "$r" -eq 9 ]; then
         raison="craquement-processus-sorti"
         ecrire_craquement "$partie_dir" "$nn" "processus-sorti" "$(printf \
@@ -1164,7 +1166,7 @@ jouer_partie() {
       "$modele" "$effort_mj" "$go_texte_mj"; r=$?
     if [ "$r" -eq 3 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "arret-demande" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "arrêt demandé (fichier STOP/PAUSE, partie $pnn, tour $nn)"; fi
     if [ "$r" -eq 8 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "fin-a-atteinte" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 130 "heure de fin atteinte ($FIN_A) (partie $pnn, tour $nn)"; fi
-    if [ "$r" -eq 5 ]; then fermer_panes "$agent_mj" "$agent_joueur"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
+    if [ "$r" -eq 5 ]; then fermer_et_verifier_agents "$partie_dir" "$nn" "$agent_mj" "$agent_joueur"; enregistrer_interruption_partie "$partie_dir" "$pnn" "$modele" "$tours_joues" "$paire" "$save_dest" "limite-session" "$t0" "${craquements[@]}"; arreter_toute_la_nuit 5 "limite de session (partie $pnn, tour $nn)" "oui"; fi
     if [ "$r" -eq 9 ]; then
       raison="craquement-processus-sorti"
       ecrire_craquement "$partie_dir" "$nn" "processus-sorti" "$(printf \

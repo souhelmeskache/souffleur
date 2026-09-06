@@ -485,6 +485,54 @@ def _echo_checks(events: list[str]) -> list[str]:
 # le guichet. Tout nombre qu'il ne trouve pas sur une fiche est un REFUS ;
 # aucun `default=` n'est consulté (surtout pas ceux de monster_bridge.py:214).
 
+# ── lecture du bloc de stats projeté (I-463 volet #316(a), Issue #317) ────
+# Mesuré au banc (nuit 06/09, partie 02) : la projection (converter/
+# projection.py::project_into_save) écrit le bloc de stats d'un record
+# (`ca`, `pv`, `attaque_bonus`, `degats`, immunités...) en JSON dans le CORPS
+# de l'entrée `characters.md`, pas dans ses attrs (seul `importance` y vit
+# pour une créature). `_attack_fiche` ne lisait que `e.attrs` : une créature
+# entièrement connue par le module se bouchait quand même (6 bouchages
+# mesurés sur une créature du corpus dont CA/attaque_bonus/degats étaient
+# déjà écrits — voir le constat de l'Issue #317, nom hors périmètre de ce
+# dépôt, D-109/D-206).
+#
+# `_creature_stats` est le SEUL chemin de lecture d'un bloc de stats
+# non-joueur (I-463 : « en un seul lieu ») — `attack` (via `_attack_fiche`) et
+# `start_combat` (résolution d'un membre d'encounter par slug) passent tous
+# les deux par lui. Ordre de lecture : entrée `characters.md` (JSON du corps,
+# puis attrs qui l'emportent — compat fixtures existantes qui écrivent les
+# champs directement en attrs) ; à défaut, record de module brut
+# (`get_record`) ; à défaut, `None` — c'est l'appelant qui refuse.
+def _creature_stats(store, slug: str) -> dict | None:
+    for e in store.entries("characters.md"):
+        if e.slug != slug:
+            continue
+        stats: dict = {}
+        body = (e.body or "").strip()
+        if body:
+            try:
+                obj, _end = json.JSONDecoder().raw_decode(body)
+            except (json.JSONDecodeError, ValueError):
+                obj = None
+            if isinstance(obj, dict):
+                stats.update({str(k).strip().lower(): v for k, v in obj.items()})
+        stats.update({str(k).strip().lower(): v for k, v in e.attrs.items()})
+        stats.setdefault("nom", e.title)
+        return stats
+    try:
+        from coderain.converter.aval import get_record
+        rec = get_record(_module_partition(), slug)
+    except Exception:  # noqa: BLE001 — ni fiche ni record : None, l'appelant refuse
+        rec = None
+    if not isinstance(rec, dict):
+        return None
+    raw = rec.get("stats", rec)
+    stats = {str(k).strip().lower(): v
+             for k, v in (raw if isinstance(raw, dict) else {}).items()}
+    stats.setdefault("nom", stats.get("nom") or slug)
+    return stats
+
+
 def _attack_fiche(store, who: str) -> dict:
     """La fiche de combat d'un camp, telle qu'elle est ÉCRITE — jamais complétée.
 
@@ -530,25 +578,11 @@ def _attack_fiche(store, who: str) -> dict:
         return fiche
 
     slug = slugify(str(who))
-    attrs, name = None, slug
-    for e in store.entries("characters.md"):
-        if e.slug == slug:
-            attrs = {str(k).strip().lower(): v for k, v in e.attrs.items()}
-            name = e.title
-            break
+    attrs = _creature_stats(store, slug)
     if attrs is None:
-        try:
-            from coderain.converter.aval import get_record
-            rec = get_record(_module_partition(), str(who))
-        except Exception:  # noqa: BLE001 — ni fiche ni record : refus plus bas
-            rec = None
-        if not isinstance(rec, dict):
-            return {"error": f"unknown combatant '{who}' (no entry on "
-                             f"characters.md, no module record)"}
-        stats = rec.get("stats", rec)
-        attrs = {str(k).strip().lower(): v
-                 for k, v in (stats if isinstance(stats, dict) else {}).items()}
-        name = str(attrs.get("nom") or slug)
+        return {"error": f"unknown combatant '{who}' (no entry on "
+                         f"characters.md, no module record)"}
+    name = str(attrs.get("nom") or slug)
 
     def _num(key):
         got = rpg_mod.opt_int(attrs.get(key))
@@ -563,6 +597,40 @@ def _attack_fiche(store, who: str) -> dict:
     if poses:
         fiche["provisoire_ids"] = poses
     return fiche
+
+
+# ── start_combat : un membre non-joueur passé par slug (Issue #317) ──────
+# `encounter_member_from_record` (monster_bridge.py, I-205) n'avait aucun
+# appelant : un membre d'`encounter` sans `monster_template_slug` ouvrait le
+# combat sans aucun comportement de combat jouable (« aucun
+# monster_template_slug résolu », tour 13 mesuré au banc). Ce résolveur
+# ferme ce trou : un membre passé sans `monster_template_slug` est identifié
+# par son `entity_id`, lu par le MÊME chemin que `attack` (`_creature_stats`),
+# puis construit par `encounter_member_from_record` (template 'brute'
+# installé). Le record absent est un REFUS explicite — jamais un membre
+# vide qui laisse le combat s'ouvrir en silence.
+def _resolve_encounter_member(store, member: dict) -> dict:
+    if member.get("monster_template_slug"):
+        return member
+    from coderain.templates import slugify
+    from coderain.rules_engine.monster_bridge import encounter_member_from_record
+    from coderain.converter.ruletables import ConversionException
+    entity_id = str(member.get("entity_id") or "")
+    slug = slugify(entity_id)
+    stats = _creature_stats(store, slug)
+    if stats is None:
+        return {"error": f"unknown encounter member '{entity_id}' (no entry "
+                         f"on characters.md, no module record)"}
+    try:
+        built = encounter_member_from_record(
+            stats, record_id=slug, entity_id=entity_id or slug,
+            zone_id=member.get("zone_id") or "",
+            initiative=member.get("initiative", 10),
+            entity_type=member.get("entity_type", "Monster"),
+            hp_current=member.get("hp_current"))
+    except ConversionException as e:
+        return {"error": str(e)}
+    return {**member, **built}
 
 
 # ── memory fold — coderain's summarizer, LLM step lifted out ─────
