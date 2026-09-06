@@ -89,6 +89,18 @@
     Chaque sortie non nulle poste en commentaire de l'Issue une ligne
     `VEILLE <ISSUE> : <code> <raison> <phase>` — le journal du circuit vit
     sur l'Issue, jamais dans un scratchpad.
+
+    **Idempotence (#323)** : un verrou par issue
+    (`bench/.veilles/<ISSUE>.pid`, gitignoré) rend `veiller <ISSUE>`
+    rejouable sans effet double — un second lancement sur la même issue pendant
+    que le premier tourne encore imprime « veille déjà en cours sur #N (pid P
+    depuis HH:MM) » et sort 0 sans rien faire ; un verrou orphelin (process
+    mort) est repris automatiquement. `circuit.sh etat` liste ces veilles
+    (issue/pid/heure de lancement/phase) sous `--- veilles en cours ---`, et
+    signale un verrou orphelin restant. `circuit.sh veiller` sans argument
+    relance une veille pour chaque lane en vol (`herdr agent list`) qui n'en a
+    pas de vivante — le geste de reprise d'un fil après un redémarrage, en une
+    commande.
   - `solder-issue.sh <ISSUE>`, `attendre-termine.sh <ISSUE> <PR>` et
     `solder3.sh <PR>` sont des alias de compatibilité qui délèguent tous à
     `circuit.sh veiller <ISSUE>` (habitude d'appel du poste META) ; la

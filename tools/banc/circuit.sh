@@ -4,6 +4,7 @@
 # Usage :
 #   tools/banc/circuit.sh lancer <ISSUE> [modele] [effort] # lance une lane (enveloppe lancer-lane.ps1)
 #   tools/banc/circuit.sh veiller <ISSUE>                   # veille de circuit, toutes phases jusqu'au merge
+#   tools/banc/circuit.sh veiller                           # relance une veille pour chaque lane en vol qui n'en a pas
 #   tools/banc/circuit.sh revoir <PR>                       # lance une lane de revue adversariale sur une PR
 #   tools/banc/circuit.sh nettoyer <lane-NNN|revue-NNN>     # ferme workspace + worktree + branche d'UNE lane/revue
 #   tools/banc/circuit.sh nettoyer --orphelins              # purge les dossiers de worktree morts (ni Git ni herdr)
@@ -19,6 +20,10 @@ MAIN_REPO="C:/Users/souhe/souffleur"
 WORKTREES_DIR="C:/Users/souhe/.herdr/worktrees/souffleur"
 LANCEUR="C:/Users/souhe/souffleur/tools/lancer-lane.ps1"
 CORE_BARE_LOG="$MAIN_REPO/tools/banc/core-bare.log"
+# Verrous de veille (#323), un fichier par issue -- gitignoré, même
+# discipline que bench/.verrou-workspace-banc/<label> (lancer-banc-fumee.ps1,
+# #298).
+VEILLES_DIR="$MAIN_REPO/bench/.veilles"
 
 # Imprime l'aide des six verbes — appelée sans argument ou sur verbe inconnu.
 usage() {
@@ -26,6 +31,7 @@ usage() {
 Usage :
   $0 lancer <ISSUE> [modele] [effort]   # lance une lane (enveloppe lancer-lane.ps1)
   $0 veiller <ISSUE>                    # veille de circuit, toutes phases jusqu'au merge
+  $0 veiller                            # relance une veille pour chaque lane en vol qui n'en a pas
   $0 revoir <PR>                        # lance une lane de revue adversariale sur une PR
   $0 nettoyer <lane-NNN|revue-NNN>      # ferme workspace + worktree + branche d'UNE lane/revue
   $0 nettoyer --orphelins               # purge les dossiers de worktree morts (ni Git ni herdr)
@@ -220,6 +226,83 @@ for w in d.get("result", {}).get("worktrees", []) or []:
   return 0
 }
 
+# --- verrou de veille (#323) --------------------------------------------------
+#
+# Un verrou par issue (fichier $VEILLES_DIR/<ISSUE>.pid, gitignoré, même
+# discipline que bench/.verrou-workspace-banc/<label> dans
+# lancer-banc-fumee.ps1/#298) : rend `veiller` idempotent -- sans lui, deux
+# `circuit.sh veiller <ISSUE>` lancés à la suite tournent en double, chacun
+# avec son propre renvoi de verdict/merge/nettoyage (mesuré sur #313/#317/#319
+# le 06/09). Trois champs, un par ligne (pid=/depuis=/phase=).
+
+# Chemin du fichier de verrou de l'issue $1.
+verrou_veille_chemin() {
+  echo "$VEILLES_DIR/$1.pid"
+}
+
+# Vrai (code 0) si $1 est un PID vivant. `kill -0` sous le bash de Git for
+# Windows fonctionne sur les PID de son propre arbre MSYS -- exactement ceux
+# que ce script pose lui-même dans le verrou.
+pid_vivant() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# Lit le champ $2 (pid|depuis|phase) du verrou de l'issue $1 ; vide si le
+# verrou ou le champ est absent.
+verrou_lire_champ() {
+  local issue="$1" champ="$2" fichier
+  fichier=$(verrou_veille_chemin "$issue")
+  [ -f "$fichier" ] || return 0
+  awk -F'=' -v c="$champ" '$1==c{print substr($0, length($1)+2)}' "$fichier"
+}
+
+# Met à jour le champ "phase" du verrou de l'issue $1 (pid/depuis inchangés).
+# Sans effet si le verrou n'existe plus -- pas une erreur, `veiller` continue.
+verrou_phase() {
+  local issue="$1" phase="$2" fichier pid depuis
+  fichier=$(verrou_veille_chemin "$issue")
+  [ -f "$fichier" ] || return 0
+  pid=$(verrou_lire_champ "$issue" pid)
+  depuis=$(verrou_lire_champ "$issue" depuis)
+  printf 'pid=%s\ndepuis=%s\nphase=%s\n' "$pid" "$depuis" "$phase" > "$fichier"
+}
+
+# Acquiert le verrou de l'issue $1. Un verrou vivant déjà posé -> message +
+# return 1 (l'appelant sort 0, ce n'est pas un échec, c'est l'idempotence
+# demandée). Un verrou orphelin (PID mort) est repris silencieusement (juste
+# signalé). Pose `trap ... EXIT` pour libérer le verrou à toute sortie du
+# script (succès, erreur, ou un des codes 1-4 de `veiller`).
+verrou_acquerir() {
+  local issue="$1" fichier pid depuis
+  fichier=$(verrou_veille_chemin "$issue")
+  mkdir -p "$VEILLES_DIR"
+  if [ -f "$fichier" ]; then
+    pid=$(verrou_lire_champ "$issue" pid)
+    if pid_vivant "$pid"; then
+      depuis=$(verrou_lire_champ "$issue" depuis)
+      echo "veille déjà en cours sur #$issue (pid $pid depuis $depuis)"
+      return 1
+    fi
+    echo "verrou orphelin sur #$issue (pid $pid mort) -- repris."
+  fi
+  depuis=$(date '+%H:%M')
+  # $BASHPID, jamais $$ : sur un `veiller "$issue" &` lancé en fond depuis
+  # veiller_relancer_manquantes, $$ reste le PID du shell PARENT (le
+  # dispatcher `circuit.sh veiller` sans argument, qui sort dès sa boucle
+  # finie) -- le verrou pointerait alors sur un PID mort tout de suite,
+  # défaisant l'idempotence même sur ce chemin (REVUE PR #327). $BASHPID est
+  # celui du sous-shell qui exécute réellement la veille.
+  printf 'pid=%s\ndepuis=%s\nphase=%s\n' "$BASHPID" "$depuis" "demarrage" > "$fichier"
+  # Double quotes ici (pas des simples) : $fichier est local à cette
+  # fonction et sort de portée dès son return -- le trap doit porter la
+  # VALEUR résolue maintenant, jamais une référence à une variable qui
+  # n'existera plus quand le trap se déclenchera (bogue vécu en test #323 :
+  # "fichier: unbound variable" sous `set -u`).
+  trap "rm -f \"$fichier\"" EXIT
+  return 0
+}
+
 # --- etat ---------------------------------------------------------------------
 
 etat() {
@@ -243,6 +326,25 @@ for a in d.get("result", {}).get("agents", []) or []:
   else
     echo "  (aucune)"
   fi
+
+  echo "--- veilles en cours ---"
+  local trouve_v=0 f issue_v pid_v depuis_v phase_v
+  if [ -d "$VEILLES_DIR" ]; then
+    for f in "$VEILLES_DIR"/*.pid; do
+      [ -f "$f" ] || continue
+      issue_v=$(basename "$f" .pid)
+      pid_v=$(verrou_lire_champ "$issue_v" pid)
+      depuis_v=$(verrou_lire_champ "$issue_v" depuis)
+      phase_v=$(verrou_lire_champ "$issue_v" phase)
+      if pid_vivant "$pid_v"; then
+        printf "  #%-6s pid=%-8s depuis=%-6s phase=%s\n" "$issue_v" "$pid_v" "$depuis_v" "$phase_v"
+      else
+        printf "  #%-6s pid=%-8s depuis=%-6s phase=%s -- verrou orphelin\n" "$issue_v" "$pid_v" "$depuis_v" "$phase_v"
+      fi
+      trouve_v=1
+    done
+  fi
+  [ "$trouve_v" -eq 0 ] && echo "  (aucune)"
 
   echo "--- PR ouvertes ---"
   local prs
@@ -608,6 +710,11 @@ veiller() {
   local issue="$1"
   [ -n "$issue" ] || { echo "Usage : $0 veiller <ISSUE>" >&2; exit 1; }
 
+  # Idempotence (#323) : une veille déjà vivante sur cette issue -> message +
+  # sortie 0 immédiate, rien d'autre. Verrou libéré par le trap EXIT posé par
+  # verrou_acquerir, quelle que soit la façon dont ce process sort ensuite.
+  verrou_acquerir "$issue" || exit 0
+
   # Rejeu idempotent (I-250) : issue déjà fermée, ou PR déjà mergée pour
   # cette issue -> sortie 0 immédiate, sans rien poster.
   local etat pr_deja
@@ -622,6 +729,7 @@ veiller() {
     exit 0
   fi
 
+  verrou_phase "$issue" "attente_pr"
   echo "=== veiller #$issue : phase attente_pr ==="
   local _PR _BLOQUE_EXTRAIT _VERDICT_BODY
   attendre_pr "$issue"
@@ -635,6 +743,7 @@ veiller() {
 
   local cycle=0
   while :; do
+    verrou_phase "$issue" "ci"
     echo "=== veiller #$issue : phase ci (PR $pr) ==="
     attendre_ci "$pr"
     case $? in
@@ -646,6 +755,7 @@ veiller() {
         # conflit de la phase merge ci-dessous.
         traiter_conflit "$issue" "$pr" "ci" cycle
 
+        verrou_phase "$issue" "attente_termine"
         echo "=== veiller #$issue : phase attente_termine (conflit ci, cycle $cycle) ==="
         attendre_termine "$issue" "$pr"
         case $? in
@@ -671,6 +781,7 @@ veiller() {
         echo "=== veiller #$issue : CI rouge (cycle $cycle) — renvoi automatique à lane-$issue ==="
         herdr agent prompt "lane-$issue" "CI ROUGE sur la PR #$pr (run $run_id) : lis \`gh run view $run_id --log-failed\`, corrige, pousse, reposte un commentaire TERMINÉ (pas un Jalon) — c'est ce mot qui relance la veille" >/dev/null 2>&1
 
+        verrou_phase "$issue" "attente_termine"
         echo "=== veiller #$issue : phase attente_termine (CI rouge, cycle $cycle) ==="
         attendre_termine "$issue" "$pr"
         case $? in
@@ -683,6 +794,7 @@ veiller() {
       3) journal_sortie "$issue" 3 "90 min sans CI verte" "ci" ;;
     esac
 
+    verrou_phase "$issue" "revue"
     echo "=== veiller #$issue : phase revue (PR $pr) ==="
     lancer_revue "$pr"
     [ $? -eq 0 ] || journal_sortie "$issue" 1 "timeout verdict de revue" "revue"
@@ -691,6 +803,7 @@ veiller() {
     echo "PR $pr verdict : $verdict"
 
     if [ "$verdict" = "APPROUVE" ]; then
+      verrou_phase "$issue" "merge"
       echo "=== veiller #$issue : phase merge (PR $pr) ==="
       merger_et_nettoyer "$pr"
       case $? in
@@ -702,6 +815,7 @@ veiller() {
           # traiter_conflit, appelée des deux phases.
           traiter_conflit "$issue" "$pr" "merge" cycle
 
+          verrou_phase "$issue" "attente_termine"
           echo "=== veiller #$issue : phase attente_termine (conflit, cycle $cycle) ==="
           attendre_termine "$issue" "$pr"
           case $? in
@@ -738,6 +852,7 @@ veiller() {
     herdr agent prompt "lane-$issue" "$_VERDICT_BODY — pousse puis poste un nouveau commentaire TERMINÉ (pas un Jalon) — c'est ce mot qui relance la veille" >/dev/null 2>&1
     nettoyer_une "revue-$pr"
 
+    verrou_phase "$issue" "attente_termine"
     echo "=== veiller #$issue : phase attente_termine (cycle $cycle) ==="
     attendre_termine "$issue" "$pr"
     case $? in
@@ -746,6 +861,49 @@ veiller() {
       3) journal_sortie "$issue" 3 "90 min sans TERMINÉ après refus" "attente_termine" ;;
     esac
   done
+}
+
+# --- veiller sans argument : relance ce qui manque (#323) ---------------------
+#
+# Le geste de reprise d'un fil, en une commande, sans hypothèse sur ce qui
+# tourne déjà : pour chaque lane en vol (herdr agent list, label lane-NNN)
+# sans veille vivante (verrou absent ou orphelin), relance `veiller NNN` en
+# fond. Un `veiller "$issue" &` (pas un relancement de `$0`) : dans le même
+# process shell, ça respecte une éventuelle redéfinition de `veiller` par un
+# test après le `source`, et ça évite un aller-retour PowerShell/process.
+veiller_relancer_manquantes() {
+  local agents nom issue pid
+  # `tr -d '\r'` : `python -c` sous Windows termine ses lignes par \r\n même
+  # en sortie de pipe -- sans ce nettoyage, `issue="${nom#lane-}"` garde un
+  # \r final et le test [[ =~ ^[0-9]+$ ]] rejette une lane pourtant valide.
+  agents=$(herdr agent list 2>/dev/null | python -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for a in d.get("result", {}).get("agents", []) or []:
+    n = a.get("name", "")
+    if n.startswith("lane-"):
+        print(n)
+' | tr -d '\r')
+  if [ -z "$agents" ]; then
+    echo "veiller (sans argument) : aucune lane en vol."
+    return 0
+  fi
+  while IFS= read -r nom; do
+    [ -n "$nom" ] || continue
+    issue="${nom#lane-}"
+    [[ "$issue" =~ ^[0-9]+$ ]] || continue
+    pid=$(verrou_lire_champ "$issue" pid)
+    if pid_vivant "$pid"; then
+      echo "  #$issue : veille déjà vivante (pid $pid) — sautée."
+      continue
+    fi
+    echo "  #$issue : pas de veille vivante — relance en fond."
+    veiller "$issue" </dev/null >/dev/null 2>&1 &
+  done <<< "$agents"
+  return 0
 }
 
 # --- garde <core.bare> (I-231) -------------------------------------------------
@@ -842,8 +1000,11 @@ case "${1:-}" in
     etat
     ;;
   veiller)
-    [ -n "${2:-}" ] || { echo "Usage : $0 veiller <ISSUE>" >&2; exit 1; }
-    veiller "$2"
+    if [ -n "${2:-}" ]; then
+      veiller "$2"
+    else
+      veiller_relancer_manquantes
+    fi
     ;;
   *)
     usage
