@@ -143,6 +143,26 @@ def _turn_dir() -> Path:
     return ROOT / ".turn"
 
 
+def _log_paquet(store, outil: str, chars: int, sections: dict) -> None:
+    """Journalise la taille du paquet servi ce tour (I-469 §F0.4, Issue #332)
+    — un seul point d'appel pour `assemble_context_to_file` et
+    `paquet_narrateur`, les deux outils qui écrivent le paquet du
+    narrateur/Director dans un FICHIER plutôt que dans une fenêtre. `turn`
+    suit la même convention que les autres types d'`events.jsonl` de ce
+    module (`position_refusee`, `bouchage_*` — `len(store.turns()) + 1`, le
+    tour qui s'apprête à être joué, PAS encore enregistré par `record_turn`).
+    `tokens_est` : convention 1 jeton ≈ 4 caractères, déjà en usage
+    (`coderain/memory.py`, budgets en jetons -> caractères) — ici inversée
+    (caractères -> jetons), division entière, jamais un vrai compte de
+    tokenizer. `sections` : taille en caractères par section quand
+    l'assembleur les distingue (`paquet_narrateur`) ; `{}` sinon
+    (`assemble_context_to_file` ne rend qu'un texte déjà concaténé)."""
+    store.append_event_log({
+        "type": "paquet", "turn": len(store.turns()) + 1, "outil": outil,
+        "chars": chars, "tokens_est": chars // 4, "sections": sections,
+    })
+
+
 def _require_engine():
     if _engine is None:
         raise ValueError(

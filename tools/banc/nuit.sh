@@ -517,6 +517,43 @@ journal_ecran_role() {
   tail -n 30 "$partie_dir/ecran-$role.log" 2>/dev/null
 }
 
+# Remplissage de fenêtre (I-469 §F0.4, Issue #332) — lecture MÉCANIQUE du
+# pourcentage de contexte que Claude Code affiche sur l'écran, jamais une
+# estimation : les motifs couverts ici (« NN% ... context », « context
+# left/used ... NN% ») n'ont PAS été confirmés contre un écran réel à la
+# date de cette lane (aucun run de nuit n'a tourné pendant son
+# développement) — voir la PR pour le détail et la capture demandée par
+# l'Issue. Un texte qui ne matche aucun motif rend une chaîne vide ;
+# `journaliser_fenetre` journalise alors "non lisible", jamais un chiffre
+# deviné.
+lire_pct_fenetre() {
+  local texte="$1"
+  printf '%s' "$texte" \
+    | grep -oiE 'context[^%]{0,40}[0-9]{1,3} *%|[0-9]{1,3} *% *(of )?context' \
+    | grep -oE '[0-9]{1,3}' | tail -1
+}
+
+# Journalise le remplissage de fenêtre du rôle $3 au tour $4 dans
+# `events.jsonl` de la save jouée ($2) — même fichier que le paquet (F0.4a),
+# lecture fraîche du pane $5 (`herdr pane read`, jamais la dernière ligne de
+# la sonde #305 qui peut dater de 10s). `pct` reste la chaîne "non lisible"
+# (jamais un entier) si le motif n'apparaît pas sur cet écran.
+journaliser_fenetre() {
+  local partie_dir="$1" save_dest="$2" role="$3" nn="$4" pane="$5"
+  local texte pct events
+  texte="$(herdr pane read "$pane" --lines 30 2>/dev/null)"
+  pct="$(lire_pct_fenetre "$texte")"
+  events="$save_dest/memory/events.jsonl"
+  mkdir -p "$(dirname "$events")"
+  if [[ "$pct" =~ ^[0-9]+$ ]]; then
+    printf '{"type": "fenetre", "turn": %d, "role": "%s", "pct": %d}\n' \
+      "$((10#$nn))" "$role" "$pct" >> "$events"
+  else
+    printf '{"type": "fenetre", "turn": %d, "role": "%s", "pct": "non lisible"}\n' \
+      "$((10#$nn))" "$role" >> "$events"
+  fi
+}
+
 fermer_panes() {
   # Ferme au mieux les deux panes de la partie courante — jamais fatal (un
   # pane déjà fermé, ou jamais ouvert, ne bloque pas la fermeture de
@@ -1374,6 +1411,11 @@ jouer_partie() {
       detecter_fin_partie "$save_dest"
       break
     fi
+
+    # Remplissage de fenêtre MJ (I-469 §F0.4, Issue #332) — journalisé APRÈS
+    # que tour-$nn.md soit confirmé (r=0 ci-dessus), donc pour CHAQUE tour
+    # joué avec succès, tour 1 inclus.
+    journaliser_fenetre "$partie_dir" "$save_dest" "mj" "$nn" "$PANE_MJ_COURANT"
 
     # Arbitrage MÉCANIQUE de prose-NN.md entre les deux voies du gabarit
     # (Issue #295) : voie extraction (PRIMAIRE, section « Prose du

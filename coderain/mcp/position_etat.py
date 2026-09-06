@@ -365,6 +365,7 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "context.md"
     out.write_text(text, encoding="utf-8")
+    mcp_server._log_paquet(store, "assemble_context_to_file", len(text), {})
     return {"path": str(out), "chars": len(text), **info}
 
 

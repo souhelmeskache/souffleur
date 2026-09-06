@@ -491,6 +491,20 @@ n'exigeront pas de réécrire ce script.
   05/09 16:43-17:00 — les deux runs qui ont survécu étaient les deux qui
   tournaient sous une sonde équivalente (deux observations ne prouvent
   rien, mais la sonde est gratuite).
+- **Remplissage de fenêtre MJ (I-469 §F0.4, Issue #332)** : après CHAQUE
+  tour joué avec succès, `nuit.sh::journaliser_fenetre` relit le pane MJ
+  (`herdr pane read`, frais — pas la dernière ligne de la sonde ci-dessus,
+  qui peut dater de 10s) et journalise le pourcentage de remplissage que
+  Claude Code affiche dans `events.jsonl` de la save jouée : `{"type":
+  "fenetre", "turn": N, "role": "mj", "pct": NN}`. Motif de lecture
+  (`lire_pct_fenetre`) NON CONFIRMÉ contre un écran réel à la date de sa
+  lane — testé sur un écran synthétique seulement (`tests/`
+  `nuit_fenetre_contexte_i469_test.py`) ; un texte sans motif lisible
+  journalise `"pct": "non lisible"`, jamais un chiffre deviné. Tranche, avec
+  la taille du paquet servi (`mcp_server._log_paquet`, même
+  `events.jsonl`, `type: paquet`), la contradiction « 83% au tour 1 » ⊥
+  « 53k jetons » (I-467) par un chiffre lu — colonnes correspondantes dans
+  `rapport-nuit.md` (`metriques_nuit.py::paquet_fenetre_par_partie`).
 - `-FinA HH:MM` (#276, heure locale du poste, défaut `06:00` dans
   `nuit.cmd`, pas de défaut dans `nuit.sh` seul) : plus aucune partie ne
   démarre après cette heure ; une partie en cours s'arrête proprement au

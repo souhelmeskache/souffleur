@@ -128,6 +128,8 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "paquet-narrateur.md"
     out.write_text(full, encoding="utf-8")
+    sections_chars = {s: len(p) for s, p in zip(sections, parts)}
+    mcp_server._log_paquet(store, "paquet_narrateur", len(full), sections_chars)
     return {"path": str(out), "chars": len(full), "sections": sections,
            **info}
 
