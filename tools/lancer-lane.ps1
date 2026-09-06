@@ -314,12 +314,12 @@ livrable est un verdict posté en commentaire sur la PR #$PrNumber.
 3. Attaque le diff contre la spec de l'Issue liée. Cherche activement :
    - **Violations de spec** — ce que l'Issue demandait et que le diff ne fait
      pas, ou fait autrement que demandé.
-   - **Étanchéité** — tout matériau de campagne réel ou secret qui se serait
-     glissé dans le repo (voir CLAUDE.md du repo : le matériau réel vit dans
-     le dépôt privé ``ttrpg-corpus``, jamais ici, même gitignoré).
-   - **Zéro-spoiler** — toute fuite d'information de partie (contenu de
-     module, résultat de jet, secret de PJ/PNJ) qui ne devrait pas apparaître
-     en clair dans du code/test/doc versionné.
+   - **Étanchéité** — slug, titre ou bloc de stats d'un record de VRAIE
+     campagne (matériau tiers/commercial non versionné dans ce repo) qui se
+     serait glissé en clair dans du code/test/doc. Motif de refus : dépôt public,
+     matériau tiers hors du repo (voir CLAUDE.md du repo et ``corpus_dir()`` :
+     ce matériau réel vit uniquement dans le dépôt privé ``ttrpg-corpus``,
+     jamais ici, même gitignoré).
    - **Tests creux** — tests qui ne testent rien (assertions triviales, mocks
      qui masquent le comportement réel, absence de cas d'échec).
 

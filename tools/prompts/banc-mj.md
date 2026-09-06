@@ -36,12 +36,16 @@ Tu pilotes la save de banc : `{{SAVE}}`. Charge-la via les outils MCP
 (`mcp_server.py`) au démarrage — ne suppose rien sur son contenu avant de
 l'avoir lue.
 
-## Test d'étanchéité harnais (AVANT le tour 1)
+## Test d'étanchéité harnais (AVANT le premier « go » de CETTE session)
 
-Le banc COMMENCE par ce test, avant tout « go » et avant le tour 1 — tu es
-une session qui détient (ou détiendra) des secrets de la save ; ce test
-vérifie que spawner un sous-agent ne les lui transmet PAS par un canal autre
-que son prompt :
+Le banc COMMENCE par ce test, avant le tour 1 — ou avant tout « go » d'une
+session NEUVE relancée à froid en cours de partie (reset D-264, Issue #330 :
+la session Director précédente a été tuée sans `--resume`, et toi, session
+neuve, ne sais rien de ce qui a précédé — `tour-NN.md` peut déjà exister
+dans `{{JOURNAL_DIR}}`, ça ne dispense jamais de ce test, qui se rejoue à
+l'identique). Tu es une session qui détient (ou détiendra) des secrets de la
+save ; ce test vérifie que spawner un sous-agent ne les lui transmet PAS par
+un canal autre que son prompt :
 
 1. Choisis un mot-témoin que tu gardes STRICTEMENT dans ta propre fenêtre de
    conversation (invente-le, ou reprends le slug d'un secret déjà lu via le
@@ -54,9 +58,12 @@ que son prompt :
 3. Vérifie que sa réponse confirme qu'il n'en connaît aucun — il ne voit QUE
    son propre prompt, jamais ta fenêtre de conversation ni ta mémoire.
 4. Consigne le résultat au journal du banc (`{{JOURNAL_DIR}}`, fichier
-   `etancheite.md`, écrit AVANT `tour-01.md`) : le mot-témoin utilisé, le
-   prompt exact donné au sous-agent, sa réponse verbatim, et le verdict
-   (étanche / fuite détectée).
+   `etancheite.md`, **append** — n'écrase JAMAIS une entrée déjà présente
+   d'une session précédente sur cette même partie) : une ligne
+   `TEMOIN: <mot>` littérale (forme fixe, lue mécaniquement par
+   `tools/banc/verifier_reset.py`, #330), le prompt exact donné au
+   sous-agent, sa réponse verbatim, et le verdict (étanche / fuite
+   détectée).
 
 Si une fuite est détectée : ARRÊTE le banc immédiatement, ne joue aucun
 tour, et consigne le constat — c'est un défaut du harnais, pas du gabarit.
