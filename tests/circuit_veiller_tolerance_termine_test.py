@@ -85,6 +85,7 @@ def run():
             f'ISSUE="{ISSUE}"\n'
             f'PR="{PR}"\n'
             f'CALLS_FILE="{calls.as_posix()}"\n'
+            f'VEILLES_DIR="{(calls.parent / "veilles").as_posix()}"\n'
             'nettoyer_une() { return 0; }\n'
             + gh_fakes
             + '(veiller "$ISSUE"); echo "EXIT=$?"\n'

@@ -34,6 +34,10 @@ bench/nuit-*/
 # atomique, transitoire (retiré en fin d'appel), jamais du matériau ---
 bench/.verrou-workspace-banc/
 
+# --- verrous de veille par issue (#323) : pid/depuis/phase de circuit.sh
+# veiller, transitoires (retirés au trap EXIT), jamais du matériau ---
+bench/.veilles/
+
 # --- garde core.bare (I-231/#255) : journal machine (horodatage, origine,
 # commande en cours), pas du matériau à versionner ---
 tools/banc/core-bare.log

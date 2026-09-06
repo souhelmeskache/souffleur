@@ -65,6 +65,7 @@ def run(gh_herdr_fakes, extra_prelude="", scenario_tail='(veiller "$ISSUE"); ech
             f'ISSUE="{ISSUE}"\n'
             f'PR="{PR}"\n'
             f'CALLS_FILE="{calls.as_posix()}"\n'
+            f'VEILLES_DIR="{(calls.parent / "veilles").as_posix()}"\n'
             'nettoyer_une() { echo "NETTOYER-CALL: $*" >> "$CALLS_FILE"; return 0; }\n'
             'lancer_revue() { _VERDICT_BODY="REVUE : APPROUVE -- rien a redire"; return 0; }\n'
             + gh_herdr_fakes + extra_prelude + scenario_tail
