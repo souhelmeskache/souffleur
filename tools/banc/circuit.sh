@@ -3,7 +3,7 @@
 #
 # Usage :
 #   tools/banc/circuit.sh lancer <ISSUE> [modele] [effort] # lance une lane (enveloppe lancer-lane.ps1)
-#   tools/banc/circuit.sh veiller <ISSUE>                   # veille de circuit, toutes phases jusqu'au merge
+#   tools/banc/circuit.sh veiller <ISSUE>                   # veille de circuit, toutes phases jusqu'au merge (détachée du fil appelant, #328)
 #   tools/banc/circuit.sh veiller                           # relance une veille pour chaque lane en vol qui n'en a pas
 #   tools/banc/circuit.sh revoir <PR>                       # lance une lane de revue adversariale sur une PR
 #   tools/banc/circuit.sh nettoyer <lane-NNN|revue-NNN>     # ferme workspace + worktree + branche d'UNE lane/revue
@@ -24,13 +24,18 @@ CORE_BARE_LOG="$MAIN_REPO/tools/banc/core-bare.log"
 # discipline que bench/.verrou-workspace-banc/<label> (lancer-banc-fumee.ps1,
 # #298).
 VEILLES_DIR="$MAIN_REPO/bench/.veilles"
+# Chemin re-invoqué par veiller_detachee (#328 (d)) pour lancer le vrai
+# travail dans un second process -- variable (pas littéralement
+# `${BASH_SOURCE[0]}` au point d'appel) pour qu'un test puisse la réaffecter
+# après `source`, même discipline que REPO/MAIN_REPO/VEILLES_DIR ci-dessus.
+CIRCUIT_SCRIPT="${BASH_SOURCE[0]:-$0}"
 
 # Imprime l'aide des six verbes — appelée sans argument ou sur verbe inconnu.
 usage() {
   cat >&2 <<EOF
 Usage :
   $0 lancer <ISSUE> [modele] [effort]   # lance une lane (enveloppe lancer-lane.ps1)
-  $0 veiller <ISSUE>                    # veille de circuit, toutes phases jusqu'au merge
+  $0 veiller <ISSUE>                    # veille de circuit, toutes phases jusqu'au merge (détachée, journal bench/.veilles/<ISSUE>.log)
   $0 veiller                            # relance une veille pour chaque lane en vol qui n'en a pas
   $0 revoir <PR>                        # lance une lane de revue adversariale sur une PR
   $0 nettoyer <lane-NNN|revue-NNN>      # ferme workspace + worktree + branche d'UNE lane/revue
@@ -301,6 +306,39 @@ verrou_acquerir() {
   # "fichier: unbound variable" sous `set -u`).
   trap "rm -f \"$fichier\"" EXIT
   return 0
+}
+
+# --- veiller <issue> : lancement détaché du fil appelant (#328 (d)) ---------
+#
+# Aujourd'hui `veiller <ISSUE>` tourne dans le process/fil qui l'a lancée :
+# à sa fin (merge, ou sortie 1-4), le harnais RÉVEILLE ce fil, même clôturé
+# entretemps -- mesuré le 06/09 : le fil du matin (clôturé 09:56) s'est
+# réveillé à la fin de sa veille #313 (merge 11:01), a relancé la lane #311
+# et rouvert #321 -- deux tours de contrôle sur le même circuit. Un `nohup`
+# (ignore SIGHUP) + `disown` (retire le job de la table de jobs du shell
+# courant -- `setsid` indisponible sous ce bash de Git for Windows, jamais
+# sur PATH) détachent le vrai travail dans un second process, journalisé
+# sous $VEILLES_DIR/<ISSUE>.log ; ce process-ci rend la main dès le
+# lancement, sans attendre la fin de la veille (critère #328 : moins de 2s).
+#
+# Le second process re-invoque $CIRCUIT_SCRIPT sur le verbe interne
+# `_veiller_interne` -- jamais `veiller` directement -- pour repasser par le
+# dispatch complet (garde `BASH_SOURCE == $0`) sans revenir par ce
+# détachement (qui boucleraient sinon indéfiniment l'un sur l'autre).
+#
+# Redirection en AJOUT (`>>`), jamais en troncature (`>`) : un `veiller
+# <ISSUE>` rejoué pendant qu'une veille est déjà vivante sur cette issue
+# (verrou #323) ne doit pas tronquer le fichier sous le descripteur ouvert
+# du process en cours -- verrou_acquerir refusera de toute façon le second
+# travail (message + sortie 0), mais le journal du premier ne doit pas en
+# pâtir (REVUE PR #329).
+veiller_detachee() {
+  local issue="$1" log
+  mkdir -p "$VEILLES_DIR"
+  log="$VEILLES_DIR/$issue.log"
+  nohup bash "$CIRCUIT_SCRIPT" _veiller_interne "$issue" </dev/null >>"$log" 2>&1 &
+  disown
+  echo "veille #$issue : lancée en tâche détachée (pid $!, journal $log)"
 }
 
 # --- etat ---------------------------------------------------------------------
@@ -646,14 +684,46 @@ traiter_conflit() {
   nettoyer_une "revue-$pr"
 }
 
-# Phase 3 (revue) : relance une revue fraîche (lancer-lane.ps1 -Revue) puis
-# attend son verdict. Succès : $_VERDICT_BODY posé (corps complet du
-# commentaire REVUE), return 0. 90 min sans verdict : return 3.
+# Phase 3 (revue) : lit le verdict EXISTANT avant d'en lancer une nouvelle
+# (#328 (e)) -- T0 = date du DERNIER COMMIT de la PR (`gh pr view --json
+# commits`), jamais l'heure de la veille. Une veille relancée après coup ne
+# doit pas rater un APPROUVE déjà posté et en redemander un de plus (mesuré
+# sur #317/PR#320 : APPROUVE de 12:01:37 raté par une veille relancée à
+# 12:01:27, une 3e revue jouée pour rien). Si aucun REVUE : postérieur au
+# dernier commit n'existe, relance -Revue (#328 (f) : nettoyer_une AVANT de
+# lancer -- idempotente, déjà utilisée ailleurs dans ce script -- puis code
+# de sortie du lanceur testé via PIPESTATUS[0] ; un refus du lanceur, ex.
+# collision de nom sur revue-<PR> déjà en pane `done` -- mesuré sur PR#320,
+# 90 min d'attente d'un verdict impossible -- est une sortie immédiate,
+# jamais une attente) puis attend le nouveau verdict.
+#
+# Retours : 0 succès ($_VERDICT_BODY posé, verdict existant ou frais), 3
+# 90 min sans verdict après lancement, 4 lanceur refusé ($_LANCEUR_ECHEC
+# posé, dernière ligne de sa sortie).
 lancer_revue() {
-  local pr="$1" t0 body i
-  t0=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
-  echo "=== PR $pr : revue FRAICHE (T0=$t0) ==="
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$LANCEUR" -Revue "$pr" 2>&1 | tail -1
+  local pr="$1" t0 body i sortie rc linea
+  t0=$(gh pr view "$pr" -R "$REPO" --json commits --jq '.commits[-1].committedDate // empty' 2>/dev/null)
+  [ -n "$t0" ] || t0=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
+
+  body=$(gh pr view "$pr" -R "$REPO" --json comments --jq "[.comments[] | select(.createdAt > \"$t0\") | select(.body | startswith(\"REVUE :\"))] | last // {} | .body // \"\"" 2>/dev/null)
+  if [ -n "$body" ]; then
+    echo "=== PR $pr : verdict de revue existant postérieur au dernier commit ($t0) -- pas de relance ==="
+    _VERDICT_BODY="$body"
+    return 0
+  fi
+
+  echo "=== PR $pr : revue FRAICHE (T0=$t0, dernier commit) ==="
+  nettoyer_une "revue-$pr"
+  sortie=$(mktemp)
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$LANCEUR" -Revue "$pr" 2>&1 | tail -1 > "$sortie"
+  rc="${PIPESTATUS[0]}"
+  linea=$(cat "$sortie"); rm -f "$sortie"
+  echo "$linea"
+  if [ "$rc" -ne 0 ]; then
+    _LANCEUR_ECHEC="$linea"
+    return 4
+  fi
+
   for i in $(seq 1 180); do
     body=$(gh pr view "$pr" -R "$REPO" --json comments --jq "[.comments[] | select(.createdAt > \"$t0\") | select(.body | startswith(\"REVUE :\"))] | last // {} | .body // \"\"")
     if [ -n "$body" ]; then _VERDICT_BODY="$body"; return 0; fi
@@ -731,7 +801,7 @@ veiller() {
 
   verrou_phase "$issue" "attente_pr"
   echo "=== veiller #$issue : phase attente_pr ==="
-  local _PR _BLOQUE_EXTRAIT _VERDICT_BODY
+  local _PR _BLOQUE_EXTRAIT _VERDICT_BODY _LANCEUR_ECHEC
   attendre_pr "$issue"
   case $? in
     2) gh issue comment "$issue" -R "$REPO" --body "BLOQUÉ (watcher) : $_BLOQUE_EXTRAIT"
@@ -797,7 +867,11 @@ veiller() {
     verrou_phase "$issue" "revue"
     echo "=== veiller #$issue : phase revue (PR $pr) ==="
     lancer_revue "$pr"
-    [ $? -eq 0 ] || journal_sortie "$issue" 1 "timeout verdict de revue" "revue"
+    case $? in
+      0) ;;
+      4) journal_sortie "$issue" 1 "lanceur de revue refusé : $_LANCEUR_ECHEC" "revue" ;;
+      *) journal_sortie "$issue" 1 "timeout verdict de revue" "revue" ;;
+    esac
     local verdict
     verdict=$(echo "$_VERDICT_BODY" | parser_verdict)
     echo "PR $pr verdict : $verdict"
@@ -1001,10 +1075,16 @@ case "${1:-}" in
     ;;
   veiller)
     if [ -n "${2:-}" ]; then
-      veiller "$2"
+      veiller_detachee "$2"
     else
       veiller_relancer_manquantes
     fi
+    ;;
+  _veiller_interne)
+    # Point d'entrée interne (#328 (d)), jamais documenté dans l'aide :
+    # celui que le process détaché de veiller_detachee re-invoque pour
+    # exécuter la vraie veille, une fois séparée du fil appelant.
+    veiller "${2:-}"
     ;;
   *)
     usage
