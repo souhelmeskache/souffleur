@@ -89,6 +89,16 @@ def roll_check(mod: int, dc: int, seed: int, nonce: int) -> dict:
     }
 
 
+def roll_initiative(mod: int, seed: int, nonce: int) -> int:
+    """Jette l'initiative 5e (d20 + mod DEX) — même discipline reproductible
+    que `roll_check`/`roll_damage` (graine de la save, cran de
+    `rpg["rolls"]`). Chantier 7a §6 : un membre de `party` qui n'arrive pas
+    à `start_combat` avec sa propre initiative en reçoit une JETÉE ainsi,
+    jamais une valeur inventée par l'appelant."""
+    rng = random.Random(f"{seed}-{nonce}-initiative")
+    return rng.randint(1, 20) + int(mod)
+
+
 # I-206: a stat block's `degats` field is a free 5e-flavored string, e.g.
 # "9 (1d8+3) slashing" (see coderain/converter/annexe_a.py REQUIRED_STATS,
 # docs/annexe-a-stats-5e.md c7) — the dice notation is the parenthesized part.
@@ -132,9 +142,23 @@ def roll_damage(formula: str, seed: int, nonce: int) -> dict:
 # Vocabulaire du socle : le « DEX » de la 5e est la stat `agility`, le « FOR »
 # est `strength` (cf. sidecar.DEFAULT_CFG["stats"]). Les valeurs de `stats`
 # sont DÉJÀ des modificateurs — roll_check les additionne telles quelles au d20.
+#
+# Chantier 7a (I-28 suite, D&D réel) : une partie D&D règle `rpg: {stats: […]}`
+# sur les six caractéristiques 5e EXACTES — la fiche y porte alors des SCORES
+# bruts (règle 5e), jamais des modificateurs déjà calculés. Le vocabulaire
+# générique ci-dessus (agility/knowledge/willpower…) reste le défaut du
+# socle : une save existante, hors D&D, n'est jamais cassée (`scores_mode`
+# rend False tant que `stats` ne vaut pas EXACTEMENT ces six noms).
+# Une seule vérité (la fiche ne porte jamais deux fois la même donnée) :
+# le modificateur se DÉDUIT par `scores_to_mods`/`ability_mod`, une seule
+# fois (avant le bouchage D-275), jamais stocké à part.
 AC_BASE = 10                 # 5e : CA sans armure = 10 + mod DEX
 STAT_DEX = "agility"
 STAT_STR = "strength"
+D20_ABILITY_NAMES = frozenset({
+    "strength", "dexterity", "constitution",
+    "intelligence", "wisdom", "charisma",
+})
 
 # Champs lus sur l'entrée `items.md` d'un objet ÉQUIPÉ (le Markdown reste la
 # source de vérité ; le miroir `inventory` de state.json ne porte que
@@ -182,8 +206,51 @@ def _stat_mod(stats: dict, name: str):
     return None if (got is None or got is False) else got
 
 
+def scores_mode(cfg: dict | None) -> bool:
+    """True quand le vocabulaire réglé (`rpg: {stats: […]}`, défaut
+    `sidecar.DEFAULT_CFG["stats"]`) est EXACTEMENT les six caractéristiques
+    5e — la fiche porte alors des SCORES bruts, pas des modificateurs déjà
+    calculés. Toute autre liste (le vocabulaire générique du socle, ou un
+    sous-ensemble/sur-ensemble des six) reste au régime modificateur
+    inchangé — une save existante hors D&D n'est jamais cassée."""
+    try:
+        names = {str(s).strip().lower() for s in cfg_get(cfg, "stats")}
+    except TypeError:
+        return False
+    return names == D20_ABILITY_NAMES
+
+
+def ability_mod(score) -> int:
+    """Modificateur 5e d'un score brut : `(score - 10) // 2`."""
+    return (_as_int(score, 10) - 10) // 2
+
+
+def scores_to_mods(stats: dict | None, cfg: dict | None = None) -> dict:
+    """Une COPIE de `stats` où chaque score 5e lisible est converti en
+    modificateur (`ability_mod`) — seulement si `scores_mode(cfg)` ; sinon
+    une copie inchangée (vocabulaire générique : déjà des modificateurs).
+
+    Conversion faite UNE SEULE FOIS, ICI, avant tout autre traitement
+    (`derived_combat`, le bouchage D-275) : une valeur provisoire posée
+    ensuite par bouchage est déjà un modificateur final
+    (`appliquer_stats` : « complétée des MODIFICATEURS provisoires ») et ne
+    doit JAMAIS traverser cette conversion une seconde fois — la convertir
+    en amont du bouchage, plutôt qu'à chaque lecture dans `derived_combat`,
+    est ce qui empêche ce double-compte (correctif revue PR #355). Une
+    valeur illisible/non numérique traverse telle quelle — ce n'est pas ici
+    qu'un refus se prononce."""
+    out = dict(stats) if isinstance(stats, dict) else {}
+    if not scores_mode(cfg):
+        return out
+    for name, value in list(out.items()):
+        mod = _stat_mod(out, name)
+        if mod is not None:
+            out[name] = ability_mod(mod)
+    return out
+
+
 def derived_combat(player: dict, inventory: dict | None = None,
-                   items: dict | None = None) -> dict:
+                   items: dict | None = None, cfg: dict | None = None) -> dict:
     """CA, bonus d'attaque et arme du joueur, DÉRIVÉS de sa fiche (D-274 §1).
 
     Règle 5e simple, versionnée ici et nulle part ailleurs :
@@ -200,6 +267,13 @@ def derived_combat(player: dict, inventory: dict | None = None,
     `rpg["inventory"]` ({slug: {qty, equipped}}), `items` = {slug: attrs} lu
     sur items.md. Fonction PURE : elle ne lit ni n'écrit aucun fichier, et rien
     de ce qu'elle rend n'est stocké — tout se recalcule à chaque lecture.
+    `cfg` (le bloc `rpg:` actif) décide SEULEMENT du NOM de la stat DEX
+    (`scores_mode` : "dexterity" en partie D&D, "agility" au vocabulaire
+    générique) — `player["stats"]` est déjà en MODIFICATEURS ici, quel que
+    soit le vocabulaire : l'appelant (`player_combat`) convertit les scores
+    5e une seule fois, par `scores_to_mods`, AVANT que le bouchage D-275
+    (déjà des modificateurs) n'entre en jeu — cette fonction ne reconvertit
+    jamais rien (correctif revue PR #355, évite le double-compte).
 
     Rend {ac, attack_bonus, proficiency, attack_stat, weapon, armor} ou
     {"error": ...} : un modificateur nécessaire absent des `stats` est un
@@ -208,9 +282,10 @@ def derived_combat(player: dict, inventory: dict | None = None,
     stats = (player or {}).get("stats")
     if not isinstance(stats, dict):
         return {"error": "missing stats on player sheet"}
-    dex = _stat_mod(stats, STAT_DEX)
+    dex_name = "dexterity" if scores_mode(cfg) else STAT_DEX
+    dex = _stat_mod(stats, dex_name)
     if dex is None:
-        return {"error": f"missing stat '{STAT_DEX}' on player sheet "
+        return {"error": f"missing stat '{dex_name}' on player sheet "
                          f"(needed to derive AC)"}
     defs = items or {}
     armor = weapon = None
@@ -253,10 +328,10 @@ def derived_combat(player: dict, inventory: dict | None = None,
     elif weapon is not None and weapon["finesse"]:
         str_mod = _stat_mod(stats, STAT_STR)
         if str_mod is None:
-            stat_name, mod = STAT_DEX, dex
+            stat_name, mod = dex_name, dex
         else:
             stat_name, mod = ((STAT_STR, str_mod) if str_mod >= dex
-                              else (STAT_DEX, dex))
+                              else (dex_name, dex))
     else:
         stat_name = STAT_STR
         mod = _stat_mod(stats, stat_name)
@@ -276,7 +351,12 @@ def player_combat(store, cfg: dict | None = None) -> dict:
     D-275 : un modificateur absent de la fiche est cherché dans
     `rpg.provisoire` APRÈS la fiche et AVANT le refus. La valeur provisoire
     n'entre jamais dans `rpg.player.stats` (copie de lecture seule) et le
-    retour le dit : `provisoire: true` + `provisoire_ids`."""
+    retour le dit : `provisoire: true` + `provisoire_ids`.
+
+    Chantier 7a (correctif revue PR #355) : les scores 5e de la fiche sont
+    convertis en modificateurs ICI, par `scores_to_mods`, AVANT le bouchage
+    — une valeur provisoire (déjà un modificateur, D-275) ne traverse donc
+    jamais `ability_mod` une seconde fois."""
     from .. import bouchage
     rpg = store.rpg_state()
     items: dict[str, dict] = {}
@@ -286,10 +366,11 @@ def player_combat(store, cfg: dict | None = None) -> dict:
     except Exception:  # noqa: BLE001 — un items.md illisible ne casse pas la fiche
         items = {}
     player = dict(rpg.get("player") or {})
+    player["stats"] = scores_to_mods(player.get("stats"), cfg)
     stats, poses = bouchage.appliquer_stats(rpg, "player", player.get("stats"))
     if poses:
         player["stats"] = stats
-    out = derived_combat(player, rpg.get("inventory") or {}, items)
+    out = derived_combat(player, rpg.get("inventory") or {}, items, cfg)
     if poses and not out.get("error"):
         out["provisoire"] = True
         out["provisoire_ids"] = poses
@@ -490,7 +571,13 @@ def apply(store, sidecar: dict, cfg: dict | None = None) -> list[str]:
                 actor = "player"          # unknown slug: fall back to the player
         if actor == "player":
             actor_stats = player.get("stats", {})
-        mod = _as_int(actor_stats.get(stat, 0))
+        # D&D réel (chantier 7a) : vocabulaire 5e exact -> `stats` porte des
+        # SCORES, le modificateur se déduit (`ability_mod`) ; absent reste 0,
+        # jamais un score 0 inventé puis converti en mod -5 (vocabulaire
+        # générique inchangé : déjà un modificateur, lu tel quel).
+        raw_stat = actor_stats.get(stat)
+        mod = (ability_mod(_as_int(raw_stat)) if (scores_mode(cfg) and raw_stat is not None)
+              else _as_int(raw_stat, 0))
         # Tiered skill bonus: if the check names a skill the actor is trained in,
         # add its flat proficiency bonus on top of the governing stat.
         skill = str(chk.get("skill", "")).strip()

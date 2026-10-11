@@ -572,7 +572,7 @@ def _attack_fiche(store, who: str) -> dict:
     rpg_mod = _load_rpg()
     if who is None or str(who).strip().lower() in ("player", "you", ""):
         rpg = store.rpg_state()
-        derived = rpg_mod.player_combat(store)
+        derived = rpg_mod.player_combat(store, _rpg_cfg)
         p = rpg.get("player") or {}
         if derived.get("error"):
             # La fiche ne dérive pas. Un bouchage peut encore porter les

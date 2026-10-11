@@ -553,7 +553,11 @@ réécrase jamais une partie déjà jouée — idempotence).
 
 1. Copie fraîche de la save vers `bench/nuit-AAAAMMJJ/partie-NN/save/` et
    installation de la fixture de personnage (`bench/fixtures/personnage-banc.py`,
-   #257).
+   #257) — profil tournant selon le numéro ABSOLU de partie, sur les trois
+   fiches 5e `guerrier-5e`/`eclaireur-5e`/`erudit-5e` (revue PR #355,
+   chantier 7a : une nuit ne jouait jamais de fiche 5e jusque-là ; `--profil`
+   accepte aussi les trois profils génériques `guerrier`/`eclaireur`/`erudit`
+   pour un lancement manuel hors rotation de nuit).
 2. Lancement des deux agents (`lancer-banc-fumee.ps1`, avec `-ModeleMj`,
    `-ModeleJoueur`, `-SavesDirOverride`, `-JournalDirOverride` et
    `-WorkspaceLabel "banc-AAAAMMJJ"` — quatre paramètres additifs #260/#298,

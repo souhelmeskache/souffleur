@@ -163,6 +163,24 @@ def main() -> int:
             "aucune save ne doit être laissée sur REFUS"
         print("8/8 REFUS nommé si from-save n'a pas de module (monde vide) : ok")
 
+        # --- 9. revue PR #355 : --profil suit un profil 5e (DEFAULT_PROFIL
+        # reste 'guerrier', mais fabriquer()/verifier() restent génériques —
+        # aucune réécriture n'était nécessaire pour qu'un profil 5e y passe).
+        depart_slug_5e = "banc-depart-le-manoir-factice-5e"
+        res9 = save_depart.fabriquer(depart_slug_5e, from_save=played_slug,
+                                     root=lib_root, profil="guerrier-5e")
+        assert res9["status"] == "created", res9
+        depart_dir_5e = Path(res9["save_dir"])
+        rpg9 = MemoryStore(depart_dir_5e).rpg_state()
+        assert set(rpg9["player"]["stats"]) == {
+            "strength", "dexterity", "constitution",
+            "intelligence", "wisdom", "charisma"}, rpg9["player"]["stats"]
+        assert rpg9["player"]["classe"] == "fighter", rpg9["player"]
+        v9 = save_depart.verifier(depart_dir_5e, profil="guerrier-5e")
+        assert v9["status"] == "ok", v9
+        print("9/9 --profil guerrier-5e : fabriquer()/verifier() suivent "
+             "sans réécriture (fiche 5e, classe 'fighter') : ok")
+
         print("\nALL SAVE_DEPART TESTS PASSED")
         return 0
     finally:

@@ -22,6 +22,19 @@ script écrit aussi `constitution` (citée dans l'Issue au titre du vocabulaire
 attendu) même si `derived_combat` ne la lit pas aujourd'hui — ni erreur ni
 gain, une clé de plus dans le dict `stats`.
 
+Chantier 7a (I-28 suite, D&D réel) ajoute trois profils 5e — `guerrier-5e`,
+`eclaireur-5e`, `erudit-5e` (revue PR #355, pour que le banc de nuit joue
+enfin une fiche 5e) : une vraie fiche 5e, vocabulaire EXACT `strength/
+dexterity/constitution/intelligence/wisdom/charisma` (`rpg.scores_mode` le
+détecte), `stats` porte alors des SCORES bruts, pas des modificateurs —
+`classe`/`espece` sont des identifiants du catalogue `dnd5e-engine`, les
+objets équipés portent un `srd:` en plus des champs génériques. Les trois
+classes sont choisies SANS AUCUN sort au niveau 1 (`spellcasting.progression
+== NONE` au catalogue moteur) : fighter, rogue, monk — un érudit RAW serait
+un lanceur (wizard) dès le niveau 1, hors de cette contrainte (limite
+assumée, voir le commentaire du profil `erudit-5e`). Les profils génériques
+ci-dessus restent inchangés (vocabulaire générique, modificateurs).
+
 Le script écrit `player.md` ET `state.json` de façon cohérente en un seul
 passage (au lieu des deux sources désynchronisées constatées sur #102) :
 - `player.md` : l'entrée `## <nom>  {#player}` avec `stats:` dans le
@@ -62,6 +75,13 @@ _BODY_FIELDS = ("Identity", "Goals", "Inventory")
 
 WEAPON_SLUG = "epee-courte-de-banc"
 ARMOR_SLUG = "cotte-de-mailles-de-banc"
+
+# Chantier 7a (D&D réel) : objets distincts, avec un `srd:` (identifiant du
+# catalogue dnd5e-engine) que les profils génériques ci-dessus ne portent
+# pas — slugs séparés pour que les deux familles de profils restent
+# installables indépendamment (D-109, fixtures 100% synthétiques).
+WEAPON_SLUG_5E = "epee-longue-de-banc-5e"
+ARMOR_SLUG_5E = "cotte-de-mailles-de-banc-5e"
 
 PROFILES: dict[str, dict] = {
     "guerrier": {
@@ -171,6 +191,131 @@ PROFILES: dict[str, dict] = {
             },
         },
     },
+    # Chantier 7a (D&D réel, I-28 suite) : le personnage joué est une vraie
+    # fiche 5e — `stats` porte des SCORES bruts (vocabulaire 5e exact :
+    # strength/dexterity/constitution/intelligence/wisdom/charisma, jamais
+    # `agility`), `classe`/`espece` sont des identifiants du catalogue
+    # dnd5e-engine (`get_lib_loader().get_class/get_species`), et les objets
+    # équipés portent un `srd:` (identifiant du catalogue moteur) en plus des
+    # champs génériques (`degats:`/`armure:`) que `derived_combat` lit déjà.
+    "guerrier-5e": {
+        "name": "Rhodri Ashvale",
+        "status": "prêt au combat, en armes",
+        "genre": "homme — il ; accords au masculin",
+        "skills": "mêlée (strength)",
+        "stats": {
+            "strength": 16, "dexterity": 12, "constitution": 14,
+            "intelligence": 10, "wisdom": 10, "charisma": 8,
+        },
+        "level": 1, "classe": "fighter", "espece": "human",
+        "hp_max": 12,
+        "visual": "Épaules larges, cotte de mailles rapiécée, épée longue au fourreau.",
+        "mentality": "Discipliné, tient la ligne, ne recule jamais sans ordre.",
+        "voice": "Phrases courtes, militaires. « En formation. On tient. »",
+        "skills_prose": "Combat à l'épée longue, discipline de rang.",
+        "identity": "Guerrier de fortune au service du plus offrant — "
+                    "personnage de fixture (D-109), sans lien avec un "
+                    "module joué.",
+        "goals": "Honorer le contrat, ramener son équipement entier.",
+        "inventory_prose": "Épée longue, cotte de mailles.",
+        "items": {
+            WEAPON_SLUG_5E: {
+                "title": "Épée longue de banc",
+                "attrs": {"degats": "1d8+3", "stat": "strength",
+                          "status": "held by you", "srd": "longsword"},
+                "body": "Objet synthétique de fixture de banc (chantier 7a) — "
+                        "aucun lien avec un module joué.",
+            },
+            ARMOR_SLUG_5E: {
+                "title": "Cotte de mailles de banc (5e)",
+                "attrs": {"armure": "16", "dex_max": "0",
+                          "status": "held by you", "srd": "chain-mail"},
+                "body": "Objet synthétique de fixture de banc (chantier 7a) — "
+                        "aucun lien avec un module joué.",
+            },
+        },
+    },
+    # Revue PR #355 : le banc (tools/banc/nuit.sh) tournait encore sur les
+    # trois profils génériques — aucune nuit ne jouait jamais une fiche 5e.
+    # Deux profils de plus, même patron que `guerrier-5e` : classe/espèce du
+    # catalogue moteur, armes/armures avec `srd:`. Classes SANS aucun sort
+    # au niveau 1 (`loader.get_class(...).spellcasting.progression ==
+    # NONE`, mesuré avant écriture — barbarian/fighter/monk/rogue ; ranger/
+    # paladin écartés malgré 0 emplacement au niveau 1 : leur classe reste
+    # étiquetée « lanceur » (progression HALF) dans le catalogue moteur).
+    "eclaireur-5e": {
+        "name": "Sorrel Vane",
+        "status": "en éveil, dague en main, sur ses gardes",
+        "genre": "femme — elle ; accords au féminin",
+        "skills": "discrétion (dexterity)",
+        "stats": {
+            "strength": 10, "dexterity": 16, "constitution": 13,
+            "intelligence": 12, "wisdom": 10, "charisma": 14,
+        },
+        # Classe SANS sort au niveau 1 (progression NONE) — fidèle au thème
+        # éclaireur/fouineuse de la version générique (rogue).
+        "level": 1, "classe": "rogue", "espece": "elf-wood",
+        "hp_max": 9,
+        "visual": "Longue silhouette sèche, cape de voyage râpée, dague à la ceinture.",
+        "mentality": "Prudente, curieuse, cupide : fouille tout, évite le combat frontal, négocie avant de frapper.",
+        "voice": "Ironique, à voix basse. « On regarde d'abord. On frappe si on doit. »",
+        "skills_prose": "Discrétion, crochetage, lecture de terrain.",
+        "identity": "Éclaireuse et chasseuse de trésors — personnage "
+                    "de fixture (D-109), sans lien avec un module joué.",
+        "goals": "Ressortir riche et vivante ; ne jamais se faire piéger.",
+        "inventory_prose": "Dague, armure de cuir cloutée.",
+        "items": {
+            WEAPON_SLUG_5E: {
+                "title": "Dague de banc (5e)",
+                "attrs": {"degats": "1d4+3", "finesse": "true",
+                          "status": "held by you", "srd": "dagger"},
+                "body": "Objet synthétique de fixture de banc (chantier 7a) — "
+                        "aucun lien avec un module joué.",
+            },
+            ARMOR_SLUG_5E: {
+                "title": "Armure de cuir cloutée de banc (5e)",
+                "attrs": {"armure": "12", "status": "held by you",
+                          "srd": "studded-leather-armor"},
+                "body": "Objet synthétique de fixture de banc (chantier 7a) — "
+                        "aucun lien avec un module joué.",
+            },
+        },
+    },
+    "erudit-5e": {
+        "name": "Aldous Merrow",
+        "status": "attentif, bâton en main, carnet ouvert",
+        "genre": "homme — il ; accords au masculin",
+        "skills": "histoire (wisdom)",
+        "stats": {
+            "strength": 10, "dexterity": 16, "constitution": 13,
+            "intelligence": 10, "wisdom": 15, "charisma": 8,
+        },
+        # Limite assumée (revue PR #355) : un érudit RAW serait un lanceur
+        # (wizard) dès le niveau 1 — hors du périmètre « aucun sort » demandé
+        # pour le banc. Monk reste la classe SANS sort (progression NONE) la
+        # plus proche de l'archétype étudiant/discipliné ; CA simplifiée
+        # (10 + mod DEX, `derived_combat` n'implémente pas la Défense sans
+        # armure au mod SAG du monk — aucune armure équipée ici).
+        "level": 1, "classe": "monk", "espece": "elf-high",
+        "hp_max": 9,
+        "visual": "Homme mince aux doigts tachés d'encre, robe de voyage, bâton ferré.",
+        "mentality": "Méthodique, obsédé par les énigmes et les inscriptions ; téméraire dès qu'un secret est en jeu.",
+        "voice": "Phrases longues, vocabulaire précis. « Ceci mérite d'être compris avant d'être détruit. »",
+        "skills_prose": "Histoire, langues anciennes, examen d'objets, premiers soins.",
+        "identity": "Érudit itinérant en quête de vestiges — personnage "
+                    "de fixture (D-109), sans lien avec un module joué.",
+        "goals": "Comprendre ce que le lieu cache ; rapporter une preuve écrite.",
+        "inventory_prose": "Bâton ferré, carnet (aucune armure — discipline du corps).",
+        "items": {
+            WEAPON_SLUG_5E: {
+                "title": "Bâton ferré de banc (5e)",
+                "attrs": {"degats": "1d6+3", "stat": "dexterity",
+                          "status": "held by you", "srd": "quarterstaff"},
+                "body": "Objet synthétique de fixture de banc (chantier 7a) — "
+                        "aucun lien avec un module joué.",
+            },
+        },
+    },
 }
 
 
@@ -212,9 +357,16 @@ def _is_installed(entry, rpg: dict, profile: dict) -> bool:
         return False
     if str(entry.attrs.get("status", "")).strip() != profile["status"]:
         return False
-    p_stats = (rpg.get("player") or {}).get("stats") or {}
+    player = rpg.get("player") or {}
+    p_stats = player.get("stats") or {}
     if {k: int(v) for k, v in p_stats.items()} != dict(profile["stats"]):
         return False
+    # Chantier 7a : classe/espece/level ne comptent que pour un profil 5e
+    # qui les déclare — les anciens profils (vocabulaire générique) n'en
+    # portent pas, comportement inchangé.
+    for key in ("classe", "espece", "level"):
+        if key in profile and player.get(key) != profile[key]:
+            return False
     inv = rpg.get("inventory") or {}
     for slug in profile["items"]:
         held = inv.get(slug)
@@ -283,7 +435,13 @@ def install(save_path: Path, profil: str = "guerrier",
     rpg = store.rpg_state()
     player = rpg.setdefault("player", {})
     player["stats"] = dict(profile["stats"])
-    player["level"] = 1
+    player["level"] = profile.get("level", 1)
+    # Chantier 7a : classe/espece (identifiants du catalogue moteur) ne
+    # s'écrivent que pour un profil 5e qui les déclare — anciens profils
+    # (vocabulaire générique) inchangés, aucune de ces deux clés posée.
+    for key in ("classe", "espece"):
+        if key in profile:
+            player[key] = profile[key]
     player["hp"] = player["hp_max"] = profile["hp_max"]
     player.setdefault("mana", 5)
     player.setdefault("mana_max", 5)
@@ -291,9 +449,15 @@ def install(save_path: Path, profil: str = "guerrier",
     player["conditions"] = []
     player.setdefault("abilities", [])
     player.setdefault("titles", [])
-    inv = rpg.setdefault("inventory", {})
-    for slug in profile["items"]:
-        inv[slug] = {"qty": 1, "equipped": True}
+    # Revue PR #355 : un profil REMPLACE l'équipement du précédent, jamais
+    # une superposition — `rpg["inventory"]` est reposé en entier sur les
+    # SEULS objets de CE profil (jamais un `setdefault` + merge). Sans ça,
+    # un profil désarmé (`erudit-5e`, sans armure) installé par --force
+    # par-dessus un profil armuré héritait l'armure équipée du précédent
+    # (même slug générique vs 5e distincts : ni items.md ni l'inventaire
+    # n'étaient jamais nettoyés d'eux-mêmes).
+    rpg["inventory"] = {slug: {"qty": 1, "equipped": True}
+                        for slug in profile["items"]}
     store.set_rpg_state(rpg)
 
     return {"status": "installed",
