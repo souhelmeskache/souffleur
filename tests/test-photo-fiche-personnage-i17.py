@@ -16,7 +16,19 @@ Ce test, 100 % synthétique (D-109/D-206, aucun matériau de campagne réel) :
   3. `mcp_server.paquet_narrateur`, qui réutilise ce même chemin avec
      `role_section=False`, reste INCHANGÉ : toujours aucune fiche, ni avant
      ni après ce correctif (le narrateur reçoit la perception du
-     personnage jouée, jamais sa fiche mécanique)."""
+     personnage jouée, jamais sa fiche mécanique).
+
+MODIFIÉ par I-22/I-15/I-18 (`tests/test-photo-identite-i15-i18-i22.py`
+couvre le changement en détail) : le point 1b vérifiait que la variante du
+Rôle (Director) servie sur ce chemin était bien celle AVEC jeu (`_ENV_RPG`,
+pas `_ENV_WORLD`). I-22 fait de `_position_context_text` un pont qui ne sert
+QUE le régime principal (Director Claude Code branché par MCP, déjà son
+propre rôle) : il passe désormais `director_sys=False` à `build_sections`
+par défaut, donc la section « Rôle (Director) » — `DIRECTOR_SYS`, quelle que
+soit sa variante — n'atteint plus CE chemin du tout. Le point 1b vérifie
+maintenant son ABSENCE complète plutôt que sa variante ; rien d'autre ne
+change (la fiche + le socle RPG restent gouvernés par `role_section`,
+inchangé)."""
 from __future__ import annotations
 
 import json
@@ -100,12 +112,16 @@ assert "RPG MODULE (mechanics ON)" in texte, \
     f"section RPG MODULE absente -> {texte[:4000]!r}"
 print("  OK : Fiche de personnage + RPG MODULE présentes, jeu actif")
 
-section("1b) la variante du Rôle (Director) est bien la variante RPG")
+section("1b) I-22 : la section Rôle (Director)/DIRECTOR_SYS n'atteint plus "
+        "ce chemin (régime principal, Director déjà son propre rôle)")
 from coderain.modules.trinity import DIRECTOR_SYS
-role_rpg_variant = DIRECTOR_SYS.split("%s")[0].strip()[:60]
-assert role_rpg_variant in texte, \
-    "le préfixe du Rôle (Director) devrait être présent (role_section=True)"
-print("  OK : section Rôle (Director) présente")
+role_prefix = DIRECTOR_SYS.split("%s")[0].strip()[:60]
+assert role_prefix not in texte, \
+    f"DIRECTOR_SYS ne devrait plus atteindre la photo du Director MCP " \
+    f"(director_sys=False par défaut, I-22) -> {texte[:2000]!r}"
+assert "Rôle (Director)" not in texte, \
+    "le titre de section ne devrait plus apparaître non plus"
+print("  OK : section Rôle (Director) absente (I-22)")
 
 section("2) save au jeu INACTIF : ni fiche ni socle RPG, rien ne fuite")
 store_off, slug_off = _save("simple", "simple")

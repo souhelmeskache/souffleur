@@ -8,15 +8,34 @@ les saves SANS partition/position gardent `assemble()` inchangé — voir
 
 Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
 
-  1. STABLE   — DIRECTOR_SYS (rôle, existant dans `modules/trinity.py`)
-  2. STABLE   — brief de direction (`directeur.md`, D-177, déjà projeté entre
+  1. STABLE   — DIRECTOR_SYS (rôle, existant dans `modules/trinity.py`) —
+                omise quand `role_section` est False (paquet narrateur) OU
+                quand `director_sys` est False (I-22 : le régime principal,
+                Claude Code branché par MCP, est déjà son propre Director —
+                cette section décrit le rôle d'un AUTRE pipeline, celui qui
+                exige du JSON et embarque la conversation d'accord ; voir
+                `director_sys` ci-dessous)
+  2. STABLE   — Personnage joué (I-15/I-18) : `player.md` rendu par
+                `_context_render` (nom, `genre:` explicite si rempli,
+                reste des attrs, corps) — INDÉPENDANTE de `role_section`
+                et de `director_sys` : servie au Director ET au narrateur,
+                puisque ni l'un ni l'autre ne savait auparavant qui est
+                joué (ce paquet ne servait jamais `player.md` — seule la
+                fiche MÉCANIQUE de `rpg.context_block` existait, section
+                8 ci-dessous). Omise si `player.md` est vide (aucune
+                entrée).
+  3. STABLE   — brief de direction (`directeur.md`, D-177, déjà projeté entre
                 les marqueurs P4-BRIEF-START/END de `custom-instructions.md`)
-  3. STABLE   — le node courant : corps + objectif_md + ses débouchés/liens
+                — le point « 6. Discipline d'écran » en est retiré AU
+                SERVICE (I-18, `_brief()`), jamais réécrit dans la
+                partition : bruit de pipeline (`ui_say`/`ui_wait`/...) pour
+                un Director qui a son propre canal au régime principal.
+  4. STABLE   — le node courant : corps + objectif_md + ses débouchés/liens
                 comme POTENTIELS (garde D-179 : jamais un menu ni un
                 déclencheur automatique)
-  4. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
+  5. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
                 porteur est présent (routage `hidden` conservé, D-019)
-  5. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
+  6. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
                 section « Level-ups and grants » sur déclencheur d'état,
                 `engine.py::_rpg_rules_served`, D-260 post-mesure (a), Issue
                 #162) + directive `response_length` (D-260 post-mesure, Issue
@@ -28,7 +47,7 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 `engine.py::_augment_rpg`/`_augment_style` composaient ce
                 contenu APRÈS elles avant ce correctif, cassant le préfixe
                 cachable pour rien — `docs/mesure-d260-boucle-neuve.md`)
-  6. VOLATILE — position (D-282, Issue #311) : les trois axes (scène/lieu/
+  7. VOLATILE — position (D-282, Issue #311) : les trois axes (scène/lieu/
                 temps, chacun pouvant être vide) + ids sortants du nœud
                 courant + drapeau terminal (`liens: []` + `charniere_sortie`)
                 — la même lecture que `tools/banc/detecter_fin.py`, jamais
@@ -37,13 +56,13 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 SANS transition de node — rangée avec les sections
                 volatiles ci-dessous, JAMAIS avant, pour ne jamais couper
                 le préfixe stable en deux
-  7. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
+  8. VOLATILE — verdicts de règles DE CE TOUR (`triggers_all` évalué par code
                 contre l'état courant) — jamais `event_rules_block()` entier
-  8. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
+  9. VOLATILE — fiche perso, état monde compact, étage scénario OUVERT (D-260
                 lane c, Issue #131 : `memory/scenario-courant.md` — jamais les
                 scènes brutes d'un scénario fermé, `summarizer.fermer_scenario`
                 le vide à la fermeture)
-  9. VOLATILE — reprise de séance (F0.3, Issue #331) : SEULEMENT au premier
+ 10. VOLATILE — reprise de séance (F0.3, Issue #331) : SEULEMENT au premier
                 tour qui suit une clôture de séance (`validator.seance_reprise`)
                 — numéro de la séance précédente, raison de clôture, dernier
                 nœud franchi, en_suspens ; absente sinon. Servie au Director
@@ -53,16 +72,22 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
 Le hors-position ne se charge pas d'avance : le Director le demande via
 `recall_queries` de son enveloppe (soupape déjà existante).
 
-Stabilité de préfixe (exigence cache) : les sections 1-5 sont byte-stables
+Stabilité de préfixe (exigence cache) : les sections 1-6 sont byte-stables
 entre deux tours SANS transition de node ET sans changement de config
 (rpg-rules.md, response_length) — aucun timestamp, compteur, id de requête,
 tri non déterministe. `stable_prefix()` isole ce sous-ensemble (toute section
 marquée "stable", quel que soit son rang) pour le test de non-régression du
 cache.
+
+`director_sys` (I-22, Issue #198 suite) : n'omet QUE la section 1 ; tout le
+reste que `role_section` gouverne (fiche mécanique section 6, reprise de
+séance section 10) reste inchangé. Défaut `True` — `coderain/engine.py`
+(régime secondaire) ne le passe jamais, son paquet reste octet-identique.
 """
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,6 +99,19 @@ from . import validator as validator_mod
 
 _BRIEF_START = "<!-- P4-BRIEF-START -->"
 _BRIEF_END = "<!-- P4-BRIEF-END -->"
+
+# I-18 : le point numéroté « Discipline d'écran » (`converter/directeur.py`,
+# GABARIT) décrit un canal (`ui_say`/`ui_wait`/`ui_sheet`/`ui_panel`) qui
+# n'est jamais celui du régime principal (Director Claude Code branché par
+# MCP) — bruit pour le Director comme pour le narrateur. Retiré AU SERVICE
+# seulement (`_brief()` ci-dessous) : la partition elle-même (`directeur.md`,
+# `custom-instructions.md`) n'est JAMAIS réécrite par ce module. Le numéro
+# n'est pas fixe par construction du gabarit (il suit la numérotation
+# source) : on matche le LIBELLÉ, jusqu'au point numéroté suivant ou à la
+# prochaine section `## `.
+_DISCIPLINE_ECRAN_RE = re.compile(
+    r"\n\d+\.\s+\*\*Discipline d'écran\*\*.*?(?=\n\d+\.\s+\*\*|\n##\s|\Z)",
+    re.DOTALL)
 
 
 @dataclass
@@ -108,12 +146,41 @@ def _read_json_front(path: Path) -> dict:
 
 def _brief(store: MemoryStore) -> str:
     """Le brief de direction déjà projeté (D-177) entre ses marqueurs — lu
-    depuis custom-instructions.md, jamais régénéré ici."""
+    depuis custom-instructions.md, jamais régénéré ici.
+
+    I-18 : le point « Discipline d'écran » en est retiré ICI, au moment du
+    service — `_DISCIPLINE_ECRAN_RE` — sans toucher la partition ni
+    `custom-instructions.md` (jamais réécrits par ce module). Le reste du
+    brief (gabarit transverse + instanciation) est servi tel quel."""
     text = store.read("custom-instructions.md")
     i, j = text.find(_BRIEF_START), text.find(_BRIEF_END)
     if i < 0 or j <= i:
         return ""
-    return text[i + len(_BRIEF_START):j].strip()
+    raw = text[i + len(_BRIEF_START):j].strip()
+    return _DISCIPLINE_ECRAN_RE.sub("", raw).strip()
+
+
+def _player_section(store: MemoryStore) -> Section | None:
+    """I-15/I-18 : le personnage joué — `player.md` rendu par
+    `_context_render` (déjà le rendu qu'utilisait l'ancien chemin,
+    `memory.py::assemble` section « You »). Nom ET `genre:` (I-15, attr
+    ordinaire comme `status`/`skills` — aucun parsing dédié) arrivent ici
+    pour la première fois à CE paquet : ni le Director ni le narrateur ne
+    savaient auparavant qui joue (mesuré : accords au masculin par défaut).
+
+    STABLE et INDÉPENDANTE de `role_section`/`director_sys` : servie au
+    Director ET au narrateur — `player.md` ne varie pas tour par tour sans
+    écriture explicite, donc n'abîme jamais le préfixe cachable.
+
+    Omise si `player.md` est vide (aucune entrée) — jamais une section
+    vide placée en tête."""
+    entries = store.entries("player.md")
+    if not entries:
+        return None
+    text = "\n\n".join(_context_render(e) for e in entries).strip()
+    if not text:
+        return None
+    return Section("stable", "Personnage joué", text)
 
 
 def _potentials_text(meta: dict) -> str:
@@ -348,7 +415,7 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
                    scenes_tail: int = 4, char_sheet: str = "",
                    rpg_on: bool = False, secrets: bool = True,
                    rpg_rules: str = "", response_length: str = "",
-                   role_section: bool = True
+                   role_section: bool = True, director_sys: bool = True
                    ) -> list[Section]:
     """Construit le paquet ordonné (voir docstring de module). `char_sheet`
     est fourni par l'appelant (`rpg_mod.context_block`, hors périmètre de ce
@@ -377,12 +444,26 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     réutilise ce même chemin pour composer le paquet du NARRATEUR, pas du
     Director, et passe `False` : servir `DIRECTOR_SYS` au narrateur lui
     donnerait un prompt de rôle qui ne le décrit pas (retour de banc réel,
-    run 20260831-202617)."""
+    run 20260831-202617).
+
+    `director_sys` (I-22, Issue #198 suite) : omet la MÊME section « Rôle
+    (Director) » quand `False`, mais SANS toucher à ce que `role_section`
+    gouverne par ailleurs (fiche mécanique/socle RPG — fournis par
+    l'appelant, pas recalculés ici — et reprise de séance). Les deux
+    conditions se cumulent (`role_section and director_sys`) : `role_section`
+    reste le garde-fou narrateur/Director, `director_sys` le garde-fou
+    régime principal/pipeline JSON. Défaut `True` — `coderain/engine.py`
+    (régime secondaire) ne le passe jamais, son paquet reste
+    octet-identique ; `mcp_server.py` (régime principal, Director Claude
+    Code branché par MCP) le passe `False`."""
     partition_dir = Path(partition_dir)
     sections = []
-    if role_section:
+    if role_section and director_sys:
         sections.append(Section("stable", "Rôle (Director)",
                                 DIRECTOR_SYS % (_ENV_RPG if rpg_on else _ENV_WORLD)))
+    player_section = _player_section(store)
+    if player_section is not None:
+        sections.append(player_section)
     brief = _brief(store)
     if brief:
         sections.append(Section("stable",

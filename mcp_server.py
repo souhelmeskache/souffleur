@@ -1027,7 +1027,8 @@ def _rpg_rules_served(store) -> str:
 def _position_context_text(store, partition_dir: Path, state: dict,
                            history: list[dict], player_action: str,
                            recent_turns: int, event_rules: bool,
-                           secrets: bool, role_section: bool = True
+                           secrets: bool, role_section: bool = True,
+                           director_sys: bool = False
                            ) -> tuple[str, dict]:
     """D-260 (Issue #146) : le chemin par position pour
     `assemble_context_to_file` — même sélection que `engine._messages()`
@@ -1064,7 +1065,20 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     `budget_tokens`/`wide_lore`/`max_secrets`/`secrets_window`/`lore_include`
     n'ont pas cours ici : la sélection par position n'a ni budget ni passe
     large/étroite, elle est déterministe (node courant + records ancrés) —
-    même divergence assumée que `engine._messages()` sur le chemin position."""
+    même divergence assumée que `engine._messages()` sur le chemin position.
+
+    `director_sys` (I-22, Issue #198 suite) : descend tel quel jusqu'à
+    `build_sections` — omet la section « Rôle (Director) » (`DIRECTOR_SYS`)
+    SANS toucher à ce que `role_section` gouverne par ailleurs (fiche
+    mécanique/socle RPG calculés juste au-dessus, reprise de séance dans
+    `build_sections`). Défaut `False` ICI (et non `True` comme dans
+    `build_sections`) : ce pont ne sert QUE le régime principal (Claude Code
+    branché par MCP, `assemble_context_to_file` ET `paquet_narrateur`) — un
+    Director qui a déjà son propre rôle, jamais celui d'un pipeline séparé
+    qui exige du JSON et embarque la conversation d'accord (4 fenêtres,
+    D-219). `coderain/engine.py` (régime secondaire) n'appelle jamais cette
+    fonction — il appelle `assembleur_position.assemble()` directement, dont
+    le défaut `director_sys=True` reste, lui, inchangé."""
     location = validator_mod.current_location(state)
     rpg_on = store.rpg_enabled()
     char_sheet, rpg_rules = "", ""
@@ -1076,7 +1090,7 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     sections = assembleur_position.build_sections(
         partition_dir, store, location, history, player_action,
         char_sheet=char_sheet, rpg_on=rpg_on, rpg_rules=rpg_rules,
-        secrets=secrets, role_section=role_section)
+        secrets=secrets, role_section=role_section, director_sys=director_sys)
     text = "\n\n".join(s.render() for s in sections if s.render())
     # Verdicts du tour (lane b, #127) — jamais event_rules_block() entier.
     # `event_rules` garde le même sens que sur l'ancien chemin : False par

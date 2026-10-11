@@ -125,6 +125,7 @@ aliases:
 importance: 5
 pinned: true
 status: awake inside the Veil - offered the choice, not yet decided
+genre:
 
 **Visual:** However you picture yourself; the Veil renders you plausible and
 unremarkable, which is the point.

@@ -67,6 +67,7 @@ PROFILES: dict[str, dict] = {
     "guerrier": {
         "name": "Mika Thorne",
         "status": "prête au combat, armée et armurée",
+        "genre": "femme — elle ; accords au féminin",
         "skills": "mêlée (strength)",
         "stats": {
             "strength": 3, "agility": 1, "constitution": 2,
@@ -266,8 +267,9 @@ def install(save_path: Path, profil: str = "guerrier",
     stats_line = ", ".join(f"{k} {v}" for k, v in profile["stats"].items())
     player_entry = Entry(
         title=profile["name"], slug="player", importance=5,
-        attrs={"status": profile["status"], "skills": profile["skills"],
-              "stats": stats_line},
+        attrs={"status": profile["status"],
+              "genre": profile.get("genre", ""),
+              "skills": profile["skills"], "stats": stats_line},
         body=_render_player_body(profile))
     store.upsert_entry("player.md", player_entry)
 
