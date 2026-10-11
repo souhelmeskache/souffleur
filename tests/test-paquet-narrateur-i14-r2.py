@@ -16,10 +16,14 @@ parlent de ses sources.
      l'écart apparaît sous « Ce qui a changé depuis » ; ni « nœud » ni
      « écart » ailleurs que dans la directive ; la ligne `Horloge :` est
      présente.
-  2. R2 : « sortie vers para-12 » refusée (nœud), l'id d'un record refusé,
-     chaque mot de source (`mcp_server._R2_SOURCE_WORDS`) refusé ; « il
-     reste à l'écart » et « sous la bannière » passent ; une visée propre
-     passe.
+  2. R2 : « sortie vers para-12 » refusée (nœud, chiffre), l'id distinctif
+     d'un record refusé (`death-knight`, tiret), chaque mot de source
+     (`mcp_server._R2_SOURCE_WORDS`) refusé ; « il reste à l'écart » et
+     « sous la bannière » passent ; une visée propre passe ; un identifiant
+     MOT NU (nœud `conversation`, record `kobolds` — sans tiret ni chiffre,
+     défaut mesuré sur les partitions réelles, vérif pré-fusion PR #352)
+     reste disible : « une conversation s'engage », « deux kobolds
+     surgissent » passent.
   3. La photo du Director (chemin MCP, `photo_director`) porte toujours
      l'objectif, le débouché et « Position (D-282) » — inchangée par ce
      chantier.
@@ -84,11 +88,26 @@ def _build_partition() -> Partition:
     p.nodes.append(Node(
         "para-12", "scene", "Le couloir", CORPS_PARA12, "scene",
         anchors=[(0, 40)]))
+    # Défaut mesuré sur les partitions réelles (vérif pré-fusion PR #352) :
+    # un nœud/record dont l'id est un mot ordinaire de la langue, jamais
+    # distinctif (sans tiret ni chiffre) — doit rester disible au narrateur.
+    p.nodes.append(Node(
+        "conversation", "scene", "Une halte",
+        "Les voix s'élèvent dans la salle voisine.", "scene",
+        anchors=[(0, 40)]))
     p.records.append(Record(
         "garde-brutal", "pnj", "Garde brutal",
         {"role": "sentinelle", "description_md": "Un garde massif et nerveux.",
          "tokens_initial": [{"node_id": "para-01", "count": 1,
                              "placement_md": "près de la porte"}]},
+        anchors=[(0, 40)]))
+    p.records.append(Record(
+        "kobolds", "pnj", "Bande de kobolds",
+        {"role": "embuscade", "description_md": "Une bande de kobolds nerveux."},
+        anchors=[(0, 40)]))
+    p.records.append(Record(
+        "death-knight", "pnj", "Chevalier de la mort",
+        {"role": "boss", "description_md": "Un chevalier mort-vivant, cuirassé."},
         anchors=[(0, 40)]))
     p.aventure = None
     return p
@@ -236,6 +255,44 @@ try:
         "J'observe.", sans_mecanique=True)
     assert "path" in r_propre
     print("  OK : visée propre, aucun refus")
+
+    # --- Défaut mesuré (vérif pré-fusion PR #352) : un identifiant mot nu
+    # (sans tiret ni chiffre — `conversation`, `kobolds`) ne se distingue pas
+    # de la prose narrative et ne doit PAS être refusé ; un identifiant
+    # distinctif (`death-knight`, tiret) reste refusé, comme `para-12`.
+    section("2f) un nœud mot nu (« conversation ») : la visée passe")
+    r_conv = mcp_server.paquet_narrateur(
+        "Angle : une conversation s'engage, à voix basse.", "J'observe.",
+        sans_mecanique=True)
+    assert "path" in r_conv
+    print("  OK : identifiant mot nu (nœud) indiscernable de la prose, passe")
+
+    section("2g) un record mot nu (« kobolds ») : la visée passe")
+    r_kob = mcp_server.paquet_narrateur(
+        "Angle : deux kobolds surgissent de l'ombre.", "J'observe.",
+        sans_mecanique=True)
+    assert "path" in r_kob
+    print("  OK : identifiant mot nu (record) indiscernable de la prose, passe")
+
+    section("2h) un record distinctif (« death-knight », tiret) : refusé")
+    try:
+        mcp_server.paquet_narrateur(
+            "Angle : le death-knight approche, lentement.", "J'observe.",
+            sans_mecanique=True)
+        raise AssertionError("R2 aurait dû refuser (identifiant distinctif, tiret)")
+    except ValueError as exc:
+        assert "R2" in str(exc) and "death-knight" in str(exc), str(exc)
+    print("  OK : identifiant distinctif (tiret) toujours refusé")
+
+    section("2i) « sortie vers para-12 » toujours refusé (chiffre, revérifié)")
+    try:
+        mcp_server.paquet_narrateur(
+            "Angle : je prépare la sortie vers para-12.", "J'observe.",
+            sans_mecanique=True)
+        raise AssertionError("R2 aurait dû refuser (identifiant distinctif, chiffre)")
+    except ValueError as exc:
+        assert "R2" in str(exc) and "para-12" in str(exc), str(exc)
+    print("  OK : identifiant distinctif (chiffre) toujours refusé")
 
     # --- 3) la photo du Director reste inchangée (objectif/débouché/Position) -
     section("3) photo_director : objectif, débouché et Position (D-282) "

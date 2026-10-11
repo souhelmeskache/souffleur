@@ -948,7 +948,11 @@ def _partition_identifiers(partition_dir: Path) -> set[str]:
     de tout record (`records/<id>.md`), scannés par `_r2_scan` comme
     autant de slugs (même garde que `_slug_named`, mot entier). Le nom de
     fichier EST l'identifiant (même convention que `_anchored_record_ids`
-    pour les records) — aucune seconde lecture du front-matter `id`."""
+    pour les records) — aucune seconde lecture du front-matter `id`.
+
+    Renvoie TOUS les identifiants, y compris les mots nus (`kobolds`,
+    `conversation`) — le tri distinctif/mot nu est le travail de l'appelant
+    (`_r2_scan`, voir sa docstring), pas de cette lecture brute."""
     out = set()
     for sous_dossier in ("nodes", "records"):
         d = partition_dir / sous_dossier
@@ -980,11 +984,23 @@ def _r2_scan(store, directive: str) -> str:
     text is director-only material regardless), a hidden entry's content
     reached through the same body-fragment test (the "secret non déclenché"
     case, D-019: a secret is a hidden character/faction entry, no separate
-    registry to scan) — and, chantier 4 (D-419 pt C) — a bare identifier of
-    the loaded save's partition (any node or record filename) or a word/
-    phrase that talks about the partition's own machinery (`_R2_SOURCE_WORDS`:
-    "nœud", "flag", "le module", ...). The narrator reads what the character
-    perceives, never the vocabulary of the module that produces it."""
+    registry to scan) — and, chantier 4 (D-419 pt C) — a DISTINCTIVE
+    identifier of the loaded save's partition (any node or record filename)
+    or a word/phrase that talks about the partition's own machinery
+    (`_R2_SOURCE_WORDS`: "nœud", "flag", "le module", ...). The narrator
+    reads what the character perceives, never the vocabulary of the module
+    that produces it.
+
+    Défaut mesuré sur les partitions réelles (ordre de Souhel, vérif
+    pré-fusion PR #352) : beaucoup d'identifiants sont des mots ordinaires
+    de la langue (records `kobolds`/`zombie`/`goblins`, nœuds `conversation`/
+    `ambush`/`captive`) — un tel identifiant ne se DISTINGUE pas de la prose
+    narrative, sa présence dans une visée ne fuit donc rien que la scène
+    elle-même ne dirait pas déjà (« deux kobolds surgissent » doit pouvoir
+    être dit). Seul un identifiant DISTINCTIF — qui porte un tiret ou un
+    chiffre (`para-12`, `death-knight`, `tresor-toll-20gp`) — ne peut être
+    qu'une citation de la partition, jamais une tournure de prose ordinaire :
+    c'est le seul cas que ce refus couvre."""
     flat = " ".join(str(directive or "").split())
     if not flat:
         return ""
@@ -998,6 +1014,8 @@ def _r2_scan(store, directive: str) -> str:
     pdir = _partition_dir(store)
     if pdir is not None:
         for ident in sorted(_partition_identifiers(pdir)):
+            if not re.search(r"[-0-9]", ident):
+                continue        # mot nu : indiscernable de la prose, pas un refus
             if _slug_named(ident, low):
                 return f"identifiant de la partition ({ident})"
     for mot in _R2_SOURCE_WORDS:
