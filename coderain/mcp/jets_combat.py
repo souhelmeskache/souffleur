@@ -6,6 +6,8 @@ commun) ; ce fichier y accede via `mcp_server.<nom>`, jamais de copie locale.
 """
 from __future__ import annotations
 
+import random
+
 import mcp_server
 
 # Chantier 7b (I-28 suite) : la table par handle_id, posée à `start_combat`
@@ -582,8 +584,9 @@ async def resolve_check(spec: dict, seed: int | None = None) -> dict:
 
 
 @mcp_server.mcp.tool()
-async def start_combat(session_id: str, party: list[dict],
-                       encounter: list[dict], rng_seed: int,
+async def start_combat(party: list[dict], encounter: list[dict],
+                       rng_seed: int | None = None,
+                       session_id: str | None = None,
                        zones: list[str] | None = None) -> dict:
     """Ouvre un combat détenu par dnd5e-engine ; retourne handle_id.
 
@@ -591,6 +594,20 @@ async def start_combat(session_id: str, party: list[dict],
     entity_id, name, initiative, hp_current, hp_max, ac, zone_id... ; un monstre
     jouable porte monster_template_slug ex. "goblin-warrior"). rng_seed rend le
     combat déterministe : mêmes graines ⇒ mêmes dés.
+
+    Correctif revue (chantier 7b) — `rng_seed` ET `session_id` sont
+    désormais OPTIONNELS, pour que le Director n'ait jamais à fabriquer un
+    nombre de sa main (règle du rôle) :
+      - `rng_seed` absent, save chargée : tiré ICI, même discipline
+        reproductible que `roll_check`/`roll_initiative` (graine de la save
+        `rpg["seed"]`, cran de `rpg["rolls"]` qui AVANCE comme pour tout
+        autre jet — jamais un cran gratuit). Le retour porte alors
+        `"rng_seed"` : la graine effectivement employée. Une graine DONNÉE
+        est employée telle quelle, aucun cran consommé pour elle.
+        `rng_seed` absent SANS save chargée : refus nommé, aucun combat
+        ouvert, aucun cran consommé.
+      - `session_id` absent : le slug de la save chargée (`mcp_server._slug`).
+        Absent sans save chargée : refus nommé.
 
     Retour: ... "warnings": [{entity_id, monster_template_slug, reason}, ...]
     — un membre d'encounter dont le monster_template_slug ne résout à rien
@@ -629,6 +646,13 @@ async def start_combat(session_id: str, party: list[dict],
     dit aussi, jamais une reprise silencieuse d'un combat que personne ne
     suit plus."""
     store = mcp_server._store
+    if session_id is None:
+        if not mcp_server._slug:
+            return {"error": "start_combat: session_id absent et aucune "
+                             "save chargée pour en fournir le slug par "
+                             "défaut"}
+        session_id = mcp_server._slug
+
     warnings_perime: list[str] = []
     if store is not None:
         rpg_avant = store.rpg_state()
@@ -648,6 +672,27 @@ async def start_combat(session_id: str, party: list[dict],
                 f"ouverture sont perdus")
             rpg_avant.pop("combat", None)
             store.set_rpg_state(rpg_avant)
+
+    if rng_seed is None:
+        # Correctif revue (chantier 7b) : jamais un nombre de la main de
+        # l'appelant (le Director n'a pas de graine à donner) — tirée ICI,
+        # AVANT toute résolution de membre, même discipline que
+        # roll_check/roll_initiative (chaîne "seed-nonce", un cran de
+        # rpg["rolls"] consommé). Un combat refusé plus bas (membre
+        # inconnu...) a donc déjà consommé ce cran — accepté : la graine du
+        # combat n'est pas un jet de dé rejouable comme les autres, la
+        # prochaine tentative tire naturellement la suivante.
+        if store is None:
+            return {"error": "start_combat: rng_seed absent et aucune save "
+                             "chargée pour en tirer une graine "
+                             "reproductible — jamais une graine inventée "
+                             "par l'appelant"}
+        rpg0 = store.rpg_state()
+        seed0 = rpg0.get("seed", 0)
+        nonce0 = rpg0.get("rolls", 0) + 1
+        rng_seed = random.Random(f"{seed0}-{nonce0}-combat").getrandbits(32)
+        rpg0["rolls"] = nonce0
+        store.set_rpg_state(rpg0)
 
     resolved_party = []
     rolled_initiatives: dict[str, int] = {}
@@ -679,6 +724,9 @@ async def start_combat(session_id: str, party: list[dict],
         session_id=session_id, party=resolved_party, encounter=resolved,
         rng_seed=rng_seed, zones=zones)
     mcp_server._record_combat_events(result.get("events", []))
+    # Correctif revue (chantier 7b) : la graine EFFECTIVEMENT employée,
+    # donnée par l'appelant ou tirée ci-dessus — jamais implicite.
+    result["rng_seed"] = rng_seed
     if rolled_initiatives:
         result["initiatives_rolled"] = rolled_initiatives
     handle_id = result.get("handle_id")

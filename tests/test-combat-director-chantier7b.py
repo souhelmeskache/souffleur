@@ -23,6 +23,12 @@ ouvert. Ce test prouve, sur une save synthétique 100% D-109 au vocabulaire
      le pont ne connaît plus (handle inventé, jamais ouvert par ce process)
      — la photo et `get_world_state` le disent en une ligne, et
      `start_combat` l'efface, ouvre le nouveau combat, et avertit.
+  5. correctif revue : `rng_seed`/`session_id` optionnels — le Director ne
+     fabrique jamais un nombre de sa main. Absents : la graine se tire de
+     la save (même discipline que `roll_check`, le cran `rpg["rolls"]`
+     avance), `session_id` prend le slug de la save chargée ; deux saves
+     fraîches de même graine et même cran rendent la même graine de combat,
+     la même initiative jetée et le même ordre d'initiative.
 
 Needs dnd5e-engine (requirements.txt) ; saute bruyamment si absent, même
 convention que les autres tests de combat du dépôt.
@@ -327,6 +333,91 @@ try:
            f"{reprise['warnings']}")
 
     asyncio.run(mcp_server.end_combat(handle_reprise))  # nettoyage, hygiène
+
+    # ======================================================================
+    # Correctif revue — rng_seed et session_id optionnels (le Director ne
+    # fabrique jamais une graine)
+    # ======================================================================
+    hp_brute_courant = store.rpg_state()["enemies"][BRUTE_SLUG]["hp"]
+    rolls_avant = store.rpg_state().get("rolls", 0)
+    sans_params = asyncio.run(mcp_server.start_combat(
+        party=[{"entity_id": "player", "zone_id": "z1", "initiative": 20}],
+        encounter=[{"entity_id": BRUTE_SLUG, "zone_id": "z1",
+                   "initiative": 5, "hp_current": hp_brute_courant}]))
+    assert "error" not in sans_params, sans_params
+    assert isinstance(sans_params.get("rng_seed"), int), sans_params
+    rolls_apres = store.rpg_state().get("rolls", 0)
+    assert rolls_apres == rolls_avant + 1, (
+        f"rng_seed tiré de la save (aucun fourni) doit avancer le cran "
+        f"rpg['rolls'] de 1, même discipline que roll_check -> "
+        f"avant={rolls_avant}, après={rolls_apres}")
+    assert store.rpg_state()["combat"]["session_id"] == slug, \
+        (f"session_id absent devrait prendre le slug de la save chargée "
+         f"-> {store.rpg_state().get('combat')}")
+    asyncio.run(mcp_server.end_combat(sans_params["handle_id"]))
+    section(f"5a) start_combat sans rng_seed ni session_id : ouvre (graine "
+           f"tirée de la save = {sans_params['rng_seed']}), cran "
+           f"rpg['rolls'] {rolls_avant} -> {rolls_apres}, session_id = slug "
+           f"de la save chargée ({slug!r})")
+
+    def _combat_sans_graine(nom: str, seed_val: int, rolls_val: int):
+        """Une save fraîche (profil guerrier-5e), seed/rolls posés
+        explicitement, start_combat appelé SANS rng_seed ni session_id, le
+        joueur SANS initiative fournie (jetée, même mécanisme que chantier
+        7a) : rend (rng_seed tiré, initiative jetée du joueur, ordre
+        d'initiative du moteur)."""
+        sous_app = TMP / nom
+        lib_n = Library(sous_app)
+        slug_n = lib_n.saves.create(f"Graine-{nom}", mode="rpg",
+                                    premise="Banc synthétique, D-109.")
+        res_install_n = personnage_banc.install(lib_n.saves.dir(slug_n),
+                                                profil="guerrier-5e")
+        assert res_install_n["status"] == "installed", res_install_n
+        store_n = lib_n.store(slug_n)
+        store_n.upsert_entry("characters.md", Entry(
+            title=BRUTE_NOM, slug=BRUTE_SLUG, importance=2,
+            attrs={"ca": "1", "pv": "50", "attaque_bonus": "0",
+                  "degats": "1d4+1"},
+            body="Créature synthétique de test (D-109)."))
+        rpg_n = store_n.rpg_state()
+        rpg_n["seed"], rpg_n["rolls"] = seed_val, rolls_val
+        store_n.set_rpg_state(rpg_n)
+
+        mcp_server._store = store_n
+        mcp_server._slug = slug_n
+        mcp_server._rpg_cfg = dict(mcp_server._DEFAULT_RPG)
+        mcp_server._rpg_cfg["stats"] = ["strength", "dexterity",
+                                        "constitution", "intelligence",
+                                        "wisdom", "charisma"]
+        res_n = asyncio.run(mcp_server.start_combat(
+            party=[{"entity_id": "player", "zone_id": "z1"}],
+            encounter=[{"entity_id": BRUTE_SLUG, "zone_id": "z1",
+                       "initiative": 10, "hp_current": 50}]))
+        assert "error" not in res_n, res_n
+        ordre_n = mcp_server.get_bridge().live(res_n["handle_id"])[
+            "initiative_order"]
+        asyncio.run(mcp_server.end_combat(res_n["handle_id"]))
+        return (res_n["rng_seed"], res_n["initiatives_rolled"]["player"],
+               ordre_n)
+
+    graine_a, initiative_a, ordre_a = _combat_sans_graine(
+        "graine-save-a", 99, 0)
+    graine_b, initiative_b, ordre_b = _combat_sans_graine(
+        "graine-save-b", 99, 0)
+    assert graine_a == graine_b, (graine_a, graine_b)
+    assert initiative_a == initiative_b, (initiative_a, initiative_b)
+    assert ordre_a == ordre_b, (ordre_a, ordre_b)
+    section(f"5b) deux saves fraîches, même graine (99) et même cran "
+           f"(rolls=0) : start_combat sans rng_seed ni initiative joueur "
+           f"tire la MÊME graine de combat ({graine_a}), la MÊME "
+           f"initiative joueur ({initiative_a}) et rend le MÊME ordre "
+           f"d'initiative ({ordre_a}) — reproductible, jamais un nombre "
+           f"inventé")
+
+    # restaure le store principal pour la suite (hygiène, même si c'est la
+    # dernière section de ce test)
+    mcp_server._store = store
+    mcp_server._slug = slug
 
     print(f"\nOK test-combat-director-chantier7b — {len(FAIT)} sections vertes")
 finally:
