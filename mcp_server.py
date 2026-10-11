@@ -1091,18 +1091,20 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     passe `True` ; combiné avec `director_sys` (resté `False` par défaut
     ici), les deux chemins ne se heurtent jamais.
 
-    Retourne un TRIPLET `(text, info, section_titles)` — correctif chantier 3
-    (défaut mesuré) : `photo_director` doit nommer les sections RÉELLEMENT
-    servies (les titres des objets `Section` de `build_sections`, plus le
-    bloc des verdicts d'événement ci-dessous s'il est ajouté, sous le nom
-    qu'il porte) sans jamais relire les lignes `## ` du texte final — le
-    rôle du Director porte ses propres titres `## ...` à l'intérieur de SA
-    section (abaissés à `### ` par `build_sections`, voir son docstring),
-    qu'un lecteur mécanique du texte confondrait sinon avec des sections de
-    la photo. `section_titles` ne retient que les sections dont `render()`
-    est non vide (celles qui atteignent réellement le texte). Les deux
-    appelants existants (`assemble_context_to_file`, `paquet_narrateur`)
-    ignorent ce troisième élément — leur sortie ne change pas."""
+    Retourne TOUJOURS un COUPLE `(text, info)` — contrat inchangé pour tous
+    les appelants, `assemble_context_to_file` et `paquet_narrateur` compris
+    (ni l'un ni l'autre ne passe `director_role=True`, donc leur `info` ne
+    gagne jamais la clé ci-dessous). Correctif chantier 3 (défaut mesuré) :
+    quand `director_role` est vrai, `info` porte une clé SUPPLÉMENTAIRE
+    `section_titles` — les titres des objets `Section` de `build_sections`
+    réellement rendus (plus le bloc des verdicts d'événement ci-dessous
+    s'il est ajouté, sous le nom qu'il porte) — pour que `photo_director`
+    nomme les sections RÉELLEMENT servies sans jamais relire les lignes
+    `## ` du texte final : le rôle du Director porte ses propres titres
+    `## ...` à l'intérieur de SA section (abaissés à `### ` par
+    `build_sections`, voir son docstring), qu'un lecteur mécanique du texte
+    confondrait sinon avec des sections de la photo. `photo_director` lit
+    cette clé par `info.pop("section_titles")`."""
     location = validator_mod.current_location(state)
     rpg_on = store.rpg_enabled()
     char_sheet, rpg_rules = "", ""
@@ -1121,7 +1123,7 @@ def _position_context_text(store, partition_dir: Path, state: dict,
         secrets=secrets, role_section=role_section, director_sys=director_sys,
         director_role=director_role_text)
     text = "\n\n".join(s.render() for s in sections if s.render())
-    section_titles = [s.title for s in sections if s.render()]
+    section_titles = [s.title for s in sections if s.render()] if director_role else None
     # Verdicts du tour (lane b, #127) — jamais event_rules_block() entier.
     # `event_rules` garde le même sens que sur l'ancien chemin : False par
     # défaut sur assemble_context_to_file (narrateur-seul), True réservé à
@@ -1130,7 +1132,9 @@ def _position_context_text(store, partition_dir: Path, state: dict,
         ev_block = store.event_rule_verdicts_block(history, player_action)
         if ev_block:
             text += "\n\n" + ev_block
-            section_titles.append(ev_block.splitlines()[0].lstrip("#").strip())
+            if section_titles is not None:
+                section_titles.append(
+                    ev_block.splitlines()[0].lstrip("#").strip())
     if recent_turns > 0 and history:
         lines = []
         for t in history[-recent_turns:]:
@@ -1144,10 +1148,13 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     print("assemble(position): final=%d chars, lore=%d blocks, secrets=%d/%d, "
          "turns=%d" % (len(text), served, len(allowed), len(hidden),
                        recent_turns), file=sys.stderr)
-    return text, {"degraded": False, "reason": "position", "lore_blocks": served,
-                 "secrets": len(allowed), "secrets_suppressed": not secrets,
-                 "hidden_total": len(hidden), "echoes": 0,
-                 "secrets_window": None, "lore_selected": None}, section_titles
+    info = {"degraded": False, "reason": "position", "lore_blocks": served,
+            "secrets": len(allowed), "secrets_suppressed": not secrets,
+            "hidden_total": len(hidden), "echoes": 0,
+            "secrets_window": None, "lore_selected": None}
+    if director_role:
+        info["section_titles"] = section_titles
+    return text, info
 
 
 def _finalize(messages, store, history, recent_turns: int,

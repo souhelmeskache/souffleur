@@ -364,7 +364,7 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
         if recent_turns is None:
             recent_turns = mcp_server._engine.short_term if mcp_server._engine is not None else 12
         history = store.turns()
-        text, info, _section_titles = mcp_server._position_context_text(
+        text, info = mcp_server._position_context_text(
             store, pdir, state, history, player_action, recent_turns,
             event_rules, secrets)
     else:
@@ -414,8 +414,10 @@ def photo_director(player_action: str) -> dict:
     Correctif (chantier 3, défaut mesuré) : `sections` vient des titres des
     objets `Section` réellement servis par `build_sections` (+ le bloc des
     verdicts d'événement sous son propre nom, si présent) — RENVOYÉS par
-    `mcp_server._position_context_text` en 3e élément, jamais relus depuis
-    les lignes `## ` du texte final : le rôle du Director (section « Rôle
+    `mcp_server._position_context_text` sous la clé `info["section_titles"]`
+    (ajoutée SEULEMENT quand `director_role=True`, jamais pour les deux
+    autres appelants de cette fonction-pont), jamais relus depuis les
+    lignes `## ` du texte final : le rôle du Director (section « Rôle
     (Director) ») porte ses propres titres `## Trois gestes`/`## Le
     moteur`/... à L'INTÉRIEUR de sa section (abaissés à `### ` au service,
     voir `build_sections`), qu'une relecture mécanique du texte confondrait
@@ -431,10 +433,11 @@ def photo_director(player_action: str) -> dict:
     history = store.turns()
     recent_turns = (mcp_server._engine.short_term
                     if mcp_server._engine is not None else 12)
-    text, info, section_titles = mcp_server._position_context_text(
+    text, info = mcp_server._position_context_text(
         store, pdir, state, history, player_action, recent_turns,
         event_rules=True, secrets=True, role_section=True,
         director_sys=False, director_role=True)
+    section_titles = info.pop("section_titles")
     out_dir = mcp_server._turn_dir()
     out_dir.mkdir(exist_ok=True)
     out = out_dir / "photo-director.md"
