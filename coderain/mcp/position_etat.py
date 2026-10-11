@@ -383,6 +383,71 @@ def assemble_context_to_file(player_action: str, budget_tokens: int = 120000,
 
 
 @mcp_server.mcp.tool()
+def photo_director(player_action: str) -> dict:
+    """D-404/D-415 (chantier 3) — la photo du régime principal servie au
+    Director PRODUIT, relancé neuf à chaque tour (`tools/prompts/banc-mj.md`,
+    § Le tour du régime principal). Même patron qu'`assemble_context_to_file`
+    (écrit dans un FICHIER sous le `.turn/` de la save CHARGÉE,
+    `mcp_server._turn_dir()`, Issue #287 ; le texte n'entre jamais dans la
+    fenêtre de l'appelant) — nom de fichier `photo-director.md`, retour sans
+    le texte : chemin, taille, NOMS des sections.
+
+    Ses réglages sont FIXÉS, sans paramètre exposé — c'est la photo du
+    Director (D-415) : le système détermine ce qu'elle porte, jamais
+    l'appelant (une surface réduite, pas un dial pour chaque tour) :
+      - le rôle du Director produit en tête (`director_role=True`, lit
+        `coderain/roles/director.md` — voir `mcp_server._position_context_text`) ;
+      - la fiche de personnage et les règles RPG si le jeu est actif (I-17,
+        `role_section=True`) ;
+      - les entrées cachées de la scène (`secrets=True`) — le Director
+        connaît les coulisses, lui seul ;
+      - les verdicts de règles du tour (`event_rules=True`) ;
+      - les derniers tours (même fenêtre que l'Engine — `short_term` si un
+        Engine est chargé, 12 sinon, comme `assemble_context_to_file`).
+
+    Sur une save SANS position/partition projetée (`assembleur_position.
+    eligible()`), l'outil REFUSE en le disant plutôt que de retomber sur
+    l'ancien chemin par mots-clés+budget — contrairement à
+    `assemble_context_to_file`, qui a un repli : le régime principal du
+    Director produit exige la position, pas de demi-mesure silencieuse.
+
+    Correctif (chantier 3, défaut mesuré) : `sections` vient des titres des
+    objets `Section` réellement servis par `build_sections` (+ le bloc des
+    verdicts d'événement sous son propre nom, si présent) — RENVOYÉS par
+    `mcp_server._position_context_text` sous la clé `info["section_titles"]`
+    (ajoutée SEULEMENT quand `director_role=True`, jamais pour les deux
+    autres appelants de cette fonction-pont), jamais relus depuis les
+    lignes `## ` du texte final : le rôle du Director (section « Rôle
+    (Director) ») porte ses propres titres `## Trois gestes`/`## Le
+    moteur`/... à L'INTÉRIEUR de sa section (abaissés à `### ` au service,
+    voir `build_sections`), qu'une relecture mécanique du texte confondrait
+    sinon avec des sections de la photo."""
+    store = mcp_server._require_store()
+    state = store.world_state()
+    pdir = mcp_server._partition_dir(store)
+    if pdir is None or not mcp_server.assembleur_position.eligible(store, state):
+        raise ValueError(
+            "photo_director : cette save ne porte pas de position/partition "
+            "projetée — pas de repli (D-415) ; seule assemble_context_to_file "
+            "retombe sur l'ancien chemin par mots-clés pour une telle save.")
+    history = store.turns()
+    recent_turns = (mcp_server._engine.short_term
+                    if mcp_server._engine is not None else 12)
+    text, info = mcp_server._position_context_text(
+        store, pdir, state, history, player_action, recent_turns,
+        event_rules=True, secrets=True, role_section=True,
+        director_sys=False, director_role=True)
+    section_titles = info.pop("section_titles")
+    out_dir = mcp_server._turn_dir()
+    out_dir.mkdir(exist_ok=True)
+    out = out_dir / "photo-director.md"
+    out.write_text(text, encoding="utf-8")
+    mcp_server._log_paquet(store, "photo_director", len(text), {})
+    return {"path": str(out), "chars": len(text), "sections": section_titles,
+           **info}
+
+
+@mcp_server.mcp.tool()
 def context_candidates(player_action: str,
                        budget_tokens: int = 120000) -> dict:
     """The documentaliste's report for the SELECTION stage: what the lorebook
@@ -572,4 +637,4 @@ def derive_evolution_interne(acte: str, vecteur_id: str) -> dict:
             "old_valeur": old, "new_valeur": new}
 
 
-__all__ = ['get_world_state', 'opening_scene', 'get_event_rules', 'validate_envelope', 'apply_envelope', 'assemble_context', 'assemble_context_to_file', 'context_candidates', 'ui_sheet', 'module_index', 'module_list_nodes', 'module_get_node', 'module_get_record', 'module_roll_table', 'module_get_aventure', 'set_evolution_interne', 'derive_evolution_interne']
+__all__ = ['get_world_state', 'opening_scene', 'get_event_rules', 'validate_envelope', 'apply_envelope', 'assemble_context', 'assemble_context_to_file', 'photo_director', 'context_candidates', 'ui_sheet', 'module_index', 'module_list_nodes', 'module_get_node', 'module_get_record', 'module_roll_table', 'module_get_aventure', 'set_evolution_interne', 'derive_evolution_interne']

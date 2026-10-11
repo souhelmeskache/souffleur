@@ -447,7 +447,8 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
                    scenes_tail: int = 4, char_sheet: str = "",
                    rpg_on: bool = False, secrets: bool = True,
                    rpg_rules: str = "", response_length: str = "",
-                   role_section: bool = True, director_sys: bool = True
+                   role_section: bool = True, director_sys: bool = True,
+                   director_role: str = ""
                    ) -> list[Section]:
     """Construit le paquet ordonné (voir docstring de module). `char_sheet`
     est fourni par l'appelant (`rpg_mod.context_block`, hors périmètre de ce
@@ -487,10 +488,41 @@ def build_sections(partition_dir: str | Path, store: MemoryStore,
     régime principal/pipeline JSON. Défaut `True` — `coderain/engine.py`
     (régime secondaire) ne le passe jamais, son paquet reste
     octet-identique ; `mcp_server.py` (régime principal, Director Claude
-    Code branché par MCP) le passe `False`."""
+    Code branché par MCP) le passe `False`.
+
+    `director_role` (D-404/D-415, chantier 3) : le texte du rôle du Director
+    produit (`coderain/roles/director.md`, servi par `mcp_server.py` qui le
+    lit), rendu en TÊTE de paquet comme section STABLE « Rôle (Director) » —
+    même titre que la section `DIRECTOR_SYS` ci-dessus, jamais les deux à la
+    fois. Chaîne vide (défaut) = inchangé, aucun appelant existant ne passe
+    ce paramètre. Les deux chemins ne se servent JAMAIS ensemble : si
+    `director_role` est fourni ET que `director_sys` vaut `True` (son
+    défaut), c'est une erreur de l'appelant (lève `ValueError`) plutôt qu'un
+    choix arbitraire entre les deux — le chemin `DIRECTOR_SYS` (régime
+    secondaire) reste, lui, octet-identique quand `director_role` n'est pas
+    passé.
+
+    Correctif (chantier 3, défaut mesuré) : `coderain/roles/director.md`
+    porte ses propres titres `## Trois gestes`/`## Le moteur`/`## La
+    visée`/`## Fin du tour`, au même niveau markdown que les sections de la
+    photo elle-même — sans retrait, un lecteur mécanique des lignes `## `
+    (ex. `photo_director`) les prenait pour des sections de la photo. Le
+    FICHIER ne change jamais : c'est ICI, au service, que chaque ligne
+    `## ` du texte reçu est abaissée d'un niveau (`### `) avant d'être
+    rangée dans la section « Rôle (Director) » — une simple substitution de
+    préfixe de ligne, rien d'autre n'est touché."""
     partition_dir = Path(partition_dir)
     sections = []
-    if role_section and director_sys:
+    if role_section and director_role and director_sys:
+        raise ValueError(
+            "build_sections: director_role et director_sys (DIRECTOR_SYS) "
+            "ne se servent jamais ensemble — passe director_sys=False pour "
+            "servir director_role.")
+    if role_section and director_role:
+        director_role_abaisse = re.sub(r"(?m)^## ", "### ", director_role)
+        sections.append(Section("stable", "Rôle (Director)",
+                                director_role_abaisse))
+    elif role_section and director_sys:
         sections.append(Section("stable", "Rôle (Director)",
                                 DIRECTOR_SYS % (_ENV_RPG if rpg_on else _ENV_WORLD)))
     player_section = _player_section(store)

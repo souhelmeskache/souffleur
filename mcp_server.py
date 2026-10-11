@@ -1028,7 +1028,8 @@ def _position_context_text(store, partition_dir: Path, state: dict,
                            history: list[dict], player_action: str,
                            recent_turns: int, event_rules: bool,
                            secrets: bool, role_section: bool = True,
-                           director_sys: bool = False
+                           director_sys: bool = False,
+                           director_role: bool = False
                            ) -> tuple[str, dict]:
     """D-260 (Issue #146) : le chemin par position pour
     `assemble_context_to_file` — même sélection que `engine._messages()`
@@ -1078,7 +1079,32 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     qui exige du JSON et embarque la conversation d'accord (4 fenêtres,
     D-219). `coderain/engine.py` (régime secondaire) n'appelle jamais cette
     fonction — il appelle `assembleur_position.assemble()` directement, dont
-    le défaut `director_sys=True` reste, lui, inchangé."""
+    le défaut `director_sys=True` reste, lui, inchangé.
+
+    `director_role` (D-404/D-415, chantier 3) : `False` par défaut, inchangé
+    pour tous les appelants existants (`assemble_context_to_file`,
+    `paquet_narrateur`). `True` lit `coderain/roles/director.md` — chemin
+    résolu depuis CE fichier (`ROOT`, le dossier du paquet), jamais depuis le
+    répertoire courant du process — et passe son texte à `build_sections`
+    comme `director_role`, qui le sert en tête de paquet (section stable
+    « Rôle (Director) »). Seul `photo_director` (coderain/mcp/position_etat.py)
+    passe `True` ; combiné avec `director_sys` (resté `False` par défaut
+    ici), les deux chemins ne se heurtent jamais.
+
+    Retourne TOUJOURS un COUPLE `(text, info)` — contrat inchangé pour tous
+    les appelants, `assemble_context_to_file` et `paquet_narrateur` compris
+    (ni l'un ni l'autre ne passe `director_role=True`, donc leur `info` ne
+    gagne jamais la clé ci-dessous). Correctif chantier 3 (défaut mesuré) :
+    quand `director_role` est vrai, `info` porte une clé SUPPLÉMENTAIRE
+    `section_titles` — les titres des objets `Section` de `build_sections`
+    réellement rendus (plus le bloc des verdicts d'événement ci-dessous
+    s'il est ajouté, sous le nom qu'il porte) — pour que `photo_director`
+    nomme les sections RÉELLEMENT servies sans jamais relire les lignes
+    `## ` du texte final : le rôle du Director porte ses propres titres
+    `## ...` à l'intérieur de SA section (abaissés à `### ` par
+    `build_sections`, voir son docstring), qu'un lecteur mécanique du texte
+    confondrait sinon avec des sections de la photo. `photo_director` lit
+    cette clé par `info.pop("section_titles")`."""
     location = validator_mod.current_location(state)
     rpg_on = store.rpg_enabled()
     char_sheet, rpg_rules = "", ""
@@ -1087,11 +1113,17 @@ def _position_context_text(store, partition_dir: Path, state: dict,
         char_sheet = (rpg_mod.context_block(store, prompt_narrate=False)
                      if rpg_on else "")
         rpg_rules = _rpg_rules_served(store) if rpg_on else ""
+    director_role_text = ""
+    if director_role:
+        director_role_text = (ROOT / "coderain" / "roles" / "director.md"
+                              ).read_text(encoding="utf-8")
     sections = assembleur_position.build_sections(
         partition_dir, store, location, history, player_action,
         char_sheet=char_sheet, rpg_on=rpg_on, rpg_rules=rpg_rules,
-        secrets=secrets, role_section=role_section, director_sys=director_sys)
+        secrets=secrets, role_section=role_section, director_sys=director_sys,
+        director_role=director_role_text)
     text = "\n\n".join(s.render() for s in sections if s.render())
+    section_titles = [s.title for s in sections if s.render()] if director_role else None
     # Verdicts du tour (lane b, #127) — jamais event_rules_block() entier.
     # `event_rules` garde le même sens que sur l'ancien chemin : False par
     # défaut sur assemble_context_to_file (narrateur-seul), True réservé à
@@ -1100,6 +1132,9 @@ def _position_context_text(store, partition_dir: Path, state: dict,
         ev_block = store.event_rule_verdicts_block(history, player_action)
         if ev_block:
             text += "\n\n" + ev_block
+            if section_titles is not None:
+                section_titles.append(
+                    ev_block.splitlines()[0].lstrip("#").strip())
     if recent_turns > 0 and history:
         lines = []
         for t in history[-recent_turns:]:
@@ -1113,10 +1148,13 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     print("assemble(position): final=%d chars, lore=%d blocks, secrets=%d/%d, "
          "turns=%d" % (len(text), served, len(allowed), len(hidden),
                        recent_turns), file=sys.stderr)
-    return text, {"degraded": False, "reason": "position", "lore_blocks": served,
-                 "secrets": len(allowed), "secrets_suppressed": not secrets,
-                 "hidden_total": len(hidden), "echoes": 0,
-                 "secrets_window": None, "lore_selected": None}
+    info = {"degraded": False, "reason": "position", "lore_blocks": served,
+            "secrets": len(allowed), "secrets_suppressed": not secrets,
+            "hidden_total": len(hidden), "echoes": 0,
+            "secrets_window": None, "lore_selected": None}
+    if director_role:
+        info["section_titles"] = section_titles
+    return text, info
 
 
 def _finalize(messages, store, history, recent_turns: int,
