@@ -59,7 +59,11 @@ _PLAYER_MUTATING_DELTAS = {"hp_delta", "hp_delta_crit", "mana_delta", "xp_delta"
                           "status_add", "status_remove", "trust", "npc_state",
                           "ability_add", "title_add"}
 _WORLD = {"time_advance", "flag_set", "location", "gold_delta",
-          "quest_update", "beat_advance", "persist"}
+          "quest_update", "beat_advance", "persist", "ecart_acte"}
+
+# ecart_acte (D-419) : longueur max du texte d'un écart acté — assez pour un
+# fait vécu en une phrase, jamais un pavé narratif rejoué à chaque tour.
+ECART_TEXTE_MAX = 300
 # Wave 2/4: sanctioned Markdown mutations, applied by the engine so they can be
 # undone (reveal -> re-hide; event_fired -> un-consume).
 _LORE = {"reveal", "event_fired"}
@@ -248,6 +252,10 @@ def validate(env, store, stats: list[str] | None = None) -> tuple[dict, list[dic
             got = _valid_flags(value, state, rejected)
             if got:
                 out[key] = got
+        elif key == "ecart_acte":
+            got = _valid_ecarts(value, store, rejected)
+            if got:
+                out[key] = got
         elif key == "persist":
             got = _valid_persist(value, store, state, rejected)
             if got:
@@ -378,6 +386,60 @@ def _valid_flags(value, state: dict, rejected: list) -> dict:
                     f"type change ({_flag_kind(old)} -> {_flag_kind(val)}) not allowed")
             continue
         out[name] = val
+    return out
+
+
+def _valid_ecarts(value, store, rejected: list) -> list[dict]:
+    """ecart_acte legality (D-419) : une liste de {"noeud": id de nœud de la
+    partition CHARGÉE, "texte": le fait vécu, en langage naturel, <=
+    ECART_TEXTE_MAX caractères}. Le nœud se vérifie avec la MÊME lecture que
+    `location` (D-282 règle 1) — `_partition_index_for`, réutilisé tel quel :
+    jamais une seconde convention de « nœuds connus ». Sans partition
+    chargée (monde vide, même cas que `_valid_location`), refus explicite de
+    l'ensemble : aucun écart ne peut être validé contre un vocabulaire de
+    nœuds qui n'existe pas — pas un cas particulier, le même refus que la
+    garde de position pour la même raison."""
+    if not isinstance(value, list):
+        _reject(rejected, "ecart_acte", value,
+                "must be a list of {noeud, texte} objects")
+        return []
+    idx = _partition_index_for(store)
+    if idx is None:
+        _reject(rejected, "ecart_acte", value,
+                "aucune partition chargée — nœud impossible à valider "
+                "(même garde que location, D-282 règle 1)")
+        return []
+    node_ids = {str(n.get("id")) for n in idx.get("nodes", [])}
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in value:
+        if not isinstance(raw, dict):
+            _reject(rejected, "ecart_acte", raw,
+                    "must be a {noeud, texte} object")
+            continue
+        noeud = str(raw.get("noeud", "")).strip()
+        texte = str(raw.get("texte", "")).strip()
+        if not noeud:
+            _reject(rejected, "ecart_acte", raw, "noeud manquant")
+            continue
+        if noeud not in node_ids:
+            _reject(rejected, f"ecart_acte:{noeud}", raw,
+                    f"{noeud!r} n'est pas un id de nœud de la partition "
+                    "chargée")
+            continue
+        if not texte:
+            _reject(rejected, f"ecart_acte:{noeud}", raw, "texte manquant")
+            continue
+        if len(texte) > ECART_TEXTE_MAX:
+            _reject(rejected, f"ecart_acte:{noeud}", raw,
+                    f"texte trop long ({len(texte)} > {ECART_TEXTE_MAX} "
+                    "caractères)")
+            continue
+        key = (noeud, texte)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"noeud": noeud, "texte": texte})
     return out
 
 
@@ -995,6 +1057,23 @@ def apply_world(store, env: dict) -> list[str]:
         have = max(0, (_as_int(player.get("gold")) or 0) + int(gold))
         player["gold"] = have
         events.append(f"gold: {'+' if gold >= 0 else ''}{gold} → {have}")
+
+    ea = d.get("ecart_acte")
+    if isinstance(ea, list) and ea:
+        ecarts = state.get("ecarts")
+        if not isinstance(ecarts, dict):
+            ecarts = state["ecarts"] = {}
+        for item in ea:
+            noeud = str(item.get("noeud", "")).strip()
+            texte = str(item.get("texte", "")).strip()
+            if not noeud or not texte:
+                continue
+            lst = ecarts.get(noeud)
+            if not isinstance(lst, list):
+                lst = ecarts[noeud] = []
+            if texte not in lst:
+                lst.append(texte)
+                events.append(f"écart acté sur {noeud} : {texte}")
 
     qu = d.get("quest_update")
     if isinstance(qu, dict) and qu:

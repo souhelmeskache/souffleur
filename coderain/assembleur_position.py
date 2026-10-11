@@ -30,9 +30,16 @@ Paquet servi, DANS CET ORDRE (figé, voir docstring d'`assemble()`) :
                 SERVICE (I-18, `_brief()`), jamais réécrit dans la
                 partition : bruit de pipeline (`ui_say`/`ui_wait`/...) pour
                 un Director qui a son propre canal au régime principal.
-  4. STABLE   — le node courant : corps + objectif_md + ses débouchés/liens
-                comme POTENTIELS (garde D-179 : jamais un menu ni un
-                déclencheur automatique)
+  4. STABLE   — le node courant : corps + écarts déjà actés sur CE nœud
+                (D-419, `validator.py::ecart_acte`, rangés dans state.json
+                sous `ecarts: {noeud: [texte, ...]}` — servis juste après le
+                texte du nœud, AVANT l'objectif, avec la mention qu'ils
+                priment sur ce texte : un Director neuf, sans mémoire, doit
+                pouvoir corriger un fait du module déjà contredit par la
+                partie sans relire tout l'historique) + objectif_md + ses
+                débouchés/liens comme POTENTIELS (garde D-179 : jamais un
+                menu ni un déclencheur automatique). Absent s'il n'y a
+                aucun écart pour ce nœud — jamais une sous-section vide.
   5. STABLE   — records ancrés à ce node (`tokens_initial`) + secrets dont un
                 porteur est présent (routage `hidden` conservé, D-019)
   6. STABLE   — règles RPG (`rpg-rules.md`, si actif : socle toujours servi +
@@ -78,6 +85,14 @@ entre deux tours SANS transition de node ET sans changement de config
 tri non déterministe. `stable_prefix()` isole ce sous-ensemble (toute section
 marquée "stable", quel que soit son rang) pour le test de non-régression du
 cache.
+
+Exception déclarée (D-419) : un `ecart_acte` posé EN COURS DE SCÈNE (sans
+transition de node) change la section 4 — accepté sciemment, section 4
+restant marquée "stable" : l'écart corrige un fait déjà vécu par la partie,
+il doit primer dès le tour qui suit l'acte, pas seulement au prochain
+changement de nœud. C'est aujourd'hui le seul cas qui rompt l'invariant
+byte-stable ci-dessus ; rare par construction (un écart s'acte une fois par
+nœud, jamais à chaque tour).
 
 `director_sys` (I-22, Issue #198 suite) : n'omet QUE la section 1 ; tout le
 reste que `role_section` gouverne (fiche mécanique section 6, reprise de
@@ -206,6 +221,20 @@ def _potentials_text(meta: dict) -> str:
     return "\n".join(lines)
 
 
+def _ecarts_text(store: MemoryStore, location: str) -> str:
+    """D-419 : les écarts déjà actés sur CE nœud SEUL (jamais ceux d'un
+    autre) — `validator.py::ecart_acte`, rangés par l'application
+    (`validator.apply_world`) dans `state.json` sous `ecarts: {noeud:
+    [texte, ...]}`. Chaîne vide sans écart pour ce nœud (section omise par
+    l'appelant, jamais un bloc vide)."""
+    ecarts = (store.world_state().get("ecarts") or {}).get(location) or []
+    if not isinstance(ecarts, list) or not ecarts:
+        return ""
+    lignes = "\n".join(f"- {t}" for t in ecarts)
+    return ("Écarts déjà actés sur ce nœud (ils priment sur le texte "
+           "ci-dessus) :\n" + lignes)
+
+
 def _current_node_section(partition_dir: Path, store: MemoryStore,
                           location: str) -> Section:
     entry = next((e for e in store.entries("locations.md")
@@ -214,6 +243,9 @@ def _current_node_section(partition_dir: Path, store: MemoryStore,
     parts = []
     if entry is not None and entry.body.strip():
         parts.append(entry.body.strip())
+    ecarts = _ecarts_text(store, location)
+    if ecarts:
+        parts.append(ecarts)
     objectif = str(meta.get("objectif_md", "")).strip()
     if objectif:
         parts.append("Objectif de la scène (une trajectoire visée, jamais "
