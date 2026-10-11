@@ -22,6 +22,14 @@ script écrit aussi `constitution` (citée dans l'Issue au titre du vocabulaire
 attendu) même si `derived_combat` ne la lit pas aujourd'hui — ni erreur ni
 gain, une clé de plus dans le dict `stats`.
 
+Chantier 7a (I-28 suite, D&D réel) ajoute le profil `guerrier-5e` : une vraie
+fiche 5e, vocabulaire EXACT `strength/dexterity/constitution/intelligence/
+wisdom/charisma` (`rpg.scores_mode` le détecte), `stats` porte alors des
+SCORES bruts, pas des modificateurs — `classe`/`espece` sont des identifiants
+du catalogue `dnd5e-engine`, les objets équipés portent un `srd:` en plus des
+champs génériques. Les profils ci-dessus restent inchangés (vocabulaire
+générique, modificateurs).
+
 Le script écrit `player.md` ET `state.json` de façon cohérente en un seul
 passage (au lieu des deux sources désynchronisées constatées sur #102) :
 - `player.md` : l'entrée `## <nom>  {#player}` avec `stats:` dans le
@@ -62,6 +70,13 @@ _BODY_FIELDS = ("Identity", "Goals", "Inventory")
 
 WEAPON_SLUG = "epee-courte-de-banc"
 ARMOR_SLUG = "cotte-de-mailles-de-banc"
+
+# Chantier 7a (D&D réel) : objets distincts, avec un `srd:` (identifiant du
+# catalogue dnd5e-engine) que les profils génériques ci-dessus ne portent
+# pas — slugs séparés pour que les deux familles de profils restent
+# installables indépendamment (D-109, fixtures 100% synthétiques).
+WEAPON_SLUG_5E = "epee-longue-de-banc-5e"
+ARMOR_SLUG_5E = "cotte-de-mailles-de-banc-5e"
 
 PROFILES: dict[str, dict] = {
     "guerrier": {
@@ -171,6 +186,50 @@ PROFILES: dict[str, dict] = {
             },
         },
     },
+    # Chantier 7a (D&D réel, I-28 suite) : le personnage joué est une vraie
+    # fiche 5e — `stats` porte des SCORES bruts (vocabulaire 5e exact :
+    # strength/dexterity/constitution/intelligence/wisdom/charisma, jamais
+    # `agility`), `classe`/`espece` sont des identifiants du catalogue
+    # dnd5e-engine (`get_lib_loader().get_class/get_species`), et les objets
+    # équipés portent un `srd:` (identifiant du catalogue moteur) en plus des
+    # champs génériques (`degats:`/`armure:`) que `derived_combat` lit déjà.
+    "guerrier-5e": {
+        "name": "Rhodri Ashvale",
+        "status": "prêt au combat, en armes",
+        "genre": "homme — il ; accords au masculin",
+        "skills": "mêlée (strength)",
+        "stats": {
+            "strength": 16, "dexterity": 12, "constitution": 14,
+            "intelligence": 10, "wisdom": 10, "charisma": 8,
+        },
+        "level": 1, "classe": "fighter", "espece": "human",
+        "hp_max": 12,
+        "visual": "Épaules larges, cotte de mailles rapiécée, épée longue au fourreau.",
+        "mentality": "Discipliné, tient la ligne, ne recule jamais sans ordre.",
+        "voice": "Phrases courtes, militaires. « En formation. On tient. »",
+        "skills_prose": "Combat à l'épée longue, discipline de rang.",
+        "identity": "Guerrier de fortune au service du plus offrant — "
+                    "personnage de fixture (D-109), sans lien avec un "
+                    "module joué.",
+        "goals": "Honorer le contrat, ramener son équipement entier.",
+        "inventory_prose": "Épée longue, cotte de mailles.",
+        "items": {
+            WEAPON_SLUG_5E: {
+                "title": "Épée longue de banc",
+                "attrs": {"degats": "1d8+3", "stat": "strength",
+                          "status": "held by you", "srd": "longsword"},
+                "body": "Objet synthétique de fixture de banc (chantier 7a) — "
+                        "aucun lien avec un module joué.",
+            },
+            ARMOR_SLUG_5E: {
+                "title": "Cotte de mailles de banc (5e)",
+                "attrs": {"armure": "16", "dex_max": "0",
+                          "status": "held by you", "srd": "chain-mail"},
+                "body": "Objet synthétique de fixture de banc (chantier 7a) — "
+                        "aucun lien avec un module joué.",
+            },
+        },
+    },
 }
 
 
@@ -212,9 +271,16 @@ def _is_installed(entry, rpg: dict, profile: dict) -> bool:
         return False
     if str(entry.attrs.get("status", "")).strip() != profile["status"]:
         return False
-    p_stats = (rpg.get("player") or {}).get("stats") or {}
+    player = rpg.get("player") or {}
+    p_stats = player.get("stats") or {}
     if {k: int(v) for k, v in p_stats.items()} != dict(profile["stats"]):
         return False
+    # Chantier 7a : classe/espece/level ne comptent que pour un profil 5e
+    # qui les déclare — les anciens profils (vocabulaire générique) n'en
+    # portent pas, comportement inchangé.
+    for key in ("classe", "espece", "level"):
+        if key in profile and player.get(key) != profile[key]:
+            return False
     inv = rpg.get("inventory") or {}
     for slug in profile["items"]:
         held = inv.get(slug)
@@ -283,7 +349,13 @@ def install(save_path: Path, profil: str = "guerrier",
     rpg = store.rpg_state()
     player = rpg.setdefault("player", {})
     player["stats"] = dict(profile["stats"])
-    player["level"] = 1
+    player["level"] = profile.get("level", 1)
+    # Chantier 7a : classe/espece (identifiants du catalogue moteur) ne
+    # s'écrivent que pour un profil 5e qui les déclare — anciens profils
+    # (vocabulaire générique) inchangés, aucune de ces deux clés posée.
+    for key in ("classe", "espece"):
+        if key in profile:
+            player[key] = profile[key]
     player["hp"] = player["hp_max"] = profile["hp_max"]
     player.setdefault("mana", 5)
     player.setdefault("mana_max", 5)

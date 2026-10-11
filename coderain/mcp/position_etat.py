@@ -17,7 +17,7 @@ def get_world_state() -> dict:
     store = mcp_server._require_store()
     state = store.world_state()
     if store.rpg_enabled():
-        state["combat"] = mcp_server._load_rpg().player_combat(store)
+        state["combat"] = mcp_server._load_rpg().player_combat(store, mcp_server._rpg_cfg)
     return state
 
 
@@ -495,7 +495,8 @@ def ui_sheet() -> dict:
         # elle ne se lit pas dans le bloc rpg — rien ne l'y stocke.
         sheet = rpg_mod.render_sheet_lines(
             store.rpg_state(),
-            combat=rpg_mod.player_combat(store) if store.rpg_enabled() else None)
+            combat=rpg_mod.player_combat(store, mcp_server._rpg_cfg)
+            if store.rpg_enabled() else None)
     except Exception as e:  # noqa: BLE001
         return {"error": f"feuille non rendue: {e}"}
     webui.set_sheet(sheet)

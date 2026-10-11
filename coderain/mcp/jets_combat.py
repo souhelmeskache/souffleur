@@ -33,6 +33,165 @@ def _player_slug(store) -> str:
     return entries[0].slug if entries else "player"
 
 
+# ── start_combat : le joueur passé par son nom (chantier 7a, I-28 suite) ──
+# Décision Souhel : dans une partie D&D, le personnage joué est une vraie
+# fiche 5e. `_resolve_party_member` ferme le même trou que
+# `mcp_server._resolve_encounter_member` (Issue #317) côté `party` : un
+# membre passé comme ``{"entity_id": "player", "zone_id": …}`` (ou
+# ``pj:player``) est construit depuis la save, jamais une traduction
+# devinée. `coderain/rules_engine/engine_bridge.py` ne gagne lui-même aucun
+# accès à la save (consigne §2) — toute la lecture/validation reste ici.
+def _is_player_entity(store, entity_id: str) -> bool:
+    """Même convention que `_reconcile_combat_end` : `entity_id`, privé d'un
+    préfixe `pj:`, désigne le joueur s'il vaut "player", "you" ou le slug
+    de `player.md` (`_player_slug`)."""
+    bare = entity_id[3:] if entity_id.startswith("pj:") else entity_id
+    return bare.strip().lower() in ("player", "you", _player_slug(store).lower())
+
+
+def _build_player_party_member(store, entity_id: str, zone_id: str) -> dict:
+    """Lit la fiche 5e du joueur sur la save et rend un dict `PartyMemberSpec`
+    (`coderain.rules_engine.party_builder`), prêt pour `party=[...]` de
+    `start_combat`. N'inclut PAS `initiative` — voir `_resolve_party_member`.
+
+    Un champ nécessaire absent (score, niveau, classe, espèce, PV) ou un
+    identifiant de catalogue qui ne résout pas (`classe`/`espece`/le `srd:`
+    d'un objet équipé, via `get_lib_loader()`) est un refus nommé
+    `{"error": ...}` — jamais un combat ouvert à moitié construit
+    (D-274 §1), jamais une valeur devinée."""
+    from coderain.rules_engine import engine as _engine_fn
+    from coderain.rules_engine.party_builder import (
+        MissingFieldError, party_member_from_sheet)
+
+    rpg_mod = mcp_server._load_rpg()
+    cfg = mcp_server._rpg_cfg
+    if not rpg_mod.scores_mode(cfg):
+        return {"error": "start_combat({'entity_id': 'player', ...}) exige "
+                         "une save réglée au vocabulaire 5e (rpg.stats = "
+                         "strength/dexterity/constitution/intelligence/"
+                         "wisdom/charisma) — cette save porte le vocabulaire "
+                         "générique du socle, pas une fiche 5e"}
+
+    rpg = store.rpg_state()
+    player = rpg.get("player") or {}
+    stats = player.get("stats")
+    if not isinstance(stats, dict):
+        return {"error": "fiche joueur sans 'stats' — impossible de "
+                         "construire sa fiche 5e pour le combat"}
+
+    def _score(name: str):
+        got = rpg_mod.opt_int(stats.get(name))
+        return None if got is False else got
+
+    scores = {n: _score(n) for n in
+             ("strength", "dexterity", "constitution",
+              "intelligence", "wisdom", "charisma")}
+    absents = sorted(n for n, v in scores.items() if v is None)
+    if absents:
+        return {"error": f"score(s) 5e manquant(s) ou illisible(s) sur la "
+                         f"fiche joueur : {', '.join(absents)}"}
+
+    level = rpg_mod.opt_int(player.get("level"))
+    if level is None or level is False:
+        return {"error": "champ 'level' manquant ou illisible sur la fiche joueur"}
+    class_slug = str(player.get("classe") or "").strip()
+    if not class_slug:
+        return {"error": "champ 'classe' manquant sur la fiche joueur"}
+    species_slug = str(player.get("espece") or "").strip()
+    if not species_slug:
+        return {"error": "champ 'espece' manquant sur la fiche joueur"}
+
+    loader = _engine_fn().lib_loader.get_lib_loader()
+    if loader.get_class(class_slug) is None:
+        return {"error": f"classe inconnue du catalogue moteur : {class_slug!r}"}
+    if loader.get_species(species_slug) is None:
+        return {"error": f"espèce inconnue du catalogue moteur : {species_slug!r}"}
+
+    hp_current = rpg_mod.opt_int(player.get("hp"))
+    hp_max = rpg_mod.opt_int(player.get("hp_max"))
+    if hp_current is None or hp_current is False or hp_max is None or hp_max is False:
+        return {"error": "champ 'hp'/'hp_max' manquant ou illisible sur la "
+                         "fiche joueur"}
+
+    derived = rpg_mod.player_combat(store, cfg)
+    if derived.get("error"):
+        return {"error": derived["error"]}
+
+    items: dict[str, dict] = {}
+    try:
+        for e in store.entries("items.md"):
+            items[e.slug] = {str(k).strip().lower(): v
+                             for k, v in e.attrs.items()}
+    except Exception:  # noqa: BLE001 — un items.md illisible ne casse pas la fiche
+        items = {}
+    equipment: list[str] = []
+    inv = rpg.get("inventory") or {}
+    for slug in sorted(inv):
+        held = inv.get(slug)
+        if not isinstance(held, dict) or not held.get("equipped"):
+            continue
+        srd = str((items.get(slug) or {}).get("srd") or "").strip()
+        if not srd:
+            continue    # objet équipé sans `srd:` : hors du moteur, CA/dégâts
+                        # déjà dérivés par `derived_combat` ci-dessus
+        if loader.get_item(srd) is None:
+            return {"error": f"objet '{slug}' équipé : srd '{srd}' inconnu "
+                             f"du catalogue moteur"}
+        equipment.append(srd)
+
+    players = store.entries("player.md")
+    name = players[0].title if players else "player"
+
+    try:
+        return party_member_from_sheet(
+            entity_id=entity_id, name=name,
+            strength=scores["strength"], dexterity=scores["dexterity"],
+            constitution=scores["constitution"],
+            intelligence=scores["intelligence"], wisdom=scores["wisdom"],
+            charisma=scores["charisma"], hp_current=hp_current, hp_max=hp_max,
+            ac=derived.get("ac"), attack_bonus=derived.get("attack_bonus"),
+            level=level, class_slug=class_slug, species_slug=species_slug,
+            equipment=tuple(equipment), zone_id=zone_id)
+    except MissingFieldError as e:
+        return {"error": str(e)}
+
+
+def _resolve_party_member(store, member: dict) -> dict:
+    """Comme `mcp_server._resolve_encounter_member` côté `encounter`
+    (Issue #317) : un membre de `party` déjà complet (porte `strength`)
+    traverse inchangé ; `{"entity_id": "player"|"you"|"pj:player"|…,
+    "zone_id": …}` se construit depuis la save (`_build_player_party_member`,
+    chantier 7a §5). Un membre qui ne désigne pas le joueur et n'est pas déjà
+    complet traverse aussi inchangé — hors périmètre (seul le joueur se
+    construit depuis son nom) ; un champ requis qui lui manquerait encore
+    sera refusé par le moteur lui-même (validation pydantic de
+    `PartyMemberSpec`), pas ici.
+
+    Initiative (chantier 7a §6) : un membre qui n'en fournit pas en reçoit
+    une JETÉE ici — d20 + mod Dextérité 5e, même discipline reproductible
+    que `roll_check` (graine de la save, cran de `rpg["rolls"]`) — jamais
+    une valeur inventée par l'appelant."""
+    if "strength" in member:
+        return member
+    entity_id = str(member.get("entity_id") or "")
+    if not _is_player_entity(store, entity_id):
+        return member
+    built = _build_player_party_member(store, entity_id, member.get("zone_id") or "")
+    if built.get("error"):
+        return built
+    if member.get("initiative") is not None:
+        built["initiative"] = int(member["initiative"])
+        return built
+    rpg_mod = mcp_server._load_rpg()
+    rpg = store.rpg_state()
+    dex_mod = rpg_mod.ability_mod(built["dexterity"])
+    nonce = rpg.get("rolls", 0) + 1
+    built["initiative"] = rpg_mod.roll_initiative(dex_mod, rpg.get("seed", 0), nonce)
+    rpg["rolls"] = nonce
+    store.set_rpg_state(rpg)
+    return built
+
+
 def _reconcile_combat_end(store, live: dict, roster: dict) -> dict:
     """Réconcilie `store.rpg_state()` avec la dernière vue du moteur (I-28).
 
@@ -407,8 +566,33 @@ async def start_combat(session_id: str, party: list[dict],
     défaut record de module) — et construit par `encounter_member_from_record`
     (Issue #317) : le record absent est un refus explicite, `{"error": ...}`,
     avant toute ouverture de combat, jamais un membre sans comportement.
+
+    Un membre de `party` passé par son nom — `{"entity_id": "player", "zone_id":
+    …}` (ou `pj:player`) — est construit depuis la fiche 5e de la save par
+    `_build_player_party_member` (chantier 7a, D&D réel) : scores, PV/PV max,
+    CA et bonus d'attaque dérivés, niveau/classe/espèce, équipement (les
+    `srd:` des objets équipés). Un champ requis absent ou un identifiant de
+    catalogue (classe/espèce/`srd:`) qui ne résout pas est un refus explicite,
+    avant toute ouverture de combat. Une initiative non fournie est JETÉE
+    (d20 + mod Dextérité, graine de la save) plutôt qu'inventée par
+    l'appelant — `"initiatives_rolled"` du retour dit ce qui a été jeté.
     """
     store = None
+    resolved_party = []
+    rolled_initiatives: dict[str, int] = {}
+    for member in party:
+        if "strength" in member:
+            resolved_party.append(member)
+            continue
+        if store is None:
+            store = mcp_server._require_store()
+        avait_initiative = member.get("initiative") is not None
+        m = _resolve_party_member(store, member)
+        if m.get("error"):
+            return {"error": m["error"]}
+        if not avait_initiative and "initiative" in m:
+            rolled_initiatives[str(m.get("entity_id"))] = m["initiative"]
+        resolved_party.append(m)
     resolved = []
     for member in encounter:
         if member.get("monster_template_slug"):
@@ -421,9 +605,11 @@ async def start_combat(session_id: str, party: list[dict],
             return {"error": m["error"]}
         resolved.append(m)
     result = await mcp_server.get_bridge().start_combat(
-        session_id=session_id, party=party, encounter=resolved,
+        session_id=session_id, party=resolved_party, encounter=resolved,
         rng_seed=rng_seed, zones=zones)
     mcp_server._record_combat_events(result.get("events", []))
+    if rolled_initiatives:
+        result["initiatives_rolled"] = rolled_initiatives
     handle_id = result.get("handle_id")
     if handle_id:
         # I-28 : posé ICI, pas à `end_combat` — `resolved` porte le hp_max
@@ -431,7 +617,7 @@ async def start_combat(session_id: str, party: list[dict],
         # module/characters.md avant toute ouverture), jamais deviné à la
         # clôture.
         _combat_rosters[handle_id] = {
-            "party": [str(p.get("entity_id")) for p in party
+            "party": [str(p.get("entity_id")) for p in resolved_party
                      if p.get("entity_id") is not None],
             "enemy_hp_max": {str(m.get("entity_id")): m.get("hp_max")
                              for m in resolved
