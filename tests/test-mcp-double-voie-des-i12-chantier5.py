@@ -34,8 +34,9 @@ Couvre :
       tactique ouvre sur le bon total — vérifié ici en le transmettant et
       en relisant `live()["tracked_hp"]`.
 Défaut mesuré, non testé ici : `end_combat` ne renvoie pas les PV du
-combat tactique vers `store.rpg_state()` (item I-28 de Souffleur) ; son
-test viendra avec son correctif.
+combat tactique vers `store.rpg_state()` (item I-28 de Souffleur) ; corrigé
+et testé au chantier 6 —
+`tests/test-mcp-fin-combat-reconciliation-i28-chantier6.py`.
 """
 from __future__ import annotations
 
