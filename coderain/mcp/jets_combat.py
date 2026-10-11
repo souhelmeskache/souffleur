@@ -6,14 +6,25 @@ commun) ; ce fichier y accede via `mcp_server.<nom>`, jamais de copie locale.
 """
 from __future__ import annotations
 
+import random
+
 import mcp_server
 
-# I-28 : table par handle_id, posée à `start_combat`, lue par `end_combat`
-# pour réconcilier la save avec les PV que le combat tactique a suivis.
-# `enemy_hp_max` vient de la spec RÉSOLUE de chaque membre d'encounter, au
-# moment où elle est connue (le pont `engine_bridge` n'a lui-même aucun
-# accès à la save) — jamais deviné à la clôture.
-_combat_rosters: dict[str, dict] = {}
+# Chantier 7b (I-28 suite) : la table par handle_id, posée à `start_combat`
+# et lue par `end_combat` pour réconcilier la save, vivait en mémoire du
+# process (`_combat_rosters`) — rien n'écrivait le `handle_id` dans la save,
+# un second `start_combat` n'était pas refusé, et la photo du Director ne
+# savait pas qu'un combat était ouvert. Une seule place désormais :
+# `store.rpg_state()["combat"]` (même précédent d'écriture que le cran
+# `rolls` de `roll_check` — une écriture directe, jamais par le guichet
+# `apply_envelope`), posé par `start_combat`, effacé par `end_combat` après
+# réconciliation. Forme : {"handle_id", "session_id", "party" (entity_id
+# bruts de la party, pour `_reconcile_combat_end`), "enemy_hp_max" (idem),
+# "combatants" ([{"entity_id", "name"}, ...], party puis encounter, pour
+# nommer les combattants sans relire les fiches), "player_entity_id"
+# (l'entity_id de party qui désigne le joueur, ou None — décidé UNE fois ici
+# par `_is_player_entity`, jamais recalculé ailleurs)}. Lu par
+# `mcp_server._combat_status` (photo du Director, `get_world_state`).
 
 
 def _player_slug(store) -> str:
@@ -457,11 +468,28 @@ def attack(attacker: str = "player", target: str = "monstre") -> dict:
 
     Rend {attacker, target, roll, attack_bonus, total, target_ac, hit,
     damage: {formula, dice, total}|null, applied: {...}|null,
-    provisoire?: true, provisoire_ids?: [...]}."""
+    provisoire?: true, provisoire_ids?: [...]}.
+
+    Chantier 7b (I-28 suite) — UNE SEULE VOIE pendant un combat tactique :
+    tant que `rpg_state()["combat"]` porte une entrée (posée par
+    `start_combat`, effacée par `end_combat`), `attack` refuse — le moteur
+    5e fait foi, `submit_intent`/`monster_turn` jouent le tour à sa place.
+    Ce refus ne consulte PAS le pont (`engine_bridge`) pour savoir si le
+    `handle_id` est encore connu : une entrée présente dans la save, même
+    périmée (serveur redémarré), bloque `attack` jusqu'au prochain
+    `start_combat` (qui l'efface lui-même, voir sa docstring) ou `end_combat`
+    — jamais une seconde voie de frappe qui court-circuiterait le moteur sur
+    la base d'une supposition de péremption."""
     store = mcp_server._require_store()
     rpg_mod = mcp_server._load_rpg()
     if not store.rpg_enabled():
         return {"error": "rpg mechanics are disabled on this save"}
+    combat_ouvert = store.rpg_state().get("combat")
+    if combat_ouvert:
+        return {"error": f"attack: un combat tactique est ouvert "
+                         f"(handle_id={combat_ouvert.get('handle_id')!r}) — "
+                         f"joue ce tour par submit_intent (le moteur fait "
+                         f"foi) ; attack reprend après end_combat"}
     atk = mcp_server._attack_fiche(store, attacker)
     if atk.get("error"):
         return {"error": atk["error"]}
@@ -556,8 +584,9 @@ async def resolve_check(spec: dict, seed: int | None = None) -> dict:
 
 
 @mcp_server.mcp.tool()
-async def start_combat(session_id: str, party: list[dict],
-                       encounter: list[dict], rng_seed: int,
+async def start_combat(party: list[dict], encounter: list[dict],
+                       rng_seed: int | None = None,
+                       session_id: str | None = None,
                        zones: list[str] | None = None) -> dict:
     """Ouvre un combat détenu par dnd5e-engine ; retourne handle_id.
 
@@ -565,6 +594,20 @@ async def start_combat(session_id: str, party: list[dict],
     entity_id, name, initiative, hp_current, hp_max, ac, zone_id... ; un monstre
     jouable porte monster_template_slug ex. "goblin-warrior"). rng_seed rend le
     combat déterministe : mêmes graines ⇒ mêmes dés.
+
+    Correctif revue (chantier 7b) — `rng_seed` ET `session_id` sont
+    désormais OPTIONNELS, pour que le Director n'ait jamais à fabriquer un
+    nombre de sa main (règle du rôle) :
+      - `rng_seed` absent, save chargée : tiré ICI, même discipline
+        reproductible que `roll_check`/`roll_initiative` (graine de la save
+        `rpg["seed"]`, cran de `rpg["rolls"]` qui AVANCE comme pour tout
+        autre jet — jamais un cran gratuit). Le retour porte alors
+        `"rng_seed"` : la graine effectivement employée. Une graine DONNÉE
+        est employée telle quelle, aucun cran consommé pour elle.
+        `rng_seed` absent SANS save chargée : refus nommé, aucun combat
+        ouvert, aucun cran consommé.
+      - `session_id` absent : le slug de la save chargée (`mcp_server._slug`).
+        Absent sans save chargée : refus nommé.
 
     Retour: ... "warnings": [{entity_id, monster_template_slug, reason}, ...]
     — un membre d'encounter dont le monster_template_slug ne résout à rien
@@ -589,8 +632,68 @@ async def start_combat(session_id: str, party: list[dict],
     avant toute ouverture de combat. Une initiative non fournie est JETÉE
     (d20 + mod Dextérité, graine de la save) plutôt qu'inventée par
     l'appelant — `"initiatives_rolled"` du retour dit ce qui a été jeté.
-    """
-    store = None
+
+    Chantier 7b (I-28 suite) — UN SEUL COMBAT À LA FOIS, écrit dans la save :
+    si `rpg_state()["combat"]` porte déjà une entrée ET que le pont
+    (`engine_bridge`) connaît encore son `handle_id`, refus nommé
+    `{"error": ...}` — termine ce combat par `end_combat` avant d'en ouvrir
+    un autre, aucun combat n'est ouvert. Si la save porte une entrée que le
+    pont ne connaît PLUS (serveur MCP redémarré depuis son ouverture :
+    `_combat_bridge_knows` interroge `get_bridge().live(handle_id)`),
+    l'entrée périmée est effacée, CE combat s'ouvre normalement, et
+    `warnings` porte une ligne le disant explicitement — les PV que cet
+    ancien combat suivait depuis son ouverture sont perdus, `warnings` le
+    dit aussi, jamais une reprise silencieuse d'un combat que personne ne
+    suit plus."""
+    store = mcp_server._store
+    if session_id is None:
+        if not mcp_server._slug:
+            return {"error": "start_combat: session_id absent et aucune "
+                             "save chargée pour en fournir le slug par "
+                             "défaut"}
+        session_id = mcp_server._slug
+
+    warnings_perime: list[str] = []
+    if store is not None:
+        rpg_avant = store.rpg_state()
+        combat_existant = rpg_avant.get("combat")
+        if combat_existant:
+            handle_existant = str(combat_existant.get("handle_id") or "")
+            if mcp_server._combat_bridge_knows(handle_existant):
+                return {"error": f"start_combat: un combat est déjà ouvert "
+                                 f"(handle_id={handle_existant!r}) — "
+                                 f"termine-le par end_combat avant d'en "
+                                 f"ouvrir un autre ; aucun combat n'est "
+                                 f"ouvert par cet appel"}
+            warnings_perime.append(
+                f"combat périmé effacé (handle_id={handle_existant!r}) — le "
+                f"pont ne le connaît plus (serveur MCP redémarré depuis son "
+                f"ouverture) ; les PV que ce combat suivait depuis son "
+                f"ouverture sont perdus")
+            rpg_avant.pop("combat", None)
+            store.set_rpg_state(rpg_avant)
+
+    if rng_seed is None:
+        # Correctif revue (chantier 7b) : jamais un nombre de la main de
+        # l'appelant (le Director n'a pas de graine à donner) — tirée ICI,
+        # AVANT toute résolution de membre, même discipline que
+        # roll_check/roll_initiative (chaîne "seed-nonce", un cran de
+        # rpg["rolls"] consommé). Un combat refusé plus bas (membre
+        # inconnu...) a donc déjà consommé ce cran — accepté : la graine du
+        # combat n'est pas un jet de dé rejouable comme les autres, la
+        # prochaine tentative tire naturellement la suivante.
+        if store is None:
+            return {"error": "start_combat: rng_seed absent et aucune save "
+                             "chargée pour en tirer une graine "
+                             "reproductible — jamais une graine inventée "
+                             "par l'appelant"}
+        rpg0 = store.rpg_state()
+        seed0 = rpg0.get("seed", 0)
+        nonce0 = rpg0.get("rolls", 0) + 1
+        rng_seed = random.Random(f"{seed0}-{nonce0}-combat").getrandbits(32)
+        rpg0["rolls"] = nonce0
+        store.set_rpg_state(rpg0)
+
     resolved_party = []
     rolled_initiatives: dict[str, int] = {}
     for member in party:
@@ -621,21 +724,46 @@ async def start_combat(session_id: str, party: list[dict],
         session_id=session_id, party=resolved_party, encounter=resolved,
         rng_seed=rng_seed, zones=zones)
     mcp_server._record_combat_events(result.get("events", []))
+    # Correctif revue (chantier 7b) : la graine EFFECTIVEMENT employée,
+    # donnée par l'appelant ou tirée ci-dessus — jamais implicite.
+    result["rng_seed"] = rng_seed
     if rolled_initiatives:
         result["initiatives_rolled"] = rolled_initiatives
     handle_id = result.get("handle_id")
-    if handle_id:
-        # I-28 : posé ICI, pas à `end_combat` — `resolved` porte le hp_max
-        # de la spec résolue de chaque membre d'encounter (lu sur le record
-        # module/characters.md avant toute ouverture), jamais deviné à la
-        # clôture.
-        _combat_rosters[handle_id] = {
+    if handle_id and mcp_server._store is not None:
+        # Chantier 7b (I-28 suite) : posé ICI, dans la save, pas dans une
+        # table en mémoire — `resolved`/`resolved_party` portent le hp_max
+        # et les noms de chaque membre, lus avant toute ouverture, jamais
+        # devinés à la clôture. `mcp_server._store` (pas la variable locale
+        # `store`, qui peut être restée None si aucun membre n'exigeait de
+        # résolution par nom, cas d'une party/encounter déjà complets) est
+        # la save réellement chargée.
+        s = mcp_server._store
+        combatants = [
+            {"entity_id": str(p.get("entity_id")), "name": str(p.get("name") or p.get("entity_id"))}
+            for p in resolved_party if p.get("entity_id") is not None]
+        combatants += [
+            {"entity_id": str(m.get("entity_id")), "name": str(m.get("name") or m.get("entity_id"))}
+            for m in resolved if m.get("entity_id") is not None]
+        player_entity_id = next(
+            (str(p.get("entity_id")) for p in resolved_party
+             if p.get("entity_id") is not None
+             and _is_player_entity(s, str(p.get("entity_id")))), None)
+        rpg_apres = s.rpg_state()
+        rpg_apres["combat"] = {
+            "handle_id": handle_id,
+            "session_id": session_id,
             "party": [str(p.get("entity_id")) for p in resolved_party
                      if p.get("entity_id") is not None],
             "enemy_hp_max": {str(m.get("entity_id")): m.get("hp_max")
                              for m in resolved
                              if m.get("entity_id") is not None},
+            "combatants": combatants,
+            "player_entity_id": player_entity_id,
         }
+        s.set_rpg_state(rpg_apres)
+    if warnings_perime:
+        result["warnings"] = list(result.get("warnings") or []) + warnings_perime
     return result
 
 
@@ -687,15 +815,24 @@ async def end_combat(handle_id: str) -> dict:
     {"player": {"hp_before", "hp_after"} | null,
      "enemies": {slug: {"hp_before", "hp_after", "defeated"}},
      "skipped": [entity_id, ...]} | null — null si aucune save n'est
-    chargée (`_store` nul) : la clôture est inchangée, sans erreur."""
+    chargée (`_store` nul) : la clôture est inchangée, sans erreur.
+
+    Chantier 7b (I-28 suite) : le roster (`party`/`enemy_hp_max`) vient
+    désormais de `rpg_state()["combat"]` (posé par `start_combat`), jamais
+    plus d'une table en mémoire — cette entrée est effacée ICI, après
+    lecture, qu'elle serve ou non à la réconciliation : un combat clos ne
+    laisse jamais une entrée `combat` dans la save (deliverable 1 — « le
+    combat ouvert est écrit dans la save »)."""
     bridge = mcp_server.get_bridge()
     live_avant_cloture = bridge.live(handle_id)
     result = await bridge.end_combat(handle_id)
-    roster = _combat_rosters.pop(handle_id, None)
     reconciled = None
     if mcp_server._store is not None:
-        reconciled = _reconcile_combat_end(
-            mcp_server._store, live_avant_cloture, roster or {})
+        store = mcp_server._store
+        rpg = store.rpg_state()
+        roster = rpg.pop("combat", None)
+        store.set_rpg_state(rpg)
+        reconciled = _reconcile_combat_end(store, live_avant_cloture, roster or {})
     result["reconciled"] = reconciled
     return result
 

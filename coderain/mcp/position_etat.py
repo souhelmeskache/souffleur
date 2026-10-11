@@ -13,11 +13,21 @@ def get_world_state() -> dict:
     """Get the full world state: time, player location, flags, quests, RPG block
     (HP/mana/XP/inventory/companions/enemies) + the derived `combat` section
     (I-463: CA, bonus d'attaque et arme du joueur, recalculés à chaque lecture
-    depuis la fiche — jamais stockés dans state.json)."""
+    depuis la fiche — jamais stockés dans state.json).
+
+    Chantier 7b (I-28 suite) : si un combat TACTIQUE est ouvert (`start_combat`,
+    moteur 5e), une clé `combat_ouvert` supplémentaire porte son état
+    (`handle_id`, round, acteur courant, ordre d'initiative, PV/états suivis
+    par le moteur, morts — voir `mcp_server._combat_status`) ; absente sinon.
+    La clé `combat` ci-dessus (nombres dérivés de la fiche du joueur) ne
+    change pas — deux choses différentes, jamais fusionnées."""
     store = mcp_server._require_store()
     state = store.world_state()
     if store.rpg_enabled():
         state["combat"] = mcp_server._load_rpg().player_combat(store, mcp_server._rpg_cfg)
+    combat_ouvert = mcp_server._combat_status(store)
+    if combat_ouvert is not None:
+        state["combat_ouvert"] = combat_ouvert
     return state
 
 
