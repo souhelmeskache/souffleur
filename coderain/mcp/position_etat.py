@@ -101,7 +101,20 @@ def apply_envelope(envelope: str, rpg_on: bool = True) -> list[str]:
     to skip: it logs a canon event when something is revealed, logs one when a
     quest completes or fails, records what the turn revealed and fired so
     undo_last can put it back, and stamps the events log with the turn index
-    branch replay needs."""
+    branch replay needs.
+
+    `ecart_acte` (D-419) — when the party's lived facts contradict a node's
+    authored text (e.g. the node says "your torch is sputtering" but the
+    character lost their torch turns ago), act the gap ONCE: deltas:
+    {"ecart_acte": [{"noeud": "<node id>", "texte": "<the lived fact, in
+    plain language>"}]}. `noeud` must be an id of `nodes[]` in the loaded
+    partition (same vocabulary as the `location` delta); `texte` is 1-300
+    characters. Once accepted, it is served under that node on every future
+    turn (assembleur_position.py's current-node section, both the
+    Director's photo and the narrator's packet) with a line saying it
+    overrides the node's own text — no need to repeat the correction in
+    directive_director or re-plan it next turn. A turn's `undo_last` undoes
+    an ecart_acte written that same turn, like any other world delta."""
     store = mcp_server._require_store()
     env = mcp_server.json.loads(envelope) if isinstance(envelope, str) else envelope
     rpg_mod = mcp_server._load_rpg()
