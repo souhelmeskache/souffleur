@@ -17,11 +17,16 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     A `skill` outside the actor's sheet + the canonical rules list (I-213
     corollary 3) is refused: {"error": "unknown skill ..."}. A known skill
     resolves either way, with `trained` saying whether the actor is proficient.
+    An `actor` that is neither "player"/"you" nor a known entry of
+    characters.md is refused (I-19): {"error": "unknown actor ..."} naming
+    the admitted values — nothing is rolled, nothing borrowed.
     A stat absent from the actor's sheet is looked up in `rpg.provisoire`
-    (D-275) before falling back to 0 — a borrowed modifier is flagged
-    `provisoire: true`.
+    (D-275) before being refused (I-19): {"error": "unknown stat ..."}
+    naming the sheet's own stats — a check NEVER silently rolls at mod 0 for
+    a stat nobody wrote. A provisoire match still resolves, flagged
+    `provisoire: true`, exactly as before.
     Returns {dc, mod, roll, total, success, win_chance, skill?, trained?,
-    provisoire?, provisoire_ids?}."""
+    provisoire?, provisoire_ids?} | {"error": ...}."""
     store = mcp_server._require_store()
     rpg_mod = mcp_server._load_rpg()
     from coderain.templates import slugify
@@ -40,7 +45,14 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     else:
         npc = next((e for e in store.entries("characters.md")
                     if e.slug == actor_slug), None)
-        actor_stats = npc.stats() if npc else {}
+        # I-19 : un acteur ni "player"/"you" ni trouvé dans characters.md ne
+        # se jette plus silencieusement à 0 — refus nommant les valeurs
+        # admises, même forme que le refus de compétence inconnue ci-dessus.
+        if npc is None:
+            known = sorted(e.slug for e in store.entries("characters.md"))
+            return {"error": f"unknown actor '{actor}' "
+                              f"(use one of: player, {', '.join(known)})"}
+        actor_stats = npc.stats()
     # D-275 : le modificateur absent de la fiche se cherche dans
     # `rpg.provisoire` APRÈS la fiche — et le jet DIT qu'il l'a emprunté.
     stat_key = stat.strip().lower()
@@ -50,6 +62,12 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     else:
         from coderain import bouchage as bouchage_mod
         pose, valeur = bouchage_mod.valeur_provisoire(rpg, actor_slug, stat_key)
+        # I-19 : une stat ni sur la fiche ni posée en valeur provisoire ne se
+        # jette plus silencieusement à 0 — même refus nommé que ci-dessus.
+        if pose is None:
+            valides = sorted(actor_stats) or ["(aucune sur cette fiche)"]
+            return {"error": f"unknown stat '{stat}' for '{actor_slug}' "
+                              f"(use one of: {', '.join(valides)})"}
         base = bouchage_mod.entier(valeur) or 0
     mod = base + sk_mod
     seed = rpg.get("seed", 0)
