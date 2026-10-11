@@ -343,7 +343,15 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
     stat_key = stat.strip().lower()
     pose = None
     if stat_key in actor_stats:
-        base = int(actor_stats[stat_key])
+        # Chantier 7a (correctif revue PR #355) : en vocabulaire 5e exact
+        # (`rpg.scores_mode`), la fiche — joueur OU PNJ, même réglage de save,
+        # une seule vérité pour toute la partie — porte des SCORES bruts ;
+        # le modificateur se déduit par la règle 5e (`ability_mod`), MÊME
+        # fonction que `derived_combat`. Vocabulaire générique inchangé : la
+        # valeur est déjà un modificateur, lue telle quelle.
+        raw = actor_stats[stat_key]
+        base = (rpg_mod.ability_mod(raw) if rpg_mod.scores_mode(mcp_server._rpg_cfg)
+               else int(raw))
     else:
         from coderain import bouchage as bouchage_mod
         pose, valeur = bouchage_mod.valeur_provisoire(rpg, actor_slug, stat_key)
@@ -353,6 +361,11 @@ def roll_check(stat: str, dc: int = 12, skill: str = "",
             valides = sorted(actor_stats) or ["(aucune sur cette fiche)"]
             return {"error": f"unknown stat '{stat}' for '{actor_slug}' "
                               f"(use one of: {', '.join(valides)})"}
+        # D-275 : une valeur provisoire posée par bouchage est déjà un
+        # MODIFICATEUR final (`bouchage.appliquer_stats` : « complétée des
+        # MODIFICATEURS provisoires ») — jamais reconvertie par ability_mod,
+        # même en vocabulaire 5e : le juge humain répond déjà « le nombre
+        # qui manque au jet », pas un score à transformer.
         base = bouchage_mod.entier(valeur) or 0
     mod = base + sk_mod
     seed = rpg.get("seed", 0)

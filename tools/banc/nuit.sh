@@ -1057,7 +1057,7 @@ ecrire_resume_run() {
   {
     echo "# resume-run — partie $pnn"
     echo
-    echo "casting: joueur=haiku(low) director=$modele(medium) narrateur=haiku profil=${PROFIL_COURANT:-guerrier}"
+    echo "casting: joueur=haiku(low) director=$modele(medium) narrateur=haiku profil=${PROFIL_COURANT:-guerrier-5e}"
     # paire (#282) : numéro de la paire Director/joueur qui a joué cette
     # partie — "01" en séquentiel (une seule paire) ; suffixe réel du
     # dossier bench/nuit-AAAAMMJJ/partie-NN/ le cas échéant en parallèle.
@@ -1273,7 +1273,12 @@ jouer_partie() {
   # rejouaient le même personnage). Relu dans resume-run.md (casting).
   # `--force` : la save de départ porte déjà le guerrier (Mika Thorne) —
   # sans lui, la fixture refuse d'installer un autre profil (mesuré 06/09).
-  local profils=(guerrier eclaireur erudit)
+  # Revue PR #355 (chantier 7a) : les trois profils 5e remplacent les trois
+  # génériques — une nuit ne jouait jamais une fiche 5e jusqu'ici. Même
+  # script de fixture (#257), même discipline --force ; `personnage-
+  # banc.py::install()` repose l'inventaire en entier à chaque profil (plus
+  # de résidu d'arme/armure d'un profil précédent, PR #355).
+  local profils=(guerrier-5e eclaireur-5e erudit-5e)
   PROFIL_COURANT="${profils[$(( (partie_num - 1) % ${#profils[@]} ))]}"
   echo "=== partie $pnn : fixture personnage (#257, profil=$PROFIL_COURANT) ==="
   if ! python "$FIXTURE_PY" "$save_dest" --profil "$PROFIL_COURANT" --force > "$partie_dir/fixture.log" 2>&1; then
