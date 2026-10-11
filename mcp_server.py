@@ -942,15 +942,65 @@ def _content_leak(entry, flat: str) -> bool:
     return cov >= _LEAK_COVERAGE
 
 
+def _partition_identifiers(partition_dir: Path) -> set[str]:
+    """Chantier 4 (D-419 pt C) : tous les identifiants de la partition de
+    la save chargée — le nom de fichier de tout nœud (`nodes/<id>.md`) et
+    de tout record (`records/<id>.md`), scannés par `_r2_scan` comme
+    autant de slugs (même garde que `_slug_named`, mot entier). Le nom de
+    fichier EST l'identifiant (même convention que `_anchored_record_ids`
+    pour les records) — aucune seconde lecture du front-matter `id`.
+
+    Renvoie TOUS les identifiants, y compris les mots nus (`kobolds`,
+    `conversation`) — le tri distinctif/mot nu est le travail de l'appelant
+    (`_r2_scan`, voir sa docstring), pas de cette lecture brute."""
+    out = set()
+    for sous_dossier in ("nodes", "records"):
+        d = partition_dir / sous_dossier
+        if d.exists():
+            out.update(f.stem for f in d.glob("*.md"))
+    return out
+
+
+# Chantier 4 (D-419 pt C, cas H3) : une visée qui PARLE de ses propres
+# sources — le vocabulaire de la partition elle-même — est aussi hors
+# périmètre du narrateur, au même titre qu'un slug ou qu'un fragment de
+# corps caché : ce ne sont pas des faits de la scène, c'est la machinerie
+# qui la produit. Mot entier, sans casse (même garde que `_slug_named` sur
+# `low`, déjà en minuscules) ; pas d'exception pour "nœud" même au sens
+# propre ("un nœud de corde") — la garde ne distingue pas les deux sens,
+# elle refuse le mot, le Director reformule.
+_R2_SOURCE_WORDS = (
+    "nœud", "noeud", "node", "flag", "drapeau", "drapeaux",
+    "écart acté", "écarts actés", "prévu par le module", "le module",
+    "texte du nœud",
+)
+
+
 def _r2_scan(store, directive: str) -> str:
     """Returns the name of the guard that fired (safe to put in a refusal —
     the Director already knows the coulisses, R2's own contract), or "" when
-    the directive is clean. Three refusals, one scan: an unrevealed hidden
+    the directive is clean. Five refusals, one scan: an unrevealed hidden
     entry (slug or body fragment), an event rule (fired or not — its slug or
-    text is director-only material regardless), or a hidden entry's content
+    text is director-only material regardless), a hidden entry's content
     reached through the same body-fragment test (the "secret non déclenché"
     case, D-019: a secret is a hidden character/faction entry, no separate
-    registry to scan)."""
+    registry to scan) — and, chantier 4 (D-419 pt C) — a DISTINCTIVE
+    identifier of the loaded save's partition (any node or record filename)
+    or a word/phrase that talks about the partition's own machinery
+    (`_R2_SOURCE_WORDS`: "nœud", "flag", "le module", ...). The narrator
+    reads what the character perceives, never the vocabulary of the module
+    that produces it.
+
+    Défaut mesuré sur les partitions réelles (ordre de Souhel, vérif
+    pré-fusion PR #352) : beaucoup d'identifiants sont des mots ordinaires
+    de la langue (records `kobolds`/`zombie`/`goblins`, nœuds `conversation`/
+    `ambush`/`captive`) — un tel identifiant ne se DISTINGUE pas de la prose
+    narrative, sa présence dans une visée ne fuit donc rien que la scène
+    elle-même ne dirait pas déjà (« deux kobolds surgissent » doit pouvoir
+    être dit). Seul un identifiant DISTINCTIF — qui porte un tiret ou un
+    chiffre (`para-12`, `death-knight`, `tresor-toll-20gp`) — ne peut être
+    qu'une citation de la partition, jamais une tournure de prose ordinaire :
+    c'est le seul cas que ce refus couvre."""
     flat = " ".join(str(directive or "").split())
     if not flat:
         return ""
@@ -961,6 +1011,16 @@ def _r2_scan(store, directive: str) -> str:
     for rule in store.event_rules(include_consumed=True):
         if _slug_named(rule.slug, low) or _content_leak(rule, flat):
             return f"règle d'événement ({rule.slug})"
+    pdir = _partition_dir(store)
+    if pdir is not None:
+        for ident in sorted(_partition_identifiers(pdir)):
+            if not re.search(r"[-0-9]", ident):
+                continue        # mot nu : indiscernable de la prose, pas un refus
+            if _slug_named(ident, low):
+                return f"identifiant de la partition ({ident})"
+    for mot in _R2_SOURCE_WORDS:
+        if _slug_named(mot, low):
+            return f"vocabulaire de la partition ({mot})"
     return ""
 
 

@@ -24,8 +24,10 @@ Ce test, 100 % synthétique (D-109, zéro matériau de campagne réel), couvre :
      ci-dessus) :" et le texte de l'écart, placé APRÈS le texte du nœud
      courant et AVANT l'objectif de la scène ; l'écart d'un AUTRE nœud
      n'apparaît jamais dans cette photo.
-  5. Le paquet du narrateur (`mcp_server.paquet_narrateur`) porte le même
-     bloc pour le nœud courant.
+  5. Le paquet du narrateur (`mcp_server.paquet_narrateur`) porte la même
+     donnée pour le nœud courant, reformulée sans jamais nommer « nœud »
+     ni « écart » (chantier 4, I-14 : « Ce qui a changé depuis (prime sur
+     le texte ci-dessus) : »).
 """
 from __future__ import annotations
 
@@ -288,12 +290,16 @@ try:
         "Angle : la torche promise ne grésillera pas.",
         "J'observe la porte.", sans_mecanique=True)
     texte_narrateur = Path(paquet["path"]).read_text(encoding="utf-8")
-    assert "Écarts déjà actés sur ce nœud (ils priment sur le texte " \
-          "ci-dessus) :" in texte_narrateur, texte_narrateur[:2000]
+    # Chantier 4 (I-14) : le paquet du narrateur reformule ce bloc sans
+    # jamais nommer « nœud » ni « écart » (contrairement à la photo du
+    # Director ci-dessus, inchangée) — même donnée, autre phrase.
+    assert "Ce qui a changé depuis (prime sur le texte ci-dessus) :" \
+          in texte_narrateur, texte_narrateur[:2000]
     assert TEXTE_PARA01 in texte_narrateur, texte_narrateur[:2000]
     assert TEXTE_PARA02 not in texte_narrateur, texte_narrateur[:3000]
     section("5) paquet du narrateur (mcp_server.paquet_narrateur) : même "
-           "bloc pour le nœud courant")
+           "donnée que la photo, reformulée sans « nœud »/« écart » "
+           "(chantier 4)")
 
     # --- section de l'AUTRE nœud : porte SON écart, jamais celui de para-01-
     history = store_d.turns()
