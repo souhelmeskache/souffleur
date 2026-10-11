@@ -33,14 +33,9 @@ Couvre :
       transmettre en `hp_current` à `start_combat` pour que le combat
       tactique ouvre sur le bon total — vérifié ici en le transmettant et
       en relisant `live()["tracked_hp"]`.
-  (b, défaut mesuré — I-12) : les PV retirés PENDANT le combat tactique
-  (`submit_intent`) ne sont PAS reportés dans `store.rpg_state()`
-  — AUCUN point du pont (`coderain/rules_engine/*.py`, Grep "rpg_state"
-  zéro résultat) n'écrit dans le store coderain. Un `attack`/`roll_check`
-  qui suit `end_combat` reprend donc le total d'AVANT le combat tactique,
-  pas celui que le combat a laissé. Ce test VERROUILLE ce qui tient
-  AUJOURD'HUI (la divergence est mesurée, nommée, jamais corrigée ici —
-  la correction appartient au manager).
+Défaut mesuré, non testé ici : `end_combat` ne renvoie pas les PV du
+combat tactique vers `store.rpg_state()` (item I-28 de Souffleur) ; son
+test viendra avec son correctif.
 """
 from __future__ import annotations
 
@@ -189,37 +184,6 @@ try:
     fin1 = asyncio.run(mcp_server.end_combat(handle1))
     assert "outcome" in fin1, fin1
     section(f"  end_combat -> {fin1['outcome'].get('ended_reason')!r}")
-
-    # --- (b, défaut mesuré I-12) : la voie native ignore le combat --------
-    hp_store_apres_combat = store.rpg_state()["enemies"]["gobelin-test"]["hp"]
-    assert hp_store_apres_combat == hp_monstre_1, \
-        (f"mesuré (I-12) : store.rpg_state() ne reçoit JAMAIS les PV du "
-         f"combat tactique — il reste au total d'AVANT le combat "
-         f"({hp_monstre_1}), jamais celui que le moteur 5e a laissé "
-         f"({hp_engine_final}) -> lu {hp_store_apres_combat}")
-    section(f"(b, défaut mesuré I-12) après end_combat, "
-           f"store.rpg_state()['enemies']['gobelin-test']['hp'] vaut "
-           f"encore {hp_store_apres_combat} (le total d'AVANT le combat "
-           f"tactique), jamais {hp_engine_final} (le total que le combat "
-           "a laissé côté moteur 5e) — les deux voies ne se réconcilient "
-           "PAS automatiquement ; un attack()/roll_check() qui suit "
-           "reprend donc le total natif, obsolète de la différence "
-           f"{hp_monstre_1 - hp_engine_final}")
-
-    r_attack2 = mcp_server.attack(attacker="player", target="gobelin-test")
-    assert "error" not in r_attack2, r_attack2
-    assert r_attack2["hit"] is True, r_attack2
-    degats2 = r_attack2["damage"]["total"]
-    hp_monstre_2 = store.rpg_state()["enemies"]["gobelin-test"]["hp"]
-    assert hp_monstre_2 == max(0, hp_monstre_1 - degats2), \
-        (f"attack() après end_combat calcule depuis le total NATIF "
-         f"({hp_monstre_1}), pas depuis celui du combat tactique "
-         f"({hp_engine_final}) -> {hp_monstre_2}")
-    section(f"  confirmation : attack() après end_combat retire ses "
-           f"dégâts ({degats2}) du total NATIF {hp_monstre_1} -> "
-           f"{hp_monstre_2}, pas du total moteur 5e {hp_engine_final} — "
-           "divergence I-12 verrouillée par ce test, à régler par le "
-           "manager (jamais corrigée dans ce chantier)")
 
     print(f"\nOK test-mcp-double-voie-des-i12-chantier5 — {len(FAIT)} "
          "sections vertes")
