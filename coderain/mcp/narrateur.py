@@ -88,7 +88,7 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     recent_turns = mcp_server._engine.short_term if mcp_server._engine is not None else 12
     rendu_md = ""
     if pdir is not None and mcp_server.assembleur_position.eligible(store, state):
-        text, info = mcp_server._position_context_text(
+        text, info, _section_titles = mcp_server._position_context_text(
             store, pdir, state, history, action_joueur, recent_turns,
             event_rules=False, secrets=False, role_section=False)
         rendu_md = mcp_server.assembleur_position.rendu_md_for(
