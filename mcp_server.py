@@ -1182,6 +1182,20 @@ def _position_context_text(store, partition_dir: Path, state: dict,
         char_sheet=char_sheet, rpg_on=rpg_on, rpg_rules=rpg_rules,
         secrets=secrets, role_section=role_section, director_sys=director_sys,
         director_role=director_role_text)
+    # Chantier 7b (I-28 suite) : la section volatile « Combat en cours »,
+    # APRÈS la fiche de personnage — seulement pour la photo du Director
+    # (`director_role=True`, `photo_director`), jamais pour
+    # `assemble_context_to_file`/`paquet_narrateur` qui réutilisent ce même
+    # pont. Insertion ICI (sur la LISTE de `Section`, pas sur le texte déjà
+    # joint) plutôt que dans `assembleur_position.build_sections` : ce
+    # module reste hors périmètre de ce chantier (coderain/rules_engine/ et
+    # lui seul y est apparenté par construction — zéro écriture dedans).
+    if director_role:
+        combat_section = _combat_photo_section(store)
+        if combat_section is not None:
+            idx = next((i for i, s in enumerate(sections)
+                       if s.title == "Fiche de personnage"), len(sections))
+            sections.insert(idx + 1, combat_section)
     text = "\n\n".join(s.render() for s in sections if s.render())
     section_titles = [s.title for s in sections if s.render()] if director_role else None
     # Verdicts du tour (lane b, #127) — jamais event_rules_block() entier.
@@ -1586,6 +1600,123 @@ def _record_combat_events(events: list[dict]) -> None:
         return
     _last_applied_events = (_last_applied_events or []) + [
         _combat_event_str(e) for e in events]
+
+
+# ── Chantier 7b (I-28 suite) : le combat ouvert, lu depuis la save + ─────
+# mirroir du pont — UNE SEULE fonction de lecture, partagée par
+# `get_world_state` (clé `combat_ouvert`, `coderain/mcp/position_etat.py`)
+# et la photo du Director (section « Combat en cours »,
+# `_position_context_text` ci-dessous) : jamais deux lectures qui
+# pourraient diverger. `coderain/mcp/jets_combat.py::start_combat` appelle
+# aussi `_combat_bridge_knows` pour son propre refus/péremption — même
+# fonction, pas une copie.
+
+def _combat_bridge_knows(handle_id: str) -> bool:
+    """Le pont (`engine_bridge.CombatBridge`) connaît-il encore ce
+    `handle_id` ? `live()` lève `ValueError` sur un handle inconnu ou déjà
+    clos (voir sa docstring) — seule façon d'interroger le pont, il ne tient
+    pas de méthode `knows`/`has` dédiée (périmètre : `engine_bridge.py` ne se
+    touche pas)."""
+    if not handle_id:
+        return False
+    try:
+        get_bridge().live(handle_id)
+        return True
+    except ValueError:
+        return False
+
+
+def _combat_status(store) -> dict | None:
+    """L'état du combat ouvert sur cette save, ou None si aucun.
+
+    Lit `store.rpg_state()["combat"]` (posé par `jets_combat.start_combat`,
+    effacé par `jets_combat.end_combat` — une seule place, voir sa
+    docstring), puis mirrore le pont (`get_bridge().live`) pour les champs
+    dynamiques. Si le pont ne connaît plus le `handle_id` (serveur MCP
+    redémarré depuis l'ouverture), rend SEULEMENT {"handle_id", "session_id",
+    "stale": True} — aucun champ dynamique deviné.
+
+    Sinon : {"handle_id", "session_id", "stale": False, "round",
+    "active_actor": {"entity_id", "name"} | None, "initiative_order":
+    [{"entity_id", "name"}, ...], "hp": {entity_id: PV, ...}, "conditions":
+    {entity_id: [...]}, "dead": [entity_id, ...], "is_player_turn": bool}.
+    `is_player_turn` compare l'acteur courant à `player_entity_id`, décidé
+    UNE fois par `start_combat` (`jets_combat._is_player_entity`), jamais
+    recalculé ici."""
+    combat = (store.rpg_state() or {}).get("combat")
+    if not combat:
+        return None
+    handle_id = str(combat.get("handle_id") or "")
+    session_id = combat.get("session_id")
+    if not _combat_bridge_knows(handle_id):
+        return {"handle_id": handle_id, "session_id": session_id,
+               "stale": True}
+    live = get_bridge().live(handle_id)
+    names = {str(c.get("entity_id")): c.get("name") or c.get("entity_id")
+            for c in combat.get("combatants") or []}
+    active_id = live.get("active_actor_id")
+    return {
+        "handle_id": handle_id, "session_id": session_id, "stale": False,
+        "round": live.get("round_number"),
+        "active_actor": ({"entity_id": active_id,
+                          "name": names.get(active_id, active_id)}
+                         if active_id else None),
+        "initiative_order": [{"entity_id": eid, "name": names.get(eid, eid)}
+                             for eid in (live.get("initiative_order") or [])],
+        "hp": dict(live.get("tracked_hp") or {}),
+        "conditions": dict(live.get("active_conditions") or {}),
+        "dead": list(live.get("dead_ids") or []),
+        "is_player_turn": (active_id is not None
+                          and active_id == combat.get("player_entity_id")),
+    }
+
+
+def _combat_photo_section(store) -> "assembleur_position.Section | None":
+    """La section volatile « Combat en cours » de la photo du Director
+    (chantier 7b, deliverable 3) — texte rendu depuis `_combat_status`.
+    None si aucun combat n'est ouvert (pas de section du tout, jamais une
+    section vide)."""
+    status = _combat_status(store)
+    if status is None:
+        return None
+    if status.get("stale"):
+        lignes = [f"Combat périmé (handle_id={status['handle_id']!r}) — le "
+                 f"serveur MCP ne connaît plus ce combat (redémarré depuis "
+                 f"son ouverture) ; ses PV et tours ne sont plus suivis ; "
+                 f"ouvre-le à nouveau (start_combat) ou laisse-le se "
+                 f"nettoyer à la prochaine ouverture."]
+        return assembleur_position.Section("volatile", "Combat en cours",
+                                           "\n".join(lignes))
+    actif = status.get("active_actor")
+    tour = (f"{actif['name']} ({actif['entity_id']})" if actif else "(aucun)")
+    if status.get("is_player_turn"):
+        tour += " — c'est le tour du personnage joué."
+    ordre = ", ".join(f"{e['name']} ({e['entity_id']})"
+                      for e in status.get("initiative_order") or [])
+    hp = status.get("hp") or {}
+    conditions = status.get("conditions") or {}
+    dead = set(status.get("dead") or [])
+    pv_lignes = []
+    for eid, valeur in hp.items():
+        nom = eid
+        for e in status.get("initiative_order") or []:
+            if e["entity_id"] == eid:
+                nom = e["name"]
+                break
+        etat = "mort" if eid in dead else ", ".join(conditions.get(eid) or []) or "aucun état"
+        pv_lignes.append(f"- {nom} ({eid}) : {valeur} PV — {etat}")
+    morts = ", ".join(dead) if dead else "(aucun)"
+    lignes = [
+        f"Handle : {status['handle_id']}",
+        f"Round : {status.get('round')}",
+        f"Tour : {tour}",
+        f"Ordre d'initiative : {ordre}",
+        "PV suivis par le moteur :",
+        *pv_lignes,
+        f"Morts : {morts}",
+    ]
+    return assembleur_position.Section("volatile", "Combat en cours",
+                                       "\n".join(lignes))
 
 
 # ── I-200: evolution interne du personnage ─────────────────────
