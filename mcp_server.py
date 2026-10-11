@@ -1002,6 +1002,28 @@ def _partition_dir(store) -> Path | None:
     return Path(partition) if partition else None
 
 
+def _rpg_rules_served(store) -> str:
+    """Même decoupe que `Engine._rpg_rules_served()` (coderain/engine.py),
+    reportée ici pour le chemin MCP qui tourne parfois sans Engine chargé
+    (`_engine is None`) : `rpg-rules.md` se decoupe en SOCLE toujours servi +
+    section « Level-ups and grants » servie seulement sur declencheur d'etat
+    verifiable par le moteur (`rpg.pending_grant > 0`). Ne depend que de
+    `store`, comme la methode d'Engine qu'elle imite — jamais une seconde
+    logique, un seul calcul reporte deux fois (Engine, ce pont)."""
+    from coderain import templates
+    text = store.read("rpg-rules.md").strip()
+    socle, levelup = templates.split_rpg_rules(text)
+    if not levelup:
+        return socle
+    try:
+        pending = int(store.rpg_state().get("pending_grant") or 0)
+    except (TypeError, ValueError):
+        pending = 0
+    if pending > 0:
+        return (socle.rstrip() + "\n\n" + levelup).strip()
+    return socle
+
+
 def _position_context_text(store, partition_dir: Path, state: dict,
                            history: list[dict], player_action: str,
                            recent_turns: int, event_rules: bool,
@@ -1023,13 +1045,37 @@ def _position_context_text(store, partition_dir: Path, state: dict,
     dernier appelle avec `role_section=False` pour ne pas lui servir un
     prompt de rôle qui ne le décrit pas.
 
+    I-17 : `rpg_on`/`char_sheet`/`rpg_rules` sont désormais calculés ici
+    (`store.rpg_enabled()`, `rpg_mod.context_block`, `_rpg_rules_served`) et
+    passés à `build_sections` — même calcul qu'`engine.py::_messages`
+    (l. 232-254), reporté ici parce que ce pont tourne parfois sans Engine
+    chargé. Sans ce calcul, `build_sections` recevait ses défauts
+    (`char_sheet=""`, `rpg_on=False`, `rpg_rules=""`) : la photo perdait la
+    section « Fiche de personnage » et « RPG MODULE (mechanics ON) » sur une
+    save au jeu actif, et la section « Rôle (Director) » sortait dans sa
+    variante SANS jeu (`_ENV_WORLD`) même `rpg.enabled: true`.
+    `char_sheet`/`rpg_rules` restent VIDES quand `role_section` est False
+    (le chemin de `paquet_narrateur`) — inchangé par ce correctif : un
+    narrateur reçoit la perception du personnage jouée, jamais sa fiche
+    mécanique ni le socle de règles. `rpg_on` lui-même est toujours calculé
+    (il ne sert qu'à choisir la variante du Rôle, section omise quand
+    `role_section` est False, donc sans effet sur ce chemin).
+
     `budget_tokens`/`wide_lore`/`max_secrets`/`secrets_window`/`lore_include`
     n'ont pas cours ici : la sélection par position n'a ni budget ni passe
     large/étroite, elle est déterministe (node courant + records ancrés) —
     même divergence assumée que `engine._messages()` sur le chemin position."""
     location = validator_mod.current_location(state)
+    rpg_on = store.rpg_enabled()
+    char_sheet, rpg_rules = "", ""
+    if role_section:
+        rpg_mod = _load_rpg()
+        char_sheet = (rpg_mod.context_block(store, prompt_narrate=False)
+                     if rpg_on else "")
+        rpg_rules = _rpg_rules_served(store) if rpg_on else ""
     sections = assembleur_position.build_sections(
         partition_dir, store, location, history, player_action,
+        char_sheet=char_sheet, rpg_on=rpg_on, rpg_rules=rpg_rules,
         secrets=secrets, role_section=role_section)
     text = "\n\n".join(s.render() for s in sections if s.render())
     # Verdicts du tour (lane b, #127) — jamais event_rules_block() entier.
