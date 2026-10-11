@@ -8,6 +8,132 @@ from __future__ import annotations
 
 import mcp_server
 
+# I-28 : table par handle_id, posée à `start_combat`, lue par `end_combat`
+# pour réconcilier la save avec les PV que le combat tactique a suivis.
+# `enemy_hp_max` vient de la spec RÉSOLUE de chaque membre d'encounter, au
+# moment où elle est connue (le pont `engine_bridge` n'a lui-même aucun
+# accès à la save) — jamais deviné à la clôture.
+_combat_rosters: dict[str, dict] = {}
+
+
+def _player_slug(store) -> str:
+    """Le slug du personnage joué.
+
+    Même fiche que `_attack_fiche`/`skill_mod` : `player.md`, dont la
+    section porte l'ancre explicite `{#slug}` ou, à défaut, le titre
+    slugifié (`coderain/memory.py::parse_entries`, `m.group(2) or
+    templates.slugify(title)`) — le gabarit par défaut écrit `## You
+    {#player}`, donc "player" tant que personne n'a changé l'ancre. Repli
+    sur "player" si `player.md` n'a aucune entrée."""
+    try:
+        entries = store.entries("player.md")
+    except Exception:  # noqa: BLE001 — jamais casser end_combat sur une
+                        # fiche illisible ; ce refus se prononce ailleurs
+        entries = []
+    return entries[0].slug if entries else "player"
+
+
+def _reconcile_combat_end(store, live: dict, roster: dict) -> dict:
+    """Réconcilie `store.rpg_state()` avec la dernière vue du moteur (I-28).
+
+    `live` = `get_bridge().live(handle_id)` pris JUSTE AVANT la clôture
+    (`tracked_hp`, `dead_ids`). `roster` = table posée à `start_combat`
+    (`party` : les entity_id bruts de la party ; `enemy_hp_max` : entity_id
+    -> hp_max de la spec résolue de l'encounter). Une seule enveloppe
+    `apply_envelope` (D-141) pour toute la réconciliation — jamais une
+    écriture directe de `rpg_state`, exactement comme `attack`.
+
+    Un membre de l'`encounter` est un ennemi sous son `entity_id` (slugifié
+    — même fonction que `rpg.apply` applique déjà à la clé `enemies.<slug>`,
+    donc le même entity_id retombe toujours sur le même slug). Un membre de
+    la `party` est le joueur si son `entity_id`, privé d'un préfixe `pj:`,
+    vaut "player", "you" ou `_player_slug(store)` ; tout autre membre de la
+    party n'est pas écrit et revient sous `skipped`.
+
+    Le delta écrit est PV du moteur à la clôture − PV de la save maintenant
+    (hp_max de la spec résolue tenant lieu de "PV de la save maintenant"
+    pour un ennemi encore inconnu — même convention que `attack` l.224-227 :
+    un ennemi neuf entre dans `rpg.apply` à son hp_max, AVANT que le delta
+    ne soit appliqué). Delta nul -> rien n'est écrit pour ce membre (un
+    ennemi inconnu reçoit quand même son hp_max : c'est déjà une écriture).
+    """
+    from coderain.templates import slugify
+
+    tracked_hp = live.get("tracked_hp") or {}
+    dead_ids = set(live.get("dead_ids") or [])
+    player_slug = _player_slug(store)
+
+    def _hp_of(entity_id: str) -> int:
+        # I-28 : `dead_ids` fait foi sur la mort, jamais une lecture brute
+        # de `tracked_hp` qui pourrait rester positive ou filer en négatif
+        # selon ce que le moteur choisit d'y laisser.
+        return 0 if entity_id in dead_ids else int(tracked_hp[entity_id])
+
+    rpg_avant = store.rpg_state()
+    player_hp_avant = int((rpg_avant.get("player") or {}).get("hp", 0))
+    enemies_avant = dict(rpg_avant.get("enemies") or {})
+
+    player_entity_id = None
+    skipped: list[str] = []
+    for entity_id in roster.get("party") or []:
+        reste = entity_id[3:] if entity_id.startswith("pj:") else entity_id
+        if reste in ("player", "you", player_slug):
+            player_entity_id = entity_id
+        else:
+            skipped.append(entity_id)
+
+    env_deltas: dict = {}
+    if player_entity_id is not None and player_entity_id in tracked_hp:
+        player_delta = _hp_of(player_entity_id) - player_hp_avant
+        if player_delta:
+            env_deltas["hp_delta"] = player_delta
+
+    enemy_before: dict[str, int] = {}
+    env_enemies: dict = {}
+    for entity_id, hp_max in (roster.get("enemy_hp_max") or {}).items():
+        if entity_id not in tracked_hp or hp_max is None:
+            continue
+        slug = slugify(entity_id)
+        hp_moteur = _hp_of(entity_id)
+        known = enemies_avant.get(slug)
+        if known is not None:
+            hp_avant = int(known.get("hp", 0))
+            delta = hp_moteur - hp_avant
+            if delta:
+                env_enemies[slug] = {"hp_delta": delta}
+        else:
+            hp_avant = int(hp_max)
+            delta = hp_moteur - hp_avant
+            spec = {"hp_max": int(hp_max)}
+            if delta:
+                spec["hp_delta"] = delta
+            env_enemies[slug] = spec
+        enemy_before[slug] = hp_avant
+    if env_enemies:
+        env_deltas["enemies"] = env_enemies
+
+    if env_deltas:
+        mcp_server.apply_envelope(mcp_server.json.dumps({"deltas": env_deltas}))
+
+    rpg_apres = store.rpg_state()
+    reconciled: dict = {"player": None, "enemies": {}, "skipped": skipped}
+    if player_entity_id is not None and player_entity_id in tracked_hp:
+        p_apres = rpg_apres.get("player") or {}
+        reconciled["player"] = {
+            "hp_before": player_hp_avant,
+            "hp_after": int(p_apres.get("hp", player_hp_avant)),
+        }
+    enemies_apres = rpg_apres.get("enemies") or {}
+    for slug, hp_avant in enemy_before.items():
+        e = enemies_apres.get(slug)
+        reconciled["enemies"][slug] = {
+            "hp_before": hp_avant,
+            "hp_after": int(e.get("hp", 0)) if e is not None else 0,
+            "defeated": e is None,
+        }
+    return reconciled
+
+
 @mcp_server.mcp.tool()
 def roll_check(stat: str, dc: int = 12, skill: str = "",
                actor: str = "player") -> dict:
@@ -298,6 +424,19 @@ async def start_combat(session_id: str, party: list[dict],
         session_id=session_id, party=party, encounter=resolved,
         rng_seed=rng_seed, zones=zones)
     mcp_server._record_combat_events(result.get("events", []))
+    handle_id = result.get("handle_id")
+    if handle_id:
+        # I-28 : posé ICI, pas à `end_combat` — `resolved` porte le hp_max
+        # de la spec résolue de chaque membre d'encounter (lu sur le record
+        # module/characters.md avant toute ouverture), jamais deviné à la
+        # clôture.
+        _combat_rosters[handle_id] = {
+            "party": [str(p.get("entity_id")) for p in party
+                     if p.get("entity_id") is not None],
+            "enemy_hp_max": {str(m.get("entity_id")): m.get("hp_max")
+                             for m in resolved
+                             if m.get("entity_id") is not None},
+        }
     return result
 
 
@@ -330,8 +469,36 @@ async def monster_turn(handle_id: str) -> dict:
 @mcp_server.mcp.tool()
 async def end_combat(handle_id: str) -> dict:
     """Clôt le combat : issue du moteur (ended_reason victory|defeat_tpk|
-    flee|forced, morts, XP). Le handle est ensuite invalidé côté pont."""
-    return await mcp_server.get_bridge().end_combat(handle_id)
+    flee|forced, morts, XP). Le handle est ensuite invalidé côté pont.
+
+    I-28 : juste avant de clore, lit la DERNIÈRE vue du moteur
+    (`tracked_hp`, `dead_ids` — `get_bridge().live`), puis clôt, puis
+    réconcilie `store.rpg_state()` avec elle par le guichet `apply_envelope`
+    (D-141) — jamais une écriture directe, exactement comme `attack`. Le
+    moteur fait foi pour tout ce qu'il a suivi pendant le combat (docstring
+    du pont : « pendant un combat, l'état mécanique vit dans le moteur »).
+
+    Un membre de l'`encounter` est un ennemi sous son `entity_id` (slugifié).
+    Un membre de la `party` est le joueur si son `entity_id`, privé d'un
+    préfixe "pj:", vaut "player"/"you" ou le slug du personnage joué
+    (`store.entries("player.md")[0].slug`) ; tout autre membre de la party
+    n'est pas écrit — il revient sous `skipped`.
+
+    Rend {outcome, events, reconciled}. `reconciled` =
+    {"player": {"hp_before", "hp_after"} | null,
+     "enemies": {slug: {"hp_before", "hp_after", "defeated"}},
+     "skipped": [entity_id, ...]} | null — null si aucune save n'est
+    chargée (`_store` nul) : la clôture est inchangée, sans erreur."""
+    bridge = mcp_server.get_bridge()
+    live_avant_cloture = bridge.live(handle_id)
+    result = await bridge.end_combat(handle_id)
+    roster = _combat_rosters.pop(handle_id, None)
+    reconciled = None
+    if mcp_server._store is not None:
+        reconciled = _reconcile_combat_end(
+            mcp_server._store, live_avant_cloture, roster or {})
+    result["reconciled"] = reconciled
+    return result
 
 
 @mcp_server.mcp.tool()
