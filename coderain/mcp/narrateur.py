@@ -11,36 +11,44 @@ import mcp_server
 @mcp_server.mcp.tool()
 def paquet_narrateur(directive_director: str, action_joueur: str,
                      sans_mecanique: bool = False) -> dict:
-    """Issue #192 (D-269) — LE péage du tour : l'unique canal vers le
-    narrateur. Le Director l'appelle après résolution mécanique du tour ;
-    l'outil compose le paquet, l'écrit dans un FICHIER, et ne retourne au
-    Director que le chemin + des métadonnées — le contenu n'entre jamais
-    dans SA fenêtre (même patron qu'`assemble_context_to_file`).
+    """Issue #192 (D-269), chantier 4 (I-14) — LE péage du tour : l'unique
+    canal vers le narrateur. Le Director l'appelle après résolution
+    mécanique du tour ; l'outil compose le paquet, l'écrit dans un FICHIER,
+    et ne retourne au Director que le chemin + des métadonnées — le contenu
+    n'entre jamais dans SA fenêtre (même patron qu'`assemble_context_to_file`).
 
     ── D-110 (caméra) : filtre MOTEUR + visée DIRECTOR ──
     `directive_director` porte la VISÉE SEULE — plan du beat, angle/cadrage,
     croyance divergente, inflexion de ton du TOUR. Tout le reste, l'outil le
-    COMPOSE lui-même depuis le moteur (jamais recopié par le Director) :
+    COMPOSE lui-même depuis le moteur (jamais recopié par le Director), DANS
+    CET ORDRE et rien d'autre (chantier 4 — réduit au STRICT nécessaire au
+    narrateur, jamais la photo du Director) :
 
-      1. Contexte perçu du narrateur — même sélection par position que
-         `assemble_context_to_file` (`assembleur_position.build_sections`,
-         secrets/event_rules toujours OFF ici : un narrateur reçoit la
-         perception du personnage, jamais les twists non tirés ni le bloc
-         de règles entier), ou son repli mots-clés+budget sur une save sans
-         partition — même frontière de cohabitation (`eligible()`).
-      2. Derniers tours verbatim — inclus dans ce même texte (la scène où
-         l'on reprend).
-      3. Mécaniques résolues CE TOUR — les événements réellement APPLIQUÉS
+      1. Règles du narrateur (`coderain/roles/narrateur.md`, lu depuis le
+         dossier du paquet, jamais le dossier courant) — en TÊTE, elles
+         priment sur tout ce qui suit.
+      2. « Personnage joué » — inchangée (`assembleur_position._player_section`).
+      3. « Ce que le personnage perçoit de la scène » — le corps du nœud
+         courant, les écarts actés de CE nœud (D-419) sous une formulation
+         qui ne nomme jamais « nœud » ni « écart » au narrateur, puis une
+         ligne Horloge (même valeur que la section Position du Director) —
+         ou, sur une save sans partition (repli), le même contexte
+         mots-clés+budget qu'avant (`_assemble_text`, inchangé). Jamais le
+         brief, l'objectif, les débouchés, la Position, les Présences,
+         l'état du monde ni la reprise de séance : décor réservé au
+         Director (D-179/D-419, chantier 4).
+      4. Derniers tours verbatim (la scène où l'on reprend).
+      5. Mécaniques résolues CE TOUR — les événements réellement APPLIQUÉS
          (jets, patchs, `event_fired`, ou — Issue #200 — intents/dégâts/
          rounds de combat), lus au JOURNAL de l'outil (`apply_envelope`
          pour la mécanique coderain classique, `start_combat`/
          `submit_intent`/`monster_turn` pour le sous-système combat —
          voir `_record_combat_events`), jamais retapés par le Director.
-      4. `rendu_md` du node courant (résout D-269) — section « DIRECTION DE
+      6. `rendu_md` du node courant (résout D-269) — section « DIRECTION DE
          RENDU », symétrique de `modules/trinity.py::_writer_directive` mais
          désormais servie sur le chemin PRODUIT. Absente si le node n'en
          porte pas.
-      5. La directive du Director, verbatim, après le filet R2.
+      7. La directive du Director, verbatim, après le filet R2.
 
     ── Les trois refus ──
     R1 — mécanique avant prose : refuse si aucune mécanique n'a été résolue
@@ -51,11 +59,17 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     parole).
 
     R2 — filet anti-fuite littéral : refuse si `directive_director` contient
-    un slug ou un fragment de texte d'une entrée cachée non révélée, ou le
-    slug/texte d'une règle d'événement (fired ou non). Nomme la garde
-    déclenchée — le Director connaît déjà les coulisses, ce n'est jamais ce
-    texte qui atteint le narrateur. La paraphrase est HORS périmètre (filet
-    littéral, pas un classifieur de sens).
+    un slug ou un fragment de texte d'une entrée cachée non révélée, le
+    slug/texte d'une règle d'événement (fired ou non) — et, chantier 4
+    (D-419 pt C) — un identifiant de la partition chargée (nom de fichier
+    de nœud ou de record, ex. « sortie vers para-12 » quand `para-12` est
+    un nœud) ou un mot/une tournure qui parle des sources de la scène
+    (« nœud », « flag », « le module », ... — `mcp_server._R2_SOURCE_WORDS`,
+    sans exception même au sens propre). Nomme la garde déclenchée — le
+    Director connaît déjà les coulisses, ce n'est jamais ce texte qui
+    atteint le narrateur. La paraphrase reste permise (filet littéral, pas
+    un classifieur de sens) — « il reste à l'écart », « sous la bannière »
+    passent.
 
     R3 — pas de contenu en retour : le retour ne porte jamais le texte du
     paquet, ni `rendu_md` même en booléen de contenu — seulement le chemin,
@@ -78,7 +92,8 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     if guard:
         raise ValueError(
             f"R2 (filet anti-fuite) : directive_director contient la garde "
-            f"« {guard} » — reformule sans slug ni fragment littéral de "
+            f"« {guard} » — reformule sans slug/identifiant de la "
+            "partition, sans mot de source, ni fragment littéral de "
             "matériau caché ou de règle d'événement (la paraphrase reste "
             "permise, ce filet est littéral).")
 
@@ -86,20 +101,37 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     pdir = mcp_server._partition_dir(store)
     history = store.turns()
     recent_turns = mcp_server._engine.short_term if mcp_server._engine is not None else 12
+
+    regles_narrateur = (mcp_server.ROOT / "coderain" / "roles"
+                        / "narrateur.md").read_text(encoding="utf-8").strip()
+    parts = ["## Règles du narrateur (elles s'adressent à toi, narrateur, "
+            "et priment sur tout ce qui suit)\n" + regles_narrateur]
+    sections = ["Règles du narrateur"]
+
     rendu_md = ""
     if pdir is not None and mcp_server.assembleur_position.eligible(store, state):
-        text, info = mcp_server._position_context_text(
-            store, pdir, state, history, action_joueur, recent_turns,
-            event_rules=False, secrets=False, role_section=False)
-        rendu_md = mcp_server.assembleur_position.rendu_md_for(
-            pdir, mcp_server.validator_mod.current_location(state))
+        location = mcp_server.validator_mod.current_location(state)
+        for s in mcp_server.assembleur_position.narrator_sections(store, location):
+            rendered = s.render()
+            if rendered:
+                parts.append(rendered)
+                sections.append(s.title)
+        if recent_turns > 0 and history:
+            lignes = []
+            for t in history[-recent_turns:]:
+                who = "JOUEUR" if t["role"] == "player" else "MJ"
+                lignes.append(f"### {who}\n{t['text'].strip()}")
+            parts.append(
+                "# DERNIERS TOURS (verbatim — la scène où l'on reprend)\n\n"
+                + "\n\n".join(lignes))
+            sections.append("Derniers tours")
+        rendu_md = mcp_server.assembleur_position.rendu_md_for(pdir, location)
     else:
-        text, info = mcp_server._assemble_text(action_joueur, 120000, recent_turns,
-                                    0, True, False, mcp_server.SECRETS_WINDOW_TURNS,
-                                    False)
-
-    sections = ["Contexte perçu (scène + derniers tours)"]
-    parts = [text]
+        text, _info = mcp_server._assemble_text(
+            action_joueur, 120000, recent_turns, 0, True, False,
+            mcp_server.SECRETS_WINDOW_TURNS, False)
+        parts.append(text)
+        sections.append("Contexte perçu (scène + derniers tours)")
 
     outcome = [e for e in (mcp_server._last_applied_events or [])
               if not str(e).startswith("validator:")]
@@ -130,8 +162,7 @@ def paquet_narrateur(directive_director: str, action_joueur: str,
     out.write_text(full, encoding="utf-8")
     sections_chars = {s: len(p) for s, p in zip(sections, parts)}
     mcp_server._log_paquet(store, "paquet_narrateur", len(full), sections_chars)
-    return {"path": str(out), "chars": len(full), "sections": sections,
-           **info}
+    return {"path": str(out), "chars": len(full), "sections": sections}
 
 
 @mcp_server.mcp.tool()

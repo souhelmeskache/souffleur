@@ -259,6 +259,55 @@ def _current_node_section(partition_dir: Path, store: MemoryStore,
                    "\n\n".join(parts))
 
 
+def _narrator_perception_section(store: MemoryStore, location: str) -> Section:
+    """Chantier 4 (I-14) : la section « scène perçue » du paquet du
+    NARRATEUR seul — jamais celle du Director (`_current_node_section`,
+    inchangée, reste son chemin pour `build_sections`). Même source (corps
+    du nœud `locations.md`, écarts actés D-419 sous `state["ecarts"]`,
+    `store.clock_str()`) mais SANS objectif ni débouchés (décor réservé au
+    Director, D-179) et sans jamais écrire les mots « nœud »/« écart » dans
+    ce que lit le narrateur : lui ne perçoit que la scène, jamais le
+    vocabulaire de la partition qui la décrit.
+
+    Toujours une ligne Horloge, MÊME valeur que celle que `_position_section`
+    sert au Director (`store.clock_str()`, repli "(aucun)" si vide) —
+    narrateur et Director voient la même horloge, jamais deux calculs."""
+    entry = next((e for e in store.entries("locations.md")
+                 if e.slug == location), None)
+    parts = []
+    if entry is not None and entry.body.strip():
+        parts.append(entry.body.strip())
+    ecarts = (store.world_state().get("ecarts") or {}).get(location) or []
+    if isinstance(ecarts, list) and ecarts:
+        lignes = "\n".join(f"- {t}" for t in ecarts)
+        parts.append("Ce qui a changé depuis (prime sur le texte "
+                     "ci-dessus) :\n" + lignes)
+    clock = store.clock_str()
+    parts.append(f"Horloge : {clock or '(aucun)'}")
+    return Section("volatile", "Ce que le personnage perçoit de la scène",
+                   "\n\n".join(parts))
+
+
+def narrator_sections(store: MemoryStore, location: str) -> list[Section]:
+    """Chantier 4 (I-14) : fonction NEUVE, dédiée au paquet du narrateur
+    (`mcp_server.py::paquet_narrateur`, chemin par position) — `build_sections`
+    ne change pas de sortie, ce chemin-ci ne le ré-emploie pas (il est trop
+    large pour ce lecteur : brief, objectif, débouchés, Position, Présences,
+    état du monde, verdicts de règles et reprise de séance n'ont rien à y
+    faire, D-179/D-419, chantier 4).
+
+    Dans cet ordre, et rien d'autre : « Personnage joué » (`_player_section`,
+    inchangée, omise si `player.md` est vide) puis « Ce que le personnage
+    perçoit de la scène » (`_narrator_perception_section`, toujours
+    présente — au moins sa ligne Horloge)."""
+    sections = []
+    player_section = _player_section(store)
+    if player_section is not None:
+        sections.append(player_section)
+    sections.append(_narrator_perception_section(store, location))
+    return sections
+
+
 def _position_section(partition_dir: Path, store: MemoryStore,
                       location: str) -> Section:
     """D-282 (Issue #311, point 3) : le paquet du Director porte, À CHAQUE
